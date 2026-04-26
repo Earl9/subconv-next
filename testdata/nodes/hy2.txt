@@ -1,0 +1,1 @@
+hy2://secret@example.com:443?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#hy2-node

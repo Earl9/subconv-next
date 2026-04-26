@@ -1,0 +1,1 @@
+vless://uuid-1@example.com:443?security=reality&sni=example.com&fp=chrome&pbk=pubkey&sid=abcd&type=tcp&flow=xtls-rprx-vision#HK%20Node

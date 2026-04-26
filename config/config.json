@@ -1,0 +1,41 @@
+{
+  "service": {
+    "enabled": true,
+    "listen_addr": "0.0.0.0",
+    "listen_port": 9876,
+    "log_level": "info",
+    "template": "standard",
+    "output_path": "/data/mihomo.yaml",
+    "cache_dir": "/data/cache",
+    "state_path": "/data/state.json",
+    "refresh_interval": 3600,
+    "max_subscription_bytes": 5242880,
+    "fetch_timeout_seconds": 15,
+    "allow_lan": false
+  },
+  "subscriptions": [
+    {
+      "name": "example-remote",
+      "enabled": false,
+      "url": "https://example.com/subscription",
+      "user_agent": "SubConvNext/0.1",
+      "insecure_skip_verify": false
+    }
+  ],
+  "inline": [
+    {
+      "name": "sample-inline",
+      "enabled": true,
+      "content": "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#sample-ss"
+    }
+  ],
+  "render": {
+    "mixed_port": 7890,
+    "allow_lan": false,
+    "mode": "rule",
+    "log_level": "info",
+    "ipv6": false,
+    "dns_enabled": true,
+    "enhanced_mode": "fake-ip"
+  }
+}

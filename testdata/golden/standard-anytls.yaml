@@ -1,0 +1,110 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+dns:
+    enable: true
+    ipv6: false
+    enhanced-mode: fake-ip
+    nameserver:
+        - https://1.1.1.1/dns-query
+        - https://8.8.8.8/dns-query
+proxies:
+    - name: anytls-node
+      type: anytls
+      server: example.com
+      port: 443
+      password: secret
+      udp: true
+      sni: example.com
+      client-fingerprint: chrome
+      skip-cert-verify: false
+      alpn:
+        - h2
+        - http/1.1
+proxy-groups:
+    - name: 自动选择
+      type: url-test
+      proxies:
+        - anytls-node
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+    - name: 故障转移
+      type: fallback
+      proxies:
+        - anytls-node
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+    - name: 节点选择
+      type: select
+      proxies:
+        - 自动选择
+        - 故障转移
+        - DIRECT
+        - anytls-node
+    - name: AI
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: 流媒体
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: Telegram
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: GitHub
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: Microsoft
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: Apple
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - 故障转移
+        - DIRECT
+    - name: 国内直连
+      type: select
+      proxies:
+        - DIRECT
+        - 节点选择
+    - name: 漏网之鱼
+      type: select
+      proxies:
+        - 节点选择
+        - 自动选择
+        - DIRECT
+rules:
+    - GEOSITE,telegram,Telegram
+    - GEOSITE,github,GitHub
+    - GEOSITE,microsoft,Microsoft
+    - GEOSITE,apple,Apple
+    - GEOSITE,openai,AI
+    - GEOSITE,netflix,流媒体
+    - GEOSITE,private,DIRECT
+    - GEOIP,private,DIRECT,no-resolve
+    - GEOSITE,cn,国内直连
+    - GEOIP,CN,国内直连
+    - MATCH,漏网之鱼

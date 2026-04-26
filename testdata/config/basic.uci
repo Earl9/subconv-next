@@ -1,0 +1,17 @@
+config service 'main'
+	option listen_addr '127.0.0.1'
+	option listen_port 9876
+	option template 'standard'
+	option refresh_interval '1800'
+
+config subscription 'example'
+	option name "example"
+	option url 'https://example.com/sub'
+
+config inline "manual"
+	option name manual
+	option enabled 1
+	option content "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#manual"
+
+config render 'mihomo'
+	option mixed_port '7890'

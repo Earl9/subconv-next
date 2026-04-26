@@ -1,0 +1,1 @@
+anytls://secret@example.com:443?sni=example.com&alpn=h2,http/1.1&client-fingerprint=chrome#anytls-node

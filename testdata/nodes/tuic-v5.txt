@@ -1,0 +1,1 @@
+tuic://uuid-1:secret@example.com:443?sni=example.com&congestion_control=bbr&udp_relay_mode=native&reduce_rtt=1#tuic-node

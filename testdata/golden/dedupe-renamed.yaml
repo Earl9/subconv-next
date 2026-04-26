@@ -1,0 +1,46 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+proxies:
+    - name: dup
+      type: trojan
+      server: one.example.com
+      port: 443
+      password: a
+      tls: true
+      udp: true
+      sni: one.example.com
+      skip-cert-verify: false
+    - name: dup 2
+      type: trojan
+      server: two.example.com
+      port: 443
+      password: b
+      tls: true
+      udp: true
+      sni: two.example.com
+      skip-cert-verify: false
+proxy-groups:
+    - name: 自动选择
+      type: url-test
+      proxies:
+        - dup
+        - dup 2
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+    - name: 节点选择
+      type: select
+      proxies:
+        - 自动选择
+        - DIRECT
+        - REJECT
+        - dup
+        - dup 2
+rules:
+    - GEOSITE,private,DIRECT
+    - GEOIP,private,DIRECT,no-resolve
+    - GEOSITE,cn,DIRECT
+    - GEOIP,CN,DIRECT
+    - MATCH,节点选择

@@ -1,0 +1,12 @@
+services:
+  subconv-next:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: subconv-next
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9876:9876"
+    volumes:
+      - ./config:/config
+      - ./data:/data

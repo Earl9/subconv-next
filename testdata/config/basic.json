@@ -1,0 +1,24 @@
+{
+  "service": {
+    "listen_addr": "127.0.0.1",
+    "listen_port": 9876,
+    "template": "standard",
+    "refresh_interval": 1800
+  },
+  "subscriptions": [
+    {
+      "name": "example",
+      "url": "https://example.com/sub"
+    }
+  ],
+  "inline": [
+    {
+      "name": "manual",
+      "enabled": true,
+      "content": "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#manual"
+    }
+  ],
+  "render": {
+    "mixed_port": 7890
+  }
+}

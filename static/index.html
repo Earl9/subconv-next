@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SubConv Next</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <div class="grain"></div>
+
+    <main class="shell">
+      <section class="hero panel">
+        <div class="hero-copy">
+          <p class="eyebrow">SubConv Next</p>
+          <h1>Quiet control over your Mihomo subscription output.</h1>
+          <p class="hero-text">
+            Refresh sources, inspect runtime state, edit the mounted Docker
+            config, and download the current Mihomo YAML from one local page.
+          </p>
+          <div class="hero-actions">
+            <button id="refresh-btn" class="button primary">Refresh Now</button>
+            <a class="button ghost" href="/sub/mihomo.yaml" target="_blank" rel="noreferrer">Download YAML</a>
+            <button id="save-btn" class="button ghost">Save Config</button>
+          </div>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric-card">
+            <span class="metric-label">Runtime</span>
+            <strong id="metric-running">Unknown</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Nodes</span>
+            <strong id="metric-nodes">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Subscriptions</span>
+            <strong id="metric-sources">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Last Refresh</span>
+            <strong id="metric-refresh">Never</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel status-panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Daemon</p>
+              <h2>Status</h2>
+            </div>
+            <button id="status-reload-btn" class="button subtle">Reload</button>
+          </div>
+          <dl class="status-list">
+            <div>
+              <dt>Output Path</dt>
+              <dd id="status-output">-</dd>
+            </div>
+            <div>
+              <dt>Last Success</dt>
+              <dd id="status-success">-</dd>
+            </div>
+            <div>
+              <dt>Last Error</dt>
+              <dd id="status-error" class="status-error">None</dd>
+            </div>
+          </dl>
+          <div id="toast" class="toast hidden"></div>
+        </article>
+
+        <article class="panel config-panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Mounted File</p>
+              <h2>Configuration</h2>
+            </div>
+            <div class="toolbar">
+              <button id="config-reload-btn" class="button subtle">Reload File</button>
+              <button id="config-save-btn" class="button primary">Save</button>
+            </div>
+          </div>
+
+          <section class="config-block">
+            <h3>Service</h3>
+            <div id="service-fields" class="field-grid"></div>
+          </section>
+
+          <section class="config-block">
+            <div class="block-head">
+              <h3>Subscriptions</h3>
+              <button id="add-subscription-btn" class="button subtle">Add Subscription</button>
+            </div>
+            <div id="subscriptions-list" class="stack"></div>
+          </section>
+
+          <section class="config-block">
+            <div class="block-head">
+              <h3>Inline Sources</h3>
+              <button id="add-inline-btn" class="button subtle">Add Inline</button>
+            </div>
+            <div id="inline-list" class="stack"></div>
+          </section>
+        </article>
+      </section>
+
+      <section class="panel logs-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Recent Activity</p>
+            <h2>Logs</h2>
+          </div>
+          <button id="logs-reload-btn" class="button subtle">Reload Logs</button>
+        </div>
+        <pre id="logs-output" class="log-box">Loading logs…</pre>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
