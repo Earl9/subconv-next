@@ -246,27 +246,38 @@ func duplicateWarning(source SourceInfo) string {
 
 func inferRegionTags(name string) []string {
 	matchers := []struct {
-		tag      string
-		patterns []string
+		tag               string
+		substringPatterns []string
+		tokenPatterns     []string
 	}{
-		{tag: "HK", patterns: []string{"香港", "HK", "HONG KONG", "港"}},
-		{tag: "JP", patterns: []string{"日本", "JP", "JAPAN", "日"}},
-		{tag: "US", patterns: []string{"美国", "US", "UNITED STATES", "美"}},
-		{tag: "SG", patterns: []string{"新加坡", "SG", "SINGAPORE", "狮城"}},
-		{tag: "TW", patterns: []string{"台湾", "TW", "TAIWAN", "台"}},
-		{tag: "KR", patterns: []string{"韩国", "KR", "KOREA", "韩"}},
-		{tag: "DE", patterns: []string{"德国", "DE", "GERMANY"}},
-		{tag: "GB", patterns: []string{"英国", "GB", "UK", "UNITED KINGDOM"}},
-		{tag: "FR", patterns: []string{"法国", "FR", "FRANCE"}},
-		{tag: "CA", patterns: []string{"加拿大", "CA", "CANADA"}},
-		{tag: "AU", patterns: []string{"澳大利亚", "AU", "AUSTRALIA"}},
+		{tag: "HK", substringPatterns: []string{"香港", "HONG KONG", "港"}, tokenPatterns: []string{"HK"}},
+		{tag: "JP", substringPatterns: []string{"日本", "JAPAN", "日"}, tokenPatterns: []string{"JP"}},
+		{tag: "US", substringPatterns: []string{"美国", "UNITED STATES", "美"}, tokenPatterns: []string{"US"}},
+		{tag: "SG", substringPatterns: []string{"新加坡", "SINGAPORE", "狮城"}, tokenPatterns: []string{"SG"}},
+		{tag: "TW", substringPatterns: []string{"台湾", "TAIWAN", "台"}, tokenPatterns: []string{"TW"}},
+		{tag: "KR", substringPatterns: []string{"韩国", "KOREA", "韩"}, tokenPatterns: []string{"KR"}},
+		{tag: "DE", substringPatterns: []string{"德国", "GERMANY"}, tokenPatterns: []string{"DE"}},
+		{tag: "GB", substringPatterns: []string{"英国", "UNITED KINGDOM"}, tokenPatterns: []string{"GB", "UK"}},
+		{tag: "FR", substringPatterns: []string{"法国", "FRANCE"}, tokenPatterns: []string{"FR"}},
+		{tag: "CA", substringPatterns: []string{"加拿大", "CANADA"}, tokenPatterns: []string{"CA"}},
+		{tag: "AU", substringPatterns: []string{"澳大利亚", "AUSTRALIA"}, tokenPatterns: []string{"AU"}},
 	}
 
 	upperName := strings.ToUpper(name)
+	tokens := tokenizeName(upperName)
 	var tags []string
 	for _, matcher := range matchers {
-		for _, pattern := range matcher.patterns {
+		for _, pattern := range matcher.substringPatterns {
 			if strings.Contains(upperName, strings.ToUpper(pattern)) {
+				tags = append(tags, matcher.tag)
+				break
+			}
+		}
+		if len(tags) > 0 && tags[len(tags)-1] == matcher.tag {
+			continue
+		}
+		for _, pattern := range matcher.tokenPatterns {
+			if tokenSetContains(tokens, pattern) {
 				tags = append(tags, matcher.tag)
 				break
 			}
@@ -274,6 +285,42 @@ func inferRegionTags(name string) []string {
 	}
 
 	return cleanStringSlice(tags)
+}
+
+func tokenizeName(value string) []string {
+	var (
+		tokens []string
+		buf    strings.Builder
+	)
+
+	flush := func() {
+		if buf.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, buf.String())
+		buf.Reset()
+	}
+
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			buf.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+
+	return tokens
+}
+
+func tokenSetContains(tokens []string, target string) bool {
+	target = strings.ToUpper(strings.TrimSpace(target))
+	for _, token := range tokens {
+		if token == target {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeUniqueStrings(a, b []string) []string {

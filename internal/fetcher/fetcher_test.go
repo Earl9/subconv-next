@@ -2,18 +2,18 @@ package fetcher
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestFetchSuccessAndCacheFallback(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#cached"))
-	}))
-	defer server.Close()
+	callCount := 0
 
 	f := New(Options{
 		CacheDir:          t.TempDir(),
@@ -21,11 +21,27 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 		MaxBodyBytes:      1024,
 		MaxRedirects:      3,
 		AllowPrivateHosts: true,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+		RequestDoer: func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
+			callCount++
+			if callCount == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"text/plain"},
+					},
+					Body: io.NopCloser(strings.NewReader("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#cached")),
+				}, nil
+			}
+			return nil, errors.New("network down")
+		},
 	})
 
 	source := Source{
 		Name:      "demo",
-		URL:       server.URL,
+		URL:       "https://example.com/subscription",
 		UserAgent: "SubConvNext/0.1",
 		Enabled:   true,
 	}
@@ -41,8 +57,6 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 		t.Fatalf("first.FromCache = true, want false")
 	}
 
-	server.Close()
-
 	second, warnings, err := f.Fetch(context.Background(), source)
 	if err != nil {
 		t.Fatalf("Fetch() cache fallback error = %v", err)
@@ -56,11 +70,6 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 }
 
 func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://127.0.0.1/private", http.StatusFound)
-	}))
-	defer server.Close()
-
 	f := New(Options{
 		CacheDir:     t.TempDir(),
 		Timeout:      5 * time.Second,
@@ -70,7 +79,7 @@ func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
 
 	_, _, err := f.Fetch(context.Background(), Source{
 		Name:      "blocked",
-		URL:       server.URL,
+		URL:       "http://localhost/private",
 		UserAgent: "SubConvNext/0.1",
 		Enabled:   true,
 	})
@@ -99,4 +108,12 @@ func TestBlockedIP(t *testing.T) {
 
 func netParseIP(value string) net.IP {
 	return net.ParseIP(value)
+}
+
+type staticResolver struct {
+	ips []net.IPAddr
+}
+
+func (r staticResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return append([]net.IPAddr(nil), r.ips...), nil
 }

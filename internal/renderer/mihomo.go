@@ -699,7 +699,10 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 		w.scalar(indent, "enhanced-mode", dns.EnhancedMode)
 	}
 	if len(dns.Nameserver) > 0 {
-		w.list(indent, "nameserver", dns.Nameserver)
+		w.line(indent, "nameserver:")
+		for _, item := range dns.Nameserver {
+			w.listScalar(indent+4, item)
+		}
 	}
 }
 

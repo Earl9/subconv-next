@@ -61,3 +61,10 @@ func TestDedupeNodes(t *testing.T) {
 		t.Fatalf("Warnings = %#v, want duplicate warning", got[0].Warnings)
 	}
 }
+
+func TestInferRegionTagsNoFalsePositiveFromNodeSuffix(t *testing.T) {
+	got := inferRegionTags("ss-node")
+	if len(got) != 0 {
+		t.Fatalf("inferRegionTags(ss-node) = %#v, want empty", got)
+	}
+}

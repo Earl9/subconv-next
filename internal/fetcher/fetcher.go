@@ -57,11 +57,14 @@ type Options struct {
 	CacheTTL          time.Duration
 	AllowPrivateHosts bool
 	Resolver          HostResolver
+	RequestDoer       RequestDoer
 }
 
 type HostResolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
+
+type RequestDoer func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error)
 
 type Fetcher struct {
 	opts Options
@@ -176,6 +179,10 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 }
 
 func (f *Fetcher) doRequest(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
+	if f.opts.RequestDoer != nil {
+		return f.opts.RequestDoer(ctx, target, resolvedIP, source)
+	}
+
 	dialTarget := net.JoinHostPort(resolvedIP.String(), effectivePort(target))
 	transport := &http.Transport{
 		Proxy: nil,
