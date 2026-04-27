@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -11,112 +11,140 @@
     <div class="ambient ambient-b"></div>
     <div class="grain"></div>
 
-    <main class="shell">
-      <section class="hero panel">
-        <div class="hero-copy">
-          <p class="eyebrow">SubConv Next</p>
-          <h1>Quiet control over your Mihomo subscription output.</h1>
-          <p class="hero-text">
-            Refresh sources, inspect runtime state, edit the mounted Docker
-            config, and download the current Mihomo YAML from one local page.
-          </p>
-          <div class="hero-actions">
-            <button id="refresh-btn" class="button primary">Refresh Now</button>
-            <a class="button ghost" href="/sub/mihomo.yaml" target="_blank" rel="noreferrer">Download YAML</a>
-            <button id="save-btn" class="button ghost">Save Config</button>
+    <main class="shell shell-compact">
+      <header class="topbar panel">
+        <div class="brand brand-compact">
+          <div class="brand-mark">S</div>
+          <div>
+            <p class="eyebrow">SubConv Next</p>
+            <h1 class="page-title">订阅转换</h1>
           </div>
         </div>
-        <div class="hero-metrics">
-          <div class="metric-card">
-            <span class="metric-label">Runtime</span>
-            <strong id="metric-running">Unknown</strong>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Nodes</span>
-            <strong id="metric-nodes">0</strong>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Subscriptions</span>
-            <strong id="metric-sources">0</strong>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Last Refresh</span>
-            <strong id="metric-refresh">Never</strong>
-          </div>
+        <div class="topbar-actions">
+          <button id="refresh-btn" class="button primary">刷新</button>
+          <button id="save-btn" class="button ghost">保存</button>
+          <a class="button ghost" href="/sub/mihomo.yaml?download=1" target="_blank" rel="noreferrer">下载 YAML</a>
+        </div>
+      </header>
+
+      <section class="compact-summary">
+        <div class="summary-chip">
+          <span class="metric-label">节点</span>
+          <strong id="metric-nodes">0</strong>
+        </div>
+        <div class="summary-chip">
+          <span class="metric-label">订阅</span>
+          <strong id="metric-sources">0</strong>
+        </div>
+        <div class="summary-chip">
+          <span class="metric-label">最近刷新</span>
+          <strong id="metric-refresh">从未</strong>
         </div>
       </section>
 
-      <section class="dashboard-grid">
-        <article class="panel status-panel">
-          <div class="section-head">
-            <div>
-              <p class="eyebrow">Daemon</p>
-              <h2>Status</h2>
-            </div>
-            <button id="status-reload-btn" class="button subtle">Reload</button>
+      <section class="panel subscription-panel">
+        <div class="section-head compact-head">
+          <div>
+            <p class="eyebrow">订阅链接</p>
+            <h2>当前订阅地址</h2>
           </div>
-          <dl class="status-list">
-            <div>
-              <dt>Output Path</dt>
-              <dd id="status-output">-</dd>
+          <div class="toolbar">
+            <button id="copy-sub-url-btn" class="button primary">复制订阅链接</button>
+            <a id="open-sub-url-btn" class="button ghost" href="/sub/mihomo.yaml" target="_blank" rel="noreferrer">打开订阅</a>
+          </div>
+        </div>
+        <div class="field full-span">
+          <label for="sub-link-output">Mihomo 订阅 URL</label>
+          <input id="sub-link-output" type="text" readonly value="正在生成订阅链接..." />
+          <p class="field-hint">订阅链接会根据你当前访问页面使用的主机名和端口自动生成。</p>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <article class="panel builder-panel">
+          <section id="config-section" class="config-section">
+            <div class="section-head compact-head">
+              <div>
+                <p class="eyebrow">配置</p>
+                <h2>导入与规则</h2>
+              </div>
+              <button id="config-save-btn" class="button subtle">保存配置</button>
             </div>
-            <div>
-              <dt>Last Success</dt>
-              <dd id="status-success">-</dd>
-            </div>
-            <div>
-              <dt>Last Error</dt>
-              <dd id="status-error" class="status-error">None</dd>
-            </div>
-          </dl>
-          <div id="toast" class="toast hidden"></div>
+
+            <section class="config-block">
+              <div class="block-head">
+                <h3>远程订阅</h3>
+                <button id="add-subscription-btn" class="button subtle">新增</button>
+              </div>
+              <div id="subscriptions-list" class="stack"></div>
+            </section>
+
+            <section class="config-block">
+              <div class="block-head">
+                <h3>手动导入</h3>
+                <button id="add-inline-btn" class="button subtle">新增</button>
+              </div>
+              <div class="field full-span">
+                <label>支持格式</label>
+                <div class="format-hints">
+                  <span class="hint-chip">YAML 配置</span>
+                  <span class="hint-chip">ss://</span>
+                  <span class="hint-chip">vmess://</span>
+                  <span class="hint-chip">vless://</span>
+                  <span class="hint-chip">trojan://</span>
+                  <span class="hint-chip">anytls://</span>
+                  <span class="hint-chip">hysteria2:// / hy2://</span>
+                  <span class="hint-chip">tuic://</span>
+                  <span class="hint-chip">WireGuard 配置片段</span>
+                </div>
+              </div>
+              <div id="inline-list" class="stack"></div>
+            </section>
+
+            <section class="config-block">
+              <h3>规则集选择</h3>
+              <div id="ruleset-catalog" class="stack"></div>
+            </section>
+
+            <section class="config-block">
+              <h3>附加规则</h3>
+              <div class="field full-span">
+                <label for="additional-rules-input">规则列表</label>
+                <textarea id="additional-rules-input" rows="8" placeholder="每行一条 Mihomo 规则，例如：&#10;DOMAIN-SUFFIX,openai.com,AI&#10;PROCESS-NAME,Telegram,Telegram"></textarea>
+              </div>
+            </section>
+
+            <section class="config-block">
+              <div class="block-head">
+                <h3>自定义规则提供器</h3>
+                <button id="add-provider-btn" class="button subtle">新增提供器</button>
+              </div>
+              <div id="providers-list" class="stack"></div>
+            </section>
+
+            <section class="config-block">
+              <h3>DNS 配置</h3>
+              <div id="dns-fields" class="stack"></div>
+            </section>
+          </section>
         </article>
 
-        <article class="panel config-panel">
-          <div class="section-head">
+        <aside id="preview-section" class="panel preview-panel sticky-preview">
+          <div class="section-head compact-head">
             <div>
-              <p class="eyebrow">Mounted File</p>
-              <h2>Configuration</h2>
+              <p class="eyebrow">预览</p>
+              <h2>当前 YAML</h2>
             </div>
             <div class="toolbar">
-              <button id="config-reload-btn" class="button subtle">Reload File</button>
-              <button id="config-save-btn" class="button primary">Save</button>
+              <button id="preview-reload-btn" class="button subtle">刷新预览</button>
+              <button id="copy-yaml-btn" class="button ghost">复制</button>
             </div>
           </div>
-
-          <section class="config-block">
-            <h3>Service</h3>
-            <div id="service-fields" class="field-grid"></div>
-          </section>
-
-          <section class="config-block">
-            <div class="block-head">
-              <h3>Subscriptions</h3>
-              <button id="add-subscription-btn" class="button subtle">Add Subscription</button>
-            </div>
-            <div id="subscriptions-list" class="stack"></div>
-          </section>
-
-          <section class="config-block">
-            <div class="block-head">
-              <h3>Inline Sources</h3>
-              <button id="add-inline-btn" class="button subtle">Add Inline</button>
-            </div>
-            <div id="inline-list" class="stack"></div>
-          </section>
-        </article>
+          <pre id="preview-output" class="log-box">正在加载 YAML 预览…</pre>
+        </aside>
       </section>
 
-      <section class="panel logs-panel">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Recent Activity</p>
-            <h2>Logs</h2>
-          </div>
-          <button id="logs-reload-btn" class="button subtle">Reload Logs</button>
-        </div>
-        <pre id="logs-output" class="log-box">Loading logs…</pre>
-      </section>
+      <div id="toast" class="toast hidden"></div>
     </main>
 
     <script src="/app.js" defer></script>

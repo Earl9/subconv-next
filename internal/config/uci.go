@@ -49,6 +49,8 @@ func LoadUCIBytes(data []byte) (model.Config, error) {
 		}
 	}
 
+	cfg = normalizeConfig(cfg)
+
 	if err := validateConfig(cfg); err != nil {
 		return model.Config{}, err
 	}

@@ -21,6 +21,8 @@ func LoadJSONBytes(data []byte) (model.Config, error) {
 		return model.Config{}, fmt.Errorf("decode JSON config: trailing content")
 	}
 
+	cfg = normalizeConfig(cfg)
+
 	if err := validateConfig(cfg); err != nil {
 		return model.Config{}, err
 	}

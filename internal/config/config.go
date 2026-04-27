@@ -23,6 +23,25 @@ func Load(path string) (model.Config, error) {
 	}
 }
 
+func normalizeConfig(cfg model.Config) model.Config {
+	if cfg.Subscriptions == nil {
+		cfg.Subscriptions = []model.SubscriptionConfig{}
+	}
+	if cfg.Inline == nil {
+		cfg.Inline = []model.InlineConfig{}
+	}
+	if cfg.Render.AdditionalRules == nil {
+		cfg.Render.AdditionalRules = []string{}
+	}
+	if cfg.Render.RuleProviders == nil {
+		cfg.Render.RuleProviders = []model.RuleProviderConfig{}
+	}
+	if cfg.Render.CustomProxyGroups == nil {
+		cfg.Render.CustomProxyGroups = []model.CustomProxyGroupConfig{}
+	}
+	return cfg
+}
+
 func Validate(cfg model.Config) error {
 	if strings.TrimSpace(cfg.Service.ListenAddr) == "" {
 		return fmt.Errorf("service.listen_addr must not be empty")
@@ -70,6 +89,60 @@ func Validate(cfg model.Config) error {
 		}
 	}
 
+	seenProviders := make(map[string]struct{}, len(cfg.Render.RuleProviders))
+	for i, provider := range cfg.Render.RuleProviders {
+		if strings.TrimSpace(provider.Name) == "" {
+			return fmt.Errorf("render.rule_providers[%d].name is required", i)
+		}
+		if _, ok := seenProviders[provider.Name]; ok {
+			return fmt.Errorf("render.rule_providers[%d].name must be unique", i)
+		}
+		seenProviders[provider.Name] = struct{}{}
+		if !isAllowedProviderType(provider.Type) {
+			return fmt.Errorf("render.rule_providers[%d].type must be one of http, file, inline", i)
+		}
+		if !isAllowedProviderBehavior(provider.Behavior) {
+			return fmt.Errorf("render.rule_providers[%d].behavior must be one of domain, ipcidr, classical", i)
+		}
+		if provider.Format != "" && !isAllowedProviderFormat(provider.Format) {
+			return fmt.Errorf("render.rule_providers[%d].format must be one of yaml, text, mrs", i)
+		}
+		if strings.TrimSpace(provider.Policy) == "" {
+			return fmt.Errorf("render.rule_providers[%d].policy is required", i)
+		}
+		if strings.EqualFold(provider.Type, "http") {
+			if err := validateSubscriptionURL(provider.URL); err != nil {
+				return fmt.Errorf("render.rule_providers[%d].url: %w", i, err)
+			}
+		}
+		if strings.EqualFold(provider.Type, "file") && strings.TrimSpace(provider.Path) == "" {
+			return fmt.Errorf("render.rule_providers[%d].path is required for file providers", i)
+		}
+		if strings.EqualFold(provider.Type, "inline") && len(provider.Payload) == 0 {
+			return fmt.Errorf("render.rule_providers[%d].payload is required for inline providers", i)
+		}
+	}
+
+	seenGroups := make(map[string]struct{}, len(cfg.Render.CustomProxyGroups))
+	for i, group := range cfg.Render.CustomProxyGroups {
+		if strings.TrimSpace(group.Name) == "" {
+			return fmt.Errorf("render.custom_proxy_groups[%d].name is required", i)
+		}
+		if _, ok := seenGroups[group.Name]; ok {
+			return fmt.Errorf("render.custom_proxy_groups[%d].name must be unique", i)
+		}
+		seenGroups[group.Name] = struct{}{}
+		if !isAllowedProxyGroupType(group.Type) {
+			return fmt.Errorf("render.custom_proxy_groups[%d].type must be one of select, url-test, fallback, relay", i)
+		}
+		if len(group.Members) == 0 {
+			return fmt.Errorf("render.custom_proxy_groups[%d].members is required", i)
+		}
+		if (strings.EqualFold(group.Type, "url-test") || strings.EqualFold(group.Type, "fallback")) && strings.TrimSpace(group.URL) == "" {
+			return fmt.Errorf("render.custom_proxy_groups[%d].url is required for url-test and fallback groups", i)
+		}
+	}
+
 	return nil
 }
 
@@ -80,6 +153,42 @@ func validateConfig(cfg model.Config) error {
 func isAllowedTemplate(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "lite", "standard", "full":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedProviderType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "http", "file", "inline":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedProviderBehavior(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "domain", "ipcidr", "classical":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedProviderFormat(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "yaml", "text", "mrs":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedProxyGroupType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "select", "url-test", "fallback", "relay":
 		return true
 	default:
 		return false

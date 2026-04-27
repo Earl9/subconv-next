@@ -57,16 +57,19 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 				Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#manual",
 			},
 		},
-		Render: model.RenderConfig{
-			MixedPort:    7890,
-			AllowLAN:     false,
-			Mode:         "rule",
-			LogLevel:     "info",
-			IPv6:         false,
-			DNSEnabled:   true,
-			EnhancedMode: "fake-ip",
-		},
-	}
+			Render: model.RenderConfig{
+				MixedPort:       7890,
+				AllowLAN:        false,
+				Mode:            "rule",
+				LogLevel:        "info",
+				IPv6:            false,
+				DNSEnabled:      true,
+				EnhancedMode:    "fake-ip",
+				AdditionalRules: []string{},
+				RuleProviders:   []model.RuleProviderConfig{},
+				CustomProxyGroups: []model.CustomProxyGroupConfig{},
+			},
+		}
 
 	if !reflect.DeepEqual(jsonCfg, want) {
 		t.Fatalf("parsed config mismatch\n got=%+v\nwant=%+v", jsonCfg, want)

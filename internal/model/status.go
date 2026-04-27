@@ -8,6 +8,7 @@ type RuntimeStatus struct {
 	LastRefreshAt            time.Time
 	LastSuccessAt            time.Time
 	NodeCount                int
+	NodeNames                []string
 	EnabledSubscriptionCount int
 	OutputPath               string
 	LastError                string

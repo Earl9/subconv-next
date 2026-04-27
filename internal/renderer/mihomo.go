@@ -11,6 +11,11 @@ import (
 
 const probeURL = "https://www.gstatic.com/generate_204"
 
+var defaultDNSServers = []string{
+	"https://1.1.1.1/dns-query",
+	"https://8.8.8.8/dns-query",
+}
+
 var regionGroups = []struct {
 	Tag  string
 	Name string
@@ -29,22 +34,59 @@ var regionGroups = []struct {
 }
 
 type mihomoConfig struct {
-	MixedPort   int                `yaml:"mixed-port"`
-	AllowLAN    bool               `yaml:"allow-lan"`
-	Mode        string             `yaml:"mode"`
-	LogLevel    string             `yaml:"log-level"`
-	IPv6        bool               `yaml:"ipv6"`
-	DNS         *mihomoDNS         `yaml:"dns,omitempty"`
-	Proxies     []mihomoProxy      `yaml:"proxies"`
-	ProxyGroups []mihomoProxyGroup `yaml:"proxy-groups"`
-	Rules       []string           `yaml:"rules"`
+	MixedPort               int                           `yaml:"mixed-port"`
+	AllowLAN                bool                          `yaml:"allow-lan"`
+	Mode                    string                        `yaml:"mode"`
+	LogLevel                string                        `yaml:"log-level"`
+	IPv6                    bool                          `yaml:"ipv6"`
+	UnifiedDelay            bool                          `yaml:"unified-delay,omitempty"`
+	TCPConcurrent           bool                          `yaml:"tcp-concurrent,omitempty"`
+	FindProcessMode         string                        `yaml:"find-process-mode,omitempty"`
+	GlobalClientFingerprint string                        `yaml:"global-client-fingerprint,omitempty"`
+	DNS                     *mihomoDNS                    `yaml:"dns,omitempty"`
+	Profile                 *mihomoProfile                `yaml:"profile,omitempty"`
+	Sniffer                 *mihomoSniffer                `yaml:"sniffer,omitempty"`
+	Proxies                 []mihomoProxy                 `yaml:"proxies"`
+	ProxyGroups             []mihomoProxyGroup            `yaml:"proxy-groups"`
+	RuleProviders           map[string]mihomoRuleProvider `yaml:"rule-providers,omitempty"`
+	Rules                   []string                      `yaml:"rules"`
 }
 
 type mihomoDNS struct {
-	Enable       bool     `yaml:"enable"`
-	IPv6         bool     `yaml:"ipv6"`
-	EnhancedMode string   `yaml:"enhanced-mode,omitempty"`
-	Nameserver   []string `yaml:"nameserver,omitempty"`
+	Enable            bool                     `yaml:"enable"`
+	Listen            string                   `yaml:"listen,omitempty"`
+	UseSystemHosts    *bool                    `yaml:"use-system-hosts,omitempty"`
+	IPv6              bool                     `yaml:"ipv6"`
+	EnhancedMode      string                   `yaml:"enhanced-mode,omitempty"`
+	FakeIPRange       string                   `yaml:"fake-ip-range,omitempty"`
+	DefaultNameserver []string                 `yaml:"default-nameserver,omitempty"`
+	Nameserver        []string                 `yaml:"nameserver,omitempty"`
+	Fallback          []string                 `yaml:"fallback,omitempty"`
+	FallbackFilter    *mihomoDNSFallbackFilter `yaml:"fallback-filter,omitempty"`
+	FakeIPFilter      []string                 `yaml:"fake-ip-filter,omitempty"`
+	NameserverPolicy  map[string][]string      `yaml:"nameserver-policy,omitempty"`
+}
+
+type mihomoDNSFallbackFilter struct {
+	GeoIP  bool     `yaml:"geoip"`
+	IPCIDR []string `yaml:"ipcidr,omitempty"`
+	Domain []string `yaml:"domain,omitempty"`
+}
+
+type mihomoProfile struct {
+	StoreSelected bool `yaml:"store-selected,omitempty"`
+	StoreFakeIP   bool `yaml:"store-fake-ip,omitempty"`
+}
+
+type mihomoSniffer struct {
+	Enable      bool                       `yaml:"enable"`
+	ParsePureIP bool                       `yaml:"parse-pure-ip,omitempty"`
+	Sniff       map[string]mihomoSniffRule `yaml:"sniff,omitempty"`
+}
+
+type mihomoSniffRule struct {
+	Ports               []string `yaml:"ports,omitempty"`
+	OverrideDestination bool     `yaml:"override-destination,omitempty"`
 }
 
 type mihomoProxy struct {
@@ -124,6 +166,19 @@ type mihomoProxyGroup struct {
 	Interval int      `yaml:"interval,omitempty"`
 }
 
+type mihomoRuleProvider struct {
+	Type      string              `yaml:"type"`
+	URL       string              `yaml:"url,omitempty"`
+	Path      string              `yaml:"path,omitempty"`
+	Interval  int                 `yaml:"interval,omitempty"`
+	Proxy     string              `yaml:"proxy,omitempty"`
+	Behavior  string              `yaml:"behavior"`
+	Format    string              `yaml:"format,omitempty"`
+	SizeLimit int64               `yaml:"size-limit,omitempty"`
+	Header    map[string][]string `yaml:"header,omitempty"`
+	Payload   []string            `yaml:"payload,omitempty"`
+}
+
 func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts := model.DefaultRenderOptions()
 	opts.Template = cfg.Service.Template
@@ -134,6 +189,17 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.IPv6 = cfg.Render.IPv6
 	opts.DNSEnabled = cfg.Render.DNSEnabled
 	opts.EnhancedMode = cfg.Render.EnhancedMode
+	opts.UnifiedDelay = cfg.Render.UnifiedDelay
+	opts.TCPConcurrent = cfg.Render.TCPConcurrent
+	opts.FindProcessMode = cfg.Render.FindProcessMode
+	opts.GlobalClientFingerprint = cfg.Render.GlobalClientFingerprint
+	opts.DNS = cfg.Render.DNS
+	opts.Profile = cfg.Render.Profile
+	opts.Sniffer = cfg.Render.Sniffer
+	opts.FinalPolicy = cfg.Render.FinalPolicy
+	opts.AdditionalRules = append([]string(nil), cfg.Render.AdditionalRules...)
+	opts.RuleProviders = append([]model.RuleProviderConfig(nil), cfg.Render.RuleProviders...)
+	opts.CustomProxyGroups = append([]model.CustomProxyGroupConfig(nil), cfg.Render.CustomProxyGroups...)
 
 	return NormalizeRenderOptions(opts)
 }
@@ -171,28 +237,110 @@ func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error
 	}
 
 	cfg := mihomoConfig{
-		MixedPort:   opts.MixedPort,
-		AllowLAN:    opts.AllowLAN,
-		Mode:        opts.Mode,
-		LogLevel:    opts.LogLevel,
-		IPv6:        opts.IPv6,
-		Proxies:     proxies,
-		ProxyGroups: buildProxyGroups(nodes, opts.Template),
-		Rules:       buildRules(opts.Template),
+		MixedPort:               opts.MixedPort,
+		AllowLAN:                opts.AllowLAN,
+		Mode:                    opts.Mode,
+		LogLevel:                opts.LogLevel,
+		IPv6:                    opts.IPv6,
+		UnifiedDelay:            opts.UnifiedDelay,
+		TCPConcurrent:           opts.TCPConcurrent,
+		FindProcessMode:         opts.FindProcessMode,
+		GlobalClientFingerprint: opts.GlobalClientFingerprint,
+		Proxies:                 proxies,
+		ProxyGroups:             buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups),
+		RuleProviders:           buildRuleProviders(opts.RuleProviders),
+		Rules:                   buildRules(opts.Template, opts.FinalPolicy, opts.AdditionalRules, opts.RuleProviders),
 	}
-	if opts.DNSEnabled {
-		cfg.DNS = &mihomoDNS{
+	cfg.DNS = buildDNSConfig(opts)
+	cfg.Profile = buildProfileConfig(opts.Profile)
+	cfg.Sniffer = buildSnifferConfig(opts.Sniffer)
+
+	return renderConfig(cfg), nil
+}
+
+func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
+	if opts.DNS == nil {
+		if !opts.DNSEnabled {
+			return nil
+		}
+		return &mihomoDNS{
 			Enable:       true,
 			IPv6:         opts.IPv6,
-			EnhancedMode: opts.EnhancedMode,
-			Nameserver: []string{
-				"https://1.1.1.1/dns-query",
-				"https://8.8.8.8/dns-query",
-			},
+			EnhancedMode: strings.TrimSpace(opts.EnhancedMode),
+			Nameserver:   append([]string(nil), defaultDNSServers...),
 		}
 	}
 
-	return renderConfig(cfg), nil
+	cfg := opts.DNS
+	dns := &mihomoDNS{
+		Enable:            cfg.Enable,
+		Listen:            strings.TrimSpace(cfg.Listen),
+		UseSystemHosts:    model.Bool(cfg.UseSystemHosts),
+		IPv6:              opts.IPv6,
+		EnhancedMode:      strings.TrimSpace(cfg.EnhancedMode),
+		FakeIPRange:       strings.TrimSpace(cfg.FakeIPRange),
+		DefaultNameserver: cloneStrings(cfg.DefaultNameserver),
+		Nameserver:        cloneStrings(cfg.Nameserver),
+		Fallback:          cloneStrings(cfg.Fallback),
+		FakeIPFilter:      cloneStrings(cfg.FakeIPFilter),
+		NameserverPolicy:  cloneStringSliceMap(cfg.NameserverPolicy),
+	}
+
+	if dns.EnhancedMode == "" {
+		dns.EnhancedMode = strings.TrimSpace(opts.EnhancedMode)
+	}
+	if dns.Enable && len(dns.Nameserver) == 0 {
+		dns.Nameserver = append([]string(nil), defaultDNSServers...)
+	}
+	if cfg.FallbackFilter != nil {
+		dns.FallbackFilter = &mihomoDNSFallbackFilter{
+			GeoIP:  cfg.FallbackFilter.GeoIP,
+			IPCIDR: cloneStrings(cfg.FallbackFilter.IPCIDR),
+			Domain: cloneStrings(cfg.FallbackFilter.Domain),
+		}
+	}
+
+	return dns
+}
+
+func buildProfileConfig(cfg *model.ProfileConfig) *mihomoProfile {
+	if cfg == nil {
+		return nil
+	}
+	return &mihomoProfile{
+		StoreSelected: cfg.StoreSelected,
+		StoreFakeIP:   cfg.StoreFakeIP,
+	}
+}
+
+func buildSnifferConfig(cfg *model.SnifferConfig) *mihomoSniffer {
+	if cfg == nil {
+		return nil
+	}
+
+	sniff := map[string]mihomoSniffRule{}
+	if cfg.TLS != nil && len(cfg.TLS.Ports) > 0 {
+		sniff["TLS"] = mihomoSniffRule{
+			Ports: cloneStrings(cfg.TLS.Ports),
+		}
+	}
+	if cfg.HTTP != nil && len(cfg.HTTP.Ports) > 0 {
+		sniff["HTTP"] = mihomoSniffRule{
+			Ports:               cloneStrings(cfg.HTTP.Ports),
+			OverrideDestination: cfg.HTTP.OverrideDestination,
+		}
+	}
+	if cfg.QUIC != nil && len(cfg.QUIC.Ports) > 0 {
+		sniff["QUIC"] = mihomoSniffRule{
+			Ports: cloneStrings(cfg.QUIC.Ports),
+		}
+	}
+
+	return &mihomoSniffer{
+		Enable:      cfg.Enable,
+		ParsePureIP: cfg.ParsePureIP,
+		Sniff:       sniff,
+	}
 }
 
 func buildProxies(nodes []model.NodeIR) ([]mihomoProxy, error) {
@@ -347,7 +495,7 @@ func buildWGPeers(peers []model.WGPeer) []mihomoWGPeer {
 	return out
 }
 
-func buildProxyGroups(nodes []model.NodeIR, template string) []mihomoProxyGroup {
+func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []model.CustomProxyGroupConfig) []mihomoProxyGroup {
 	template = strings.ToLower(strings.TrimSpace(template))
 	allNames := nodeNames(nodes)
 	if len(allNames) == 0 {
@@ -452,6 +600,19 @@ func buildProxyGroups(nodes []model.NodeIR, template string) []mihomoProxyGroup 
 		addGroup(mihomoProxyGroup{Name: "漏网之鱼", Type: "select", Proxies: []string{"节点选择", "自动选择", "DIRECT"}})
 	}
 
+	for _, group := range customGroups {
+		if !group.Enabled {
+			continue
+		}
+		addGroup(mihomoProxyGroup{
+			Name:     group.Name,
+			Type:     strings.ToLower(strings.TrimSpace(group.Type)),
+			Proxies:  append([]string(nil), group.Members...),
+			URL:      strings.TrimSpace(group.URL),
+			Interval: group.Interval,
+		})
+	}
+
 	return groups
 }
 
@@ -469,19 +630,25 @@ func regionProxyNames(nodes []model.NodeIR) map[string][]string {
 	return regionNames
 }
 
-func buildRules(template string) []string {
+func buildRules(template string, finalPolicy string, additionalRules []string, providers []model.RuleProviderConfig) []string {
 	template = strings.ToLower(strings.TrimSpace(template))
+	finalPolicy = strings.TrimSpace(finalPolicy)
+	if finalPolicy == "" {
+		finalPolicy = defaultFinalPolicy(template)
+	}
+	baseRules := []string{}
 	if template == "lite" {
-		return []string{
+		baseRules = []string{
 			"GEOSITE,private,DIRECT",
 			"GEOIP,private,DIRECT,no-resolve",
 			"GEOSITE,cn,DIRECT",
 			"GEOIP,CN,DIRECT",
-			"MATCH,节点选择",
+			fmt.Sprintf("MATCH,%s", finalPolicy),
 		}
+		return mergeRules(baseRules, additionalRules, providerRules(providers))
 	}
 
-	return []string{
+	baseRules = []string{
 		"GEOSITE,telegram,Telegram",
 		"GEOSITE,github,GitHub",
 		"GEOSITE,microsoft,Microsoft",
@@ -492,8 +659,181 @@ func buildRules(template string) []string {
 		"GEOIP,private,DIRECT,no-resolve",
 		"GEOSITE,cn,国内直连",
 		"GEOIP,CN,国内直连",
-		"MATCH,漏网之鱼",
+		fmt.Sprintf("MATCH,%s", finalPolicy),
 	}
+	return mergeRules(baseRules, additionalRules, providerRules(providers))
+}
+
+func defaultFinalPolicy(template string) string {
+	if strings.EqualFold(strings.TrimSpace(template), "lite") {
+		return "节点选择"
+	}
+	return "漏网之鱼"
+}
+
+func mergeRules(baseRules, additionalRules, providerRules []string) []string {
+	base := uniqueOrdered(baseRules)
+	extras := normalizeRules(additionalRules)
+	providerExtras := normalizeRules(providerRules)
+	if len(extras) == 0 && len(providerExtras) == 0 {
+		return base
+	}
+
+	matchIndex := len(base)
+	for i, rule := range base {
+		if strings.HasPrefix(strings.TrimSpace(rule), "MATCH,") {
+			matchIndex = i
+			break
+		}
+	}
+
+	head := append([]string(nil), base[:matchIndex]...)
+	tail := append([]string(nil), base[matchIndex:]...)
+	merged := append(head, providerExtras...)
+	merged = append(merged, extras...)
+	merged = append(merged, tail...)
+	return uniqueOrdered(merged)
+}
+
+func normalizeRules(rules []string) []string {
+	var normalized []string
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		normalized = append(normalized, rule)
+	}
+	return uniqueOrdered(normalized)
+}
+
+func buildRuleProviders(providers []model.RuleProviderConfig) map[string]mihomoRuleProvider {
+	if len(providers) == 0 {
+		return nil
+	}
+
+	out := make(map[string]mihomoRuleProvider)
+	for _, provider := range providers {
+		if !provider.Enabled {
+			continue
+		}
+
+		entry := mihomoRuleProvider{
+			Type:     strings.ToLower(strings.TrimSpace(provider.Type)),
+			URL:      strings.TrimSpace(provider.URL),
+			Path:     providerPath(provider),
+			Interval: provider.Interval,
+			Proxy:    strings.TrimSpace(provider.Proxy),
+			Behavior: strings.ToLower(strings.TrimSpace(provider.Behavior)),
+			Format:   strings.ToLower(strings.TrimSpace(provider.Format)),
+		}
+		if provider.SizeLimit > 0 {
+			entry.SizeLimit = provider.SizeLimit
+		}
+		if len(provider.Headers) > 0 {
+			entry.Header = cloneHeaderMap(provider.Headers)
+		}
+		if len(provider.Payload) > 0 {
+			entry.Payload = append([]string(nil), provider.Payload...)
+		}
+		out[provider.Name] = entry
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func providerRules(providers []model.RuleProviderConfig) []string {
+	var rules []string
+	for _, provider := range providers {
+		if !provider.Enabled {
+			continue
+		}
+		rule := fmt.Sprintf("RULE-SET,%s,%s", provider.Name, provider.Policy)
+		if provider.NoResolve {
+			rule += ",no-resolve"
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func providerPath(provider model.RuleProviderConfig) string {
+	path := strings.TrimSpace(provider.Path)
+	if path != "" {
+		return path
+	}
+	if strings.EqualFold(provider.Type, "http") {
+		ext := strings.ToLower(strings.TrimSpace(provider.Format))
+		if ext == "" {
+			ext = "yaml"
+		}
+		return fmt.Sprintf("./rule-providers/%s.%s", sanitizeProviderName(provider.Name), ext)
+	}
+	return ""
+}
+
+func sanitizeProviderName(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "provider"
+	}
+	return out
+}
+
+func cloneHeaderMap(values map[string][]string) map[string][]string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string][]string, len(values))
+	for _, key := range keys {
+		out[key] = append([]string(nil), values[key]...)
+	}
+	return out
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+func cloneStringSliceMap(values map[string][]string) map[string][]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string][]string, len(values))
+	for _, key := range keys {
+		out[key] = cloneStrings(values[key])
+	}
+	return out
 }
 
 func ensureUniqueNames(nodes []model.NodeIR) []model.NodeIR {
@@ -669,9 +1009,29 @@ func renderConfig(cfg mihomoConfig) []byte {
 	w.scalar(0, "mode", cfg.Mode)
 	w.scalar(0, "log-level", cfg.LogLevel)
 	w.scalar(0, "ipv6", cfg.IPv6)
+	if cfg.UnifiedDelay {
+		w.scalar(0, "unified-delay", cfg.UnifiedDelay)
+	}
+	if cfg.TCPConcurrent {
+		w.scalar(0, "tcp-concurrent", cfg.TCPConcurrent)
+	}
+	if cfg.FindProcessMode != "" {
+		w.scalar(0, "find-process-mode", cfg.FindProcessMode)
+	}
+	if cfg.GlobalClientFingerprint != "" {
+		w.scalar(0, "global-client-fingerprint", cfg.GlobalClientFingerprint)
+	}
 	if cfg.DNS != nil {
 		w.line(0, "dns:")
 		renderDNS(&w, 4, *cfg.DNS)
+	}
+	if cfg.Profile != nil {
+		w.line(0, "profile:")
+		renderProfile(&w, 4, *cfg.Profile)
+	}
+	if cfg.Sniffer != nil {
+		w.line(0, "sniffer:")
+		renderSniffer(&w, 4, *cfg.Sniffer)
 	}
 
 	w.line(0, "proxies:")
@@ -684,6 +1044,11 @@ func renderConfig(cfg mihomoConfig) []byte {
 		renderProxyGroup(&w, 4, group)
 	}
 
+	if len(cfg.RuleProviders) > 0 {
+		w.line(0, "rule-providers:")
+		renderRuleProviders(&w, 4, cfg.RuleProviders)
+	}
+
 	w.line(0, "rules:")
 	for _, rule := range cfg.Rules {
 		w.listScalar(4, rule)
@@ -694,14 +1059,100 @@ func renderConfig(cfg mihomoConfig) []byte {
 
 func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 	w.scalar(indent, "enable", dns.Enable)
+	if dns.Listen != "" {
+		w.scalar(indent, "listen", dns.Listen)
+	}
+	if dns.UseSystemHosts != nil {
+		w.scalar(indent, "use-system-hosts", *dns.UseSystemHosts)
+	}
 	w.scalar(indent, "ipv6", dns.IPv6)
 	if dns.EnhancedMode != "" {
 		w.scalar(indent, "enhanced-mode", dns.EnhancedMode)
+	}
+	if dns.FakeIPRange != "" {
+		w.scalar(indent, "fake-ip-range", dns.FakeIPRange)
+	}
+	if len(dns.DefaultNameserver) > 0 {
+		w.line(indent, "default-nameserver:")
+		for _, item := range dns.DefaultNameserver {
+			w.listScalar(indent+4, item)
+		}
 	}
 	if len(dns.Nameserver) > 0 {
 		w.line(indent, "nameserver:")
 		for _, item := range dns.Nameserver {
 			w.listScalar(indent+4, item)
+		}
+	}
+	if len(dns.Fallback) > 0 {
+		w.line(indent, "fallback:")
+		for _, item := range dns.Fallback {
+			w.listScalar(indent+4, item)
+		}
+	}
+	if dns.FallbackFilter != nil {
+		w.line(indent, "fallback-filter:")
+		w.scalar(indent+4, "geoip", dns.FallbackFilter.GeoIP)
+		if len(dns.FallbackFilter.IPCIDR) > 0 {
+			w.line(indent+4, "ipcidr:")
+			for _, item := range dns.FallbackFilter.IPCIDR {
+				w.listScalar(indent+8, item)
+			}
+		}
+		if len(dns.FallbackFilter.Domain) > 0 {
+			w.line(indent+4, "domain:")
+			for _, item := range dns.FallbackFilter.Domain {
+				w.listScalar(indent+8, item)
+			}
+		}
+	}
+	if len(dns.FakeIPFilter) > 0 {
+		w.line(indent, "fake-ip-filter:")
+		for _, item := range dns.FakeIPFilter {
+			w.listScalar(indent+4, item)
+		}
+	}
+	if len(dns.NameserverPolicy) > 0 {
+		keys := make([]string, 0, len(dns.NameserverPolicy))
+		for key := range dns.NameserverPolicy {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		w.line(indent, "nameserver-policy:")
+		for _, key := range keys {
+			w.line(indent+4, fmt.Sprintf("%s:", yamlString(key)))
+			for _, item := range dns.NameserverPolicy[key] {
+				w.listScalar(indent+8, item)
+			}
+		}
+	}
+}
+
+func renderProfile(w *yamlWriter, indent int, profile mihomoProfile) {
+	w.scalar(indent, "store-selected", profile.StoreSelected)
+	w.scalar(indent, "store-fake-ip", profile.StoreFakeIP)
+}
+
+func renderSniffer(w *yamlWriter, indent int, sniffer mihomoSniffer) {
+	w.scalar(indent, "enable", sniffer.Enable)
+	w.scalar(indent, "parse-pure-ip", sniffer.ParsePureIP)
+	if len(sniffer.Sniff) == 0 {
+		return
+	}
+
+	w.line(indent, "sniff:")
+	for _, key := range []string{"TLS", "HTTP", "QUIC"} {
+		rule, ok := sniffer.Sniff[key]
+		if !ok {
+			continue
+		}
+		w.line(indent+4, key+":")
+		if len(rule.Ports) > 0 {
+			w.list(indent+8, "ports", rule.Ports)
+		}
+		if key == "HTTP" {
+			w.scalar(indent+8, "override-destination", rule.OverrideDestination)
 		}
 	}
 }
@@ -879,6 +1330,55 @@ func renderProxyGroup(w *yamlWriter, indent int, group mihomoProxyGroup) {
 	}
 	if group.Interval != 0 {
 		w.scalar(indent+2, "interval", group.Interval)
+	}
+}
+
+func renderRuleProviders(w *yamlWriter, indent int, providers map[string]mihomoRuleProvider) {
+	keys := make([]string, 0, len(providers))
+	for key := range providers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		provider := providers[key]
+		w.line(indent, fmt.Sprintf("%s:", key))
+		w.scalar(indent+2, "type", provider.Type)
+		if provider.Behavior != "" {
+			w.scalar(indent+2, "behavior", provider.Behavior)
+		}
+		if provider.Format != "" {
+			w.scalar(indent+2, "format", provider.Format)
+		}
+		if provider.URL != "" {
+			w.scalar(indent+2, "url", provider.URL)
+		}
+		if provider.Path != "" {
+			w.scalar(indent+2, "path", provider.Path)
+		}
+		if provider.Interval != 0 {
+			w.scalar(indent+2, "interval", provider.Interval)
+		}
+		if provider.Proxy != "" {
+			w.scalar(indent+2, "proxy", provider.Proxy)
+		}
+		if provider.SizeLimit > 0 {
+			w.scalar(indent+2, "size-limit", provider.SizeLimit)
+		}
+		if len(provider.Header) > 0 {
+			w.line(indent+2, "header:")
+			headerKeys := make([]string, 0, len(provider.Header))
+			for headerKey := range provider.Header {
+				headerKeys = append(headerKeys, headerKey)
+			}
+			sort.Strings(headerKeys)
+			for _, headerKey := range headerKeys {
+				w.list(indent+4, headerKey, provider.Header[headerKey])
+			}
+		}
+		if len(provider.Payload) > 0 {
+			w.list(indent+2, "payload", provider.Payload)
+		}
 	}
 }
 

@@ -100,6 +100,41 @@ func TestHandleParse(t *testing.T) {
 	}
 }
 
+func TestHandleNodes(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Inline = []model.InlineConfig{
+		{
+			Name:    "manual",
+			Enabled: true,
+			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
+		},
+	}
+	server := NewServer("0.1.0-test", cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/nodes", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var response nodesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("response.OK = false, want true")
+	}
+	if len(response.Nodes) != 1 {
+		t.Fatalf("len(response.Nodes) = %d, want 1", len(response.Nodes))
+	}
+	if response.Nodes[0].SourceName != "manual" || response.Nodes[0].SourceKind != "inline" {
+		t.Fatalf("response.Nodes[0] = %#v, want inline source metadata", response.Nodes[0])
+	}
+}
+
 func TestHandleGenerate(t *testing.T) {
 	cfg := model.DefaultConfig()
 	server := NewServer("0.1.0-test", cfg)
@@ -189,11 +224,39 @@ func TestHandleSubscriptionYAML(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if got := rec.Header().Get("Content-Type"); got != "application/yaml" {
-		t.Fatalf("Content-Type = %q, want %q", got, "application/yaml")
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want %q", got, "text/plain; charset=utf-8")
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != `inline; filename="mihomo.yaml"` {
+		t.Fatalf("Content-Disposition = %q, want %q", got, `inline; filename="mihomo.yaml"`)
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("type: ss")) {
 		t.Fatalf("body = %q, want ss yaml", rec.Body.String())
+	}
+}
+
+func TestHandleSubscriptionYAMLDownload(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.OutputPath = filepath.Join(t.TempDir(), "mihomo.yaml")
+	cfg.Inline = []model.InlineConfig{
+		{
+			Name:    "manual",
+			Enabled: true,
+			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
+		},
+	}
+	server := NewServer("0.1.0-test", cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml?download=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+		t.Fatalf("Content-Disposition = %q, want %q", got, `attachment; filename="mihomo.yaml"`)
 	}
 }
 

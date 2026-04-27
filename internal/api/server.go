@@ -44,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/nodes", s.handleNodes)
 	mux.HandleFunc("/api/parse", s.handleParse)
 	mux.HandleFunc("/api/generate", s.handleGenerate)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
@@ -115,7 +116,7 @@ func (s *Server) snapshotLogs(tail int) []string {
 	return append([]string(nil), s.logLines[len(s.logLines)-tail:]...)
 }
 
-func (s *Server) setRefreshSuccess(nodeCount int, outputPath string, at time.Time) {
+func (s *Server) setRefreshSuccess(nodeCount int, nodeNames []string, outputPath string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -123,6 +124,7 @@ func (s *Server) setRefreshSuccess(nodeCount int, outputPath string, at time.Tim
 	s.status.LastRefreshAt = at
 	s.status.LastSuccessAt = at
 	s.status.NodeCount = nodeCount
+	s.status.NodeNames = append([]string(nil), nodeNames...)
 	s.status.OutputPath = outputPath
 	s.status.LastError = ""
 }

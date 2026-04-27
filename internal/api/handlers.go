@@ -21,13 +21,14 @@ type healthzResponse struct {
 }
 
 type statusResponse struct {
-	Running                  bool   `json:"running"`
-	LastRefreshAt            string `json:"last_refresh_at"`
-	LastSuccessAt            string `json:"last_success_at"`
-	NodeCount                int    `json:"node_count"`
-	EnabledSubscriptionCount int    `json:"enabled_subscription_count"`
-	OutputPath               string `json:"output_path"`
-	LastError                string `json:"last_error"`
+	Running                  bool     `json:"running"`
+	LastRefreshAt            string   `json:"last_refresh_at"`
+	LastSuccessAt            string   `json:"last_success_at"`
+	NodeCount                int      `json:"node_count"`
+	NodeNames                []string `json:"node_names,omitempty"`
+	EnabledSubscriptionCount int      `json:"enabled_subscription_count"`
+	OutputPath               string   `json:"output_path"`
+	LastError                string   `json:"last_error"`
 }
 
 type parseRequest struct {
@@ -55,6 +56,24 @@ type generateResponse struct {
 type configResponse struct {
 	OK     bool         `json:"ok"`
 	Config model.Config `json:"config"`
+}
+
+type nodeSummary struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Server     string   `json:"server,omitempty"`
+	Port       int      `json:"port,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	SourceName string   `json:"source_name,omitempty"`
+	SourceKind string   `json:"source_kind,omitempty"`
+}
+
+type nodesResponse struct {
+	OK       bool                `json:"ok"`
+	Nodes    []nodeSummary       `json:"nodes"`
+	Warnings []string            `json:"warnings,omitempty"`
+	Errors   []parser.ParseError `json:"errors,omitempty"`
 }
 
 type refreshResponse struct {
@@ -93,6 +112,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		LastRefreshAt:            formatTime(status.LastRefreshAt),
 		LastSuccessAt:            formatTime(status.LastSuccessAt),
 		NodeCount:                status.NodeCount,
+		NodeNames:                status.NodeNames,
 		EnabledSubscriptionCount: status.EnabledSubscriptionCount,
 		OutputPath:               status.OutputPath,
 		LastError:                status.LastError,
@@ -191,6 +211,35 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	collected := pipeline.CollectPreviewNodes(s.snapshotConfig())
+	nodes := make([]nodeSummary, 0, len(collected.Nodes))
+	for _, node := range collected.Nodes {
+		nodes = append(nodes, nodeSummary{
+			ID:         node.ID,
+			Name:       node.Name,
+			Type:       string(node.Type),
+			Server:     node.Server,
+			Port:       node.Port,
+			Tags:       append([]string(nil), node.Tags...),
+			SourceName: node.Source.Name,
+			SourceKind: node.Source.Kind,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, nodesResponse{
+		OK:       true,
+		Nodes:    nodes,
+		Warnings: collected.Warnings,
+		Errors:   collected.Errors,
+	})
+}
+
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
@@ -216,7 +265,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.setRefreshSuccess(result.NodeCount, result.OutputPath, now)
+	s.setRefreshSuccess(result.NodeCount, nodeNames(result.Nodes), result.OutputPath, now)
 	for _, warning := range result.Warnings {
 		s.appendLog("refresh warning: " + warning)
 	}
@@ -239,9 +288,7 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 
 	cfg := s.snapshotConfig()
 	if existing, err := os.ReadFile(cfg.Service.OutputPath); err == nil && len(existing) > 0 {
-		w.Header().Set("Content-Type", "application/yaml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(existing)
+		writeSubscriptionYAML(w, r, existing)
 		return
 	}
 
@@ -264,7 +311,7 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	s.setRefreshSuccess(result.NodeCount, result.OutputPath, now)
+	s.setRefreshSuccess(result.NodeCount, nodeNames(result.Nodes), result.OutputPath, now)
 	for _, warning := range result.Warnings {
 		s.appendLog("subscription warning: " + warning)
 	}
@@ -272,9 +319,18 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 		s.appendLog("subscription parse error [" + parseErr.Kind + "]: " + parseErr.Message)
 	}
 	s.appendLog("subscription served: " + result.OutputPath)
-	w.Header().Set("Content-Type", "application/yaml")
+	writeSubscriptionYAML(w, r, result.YAML)
+}
+
+func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, data []byte) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+	} else {
+		w.Header().Set("Content-Disposition", `inline; filename="mihomo.yaml"`)
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(result.YAML)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -300,4 +356,12 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		OK:    true,
 		Lines: s.snapshotLogs(tail),
 	})
+}
+
+func nodeNames(nodes []model.NodeIR) []string {
+	out := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		out = append(out, node.Name)
+	}
+	return out
 }
