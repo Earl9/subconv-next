@@ -272,6 +272,7 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.AdditionalRules = append([]string(nil), cfg.Render.AdditionalRules...)
 	opts.RuleProviders = append([]model.RuleProviderConfig(nil), cfg.Render.RuleProviders...)
 	opts.CustomProxyGroups = append([]model.CustomProxyGroupConfig(nil), cfg.Render.CustomProxyGroups...)
+	opts.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(cfg.Render.SubscriptionInfo)
 
 	return NormalizeRenderOptions(opts)
 }
@@ -306,6 +307,7 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	if strings.TrimSpace(opts.ExternalConfig.TemplateLabel) == "" {
 		opts.ExternalConfig.TemplateLabel = defaults.ExternalConfig.TemplateLabel
 	}
+	opts.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(opts.SubscriptionInfo)
 
 	return applyTemplateMode(opts)
 }

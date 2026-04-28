@@ -220,6 +220,7 @@ const ICONS = {
   import: svgIcon('<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>'),
   database: svgIcon('<ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path>'),
   alert: svgIcon('<path d="M10.29 3.86 1.82 18A2 2 0 0 0 3.53 21h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>'),
+  trash: svgIcon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   terminal: svgIcon('<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>'),
   nodes: svgIcon('<circle cx="6" cy="12" r="2"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8 12h8"></path><path d="M16.5 7.5 8 11"></path><path d="M16.5 16.5 8 13"></path>'),
   rule: svgIcon('<path d="M4 4h16v4H4z"></path><path d="M4 10h10v4H4z"></path><path d="M4 16h16v4H4z"></path>'),
@@ -318,6 +319,13 @@ const DEFAULT_RENDER = {
   rule_mode: "full",
   enabled_rules: RULE_PRESETS.full,
   custom_rules: [],
+  subscription_info: {
+    enabled: true,
+    expose_header: true,
+    show_per_source: true,
+    merge_strategy: "sum",
+    expire_strategy: "earliest",
+  },
 };
 
 const MASKED_SECRET = "********";
@@ -332,6 +340,11 @@ const state = {
   customRules: [],
   externalConfig: { ...DEFAULT_RENDER.external_config },
   generatedUrl: "",
+  generateStatus: "idle",
+  refreshStatus: "idle",
+  lastError: "",
+  resultNodeCount: 0,
+  resultRuleCount: 0,
   yamlPreview: "",
   yamlSearch: "",
   yamlWrap: true,
@@ -340,12 +353,20 @@ const state = {
   statusPayload: null,
   logsText: "",
   logsDisplay: "",
+  subscriptionMeta: {
+    aggregate: null,
+    sources: [],
+  },
+  siteLogos: {},
+  siteLogoRequests: {},
   subscriptions: [],
   inlineEntries: [],
   nodes: [],
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
   nodeSourceOptions: [],
   selectedNodeIds: new Set(),
+  activeNodeDeletePopoverId: "",
+  confirmDialog: null,
   nodeFilters: {
     q: "",
     type: "all",
@@ -399,7 +420,7 @@ function decorateButtons() {
     ["summary-refresh-btn", "refresh"],
     ["copy-generated-url-btn", "copy"],
     ["open-generated-url-btn", "external"],
-    ["import-generated-btn", "import"],
+    ["view-generated-link-btn", "link"],
     ["refresh-nodes-btn", "refresh"],
     ["refresh-yaml-btn", "refresh"],
     ["download-yaml-btn", "file"],
@@ -442,7 +463,7 @@ async function init() {
   renderDiagnostics();
 
   await Promise.all([loadConfig(), loadStatus(), loadLogs()]);
-  await Promise.all([loadNodes(), loadYamlPreview(), validateNodes()]);
+  await Promise.all([loadNodes(), loadYamlPreview(), validateNodes(), loadSubscriptionMeta()]);
   updateSummary();
   renderDiagnostics();
 }
@@ -458,8 +479,8 @@ function bindEvents() {
   document.getElementById("preview-btn").addEventListener("click", previewYAMLWorkspace);
   document.getElementById("summary-refresh-btn").addEventListener("click", generateSubscription);
   document.getElementById("copy-generated-url-btn").addEventListener("click", copyGeneratedUrl);
-  document.getElementById("open-generated-url-btn").addEventListener("click", () => openUrl(getValue("generated-url")));
-  document.getElementById("import-generated-btn").addEventListener("click", importClash);
+  document.getElementById("open-generated-url-btn").addEventListener("click", () => openUrl(state.generatedUrl));
+  document.getElementById("view-generated-link-btn").addEventListener("click", focusGeneratedLink);
 
   document.getElementById("add-subscription-btn").addEventListener("click", () => {
     state.subscriptions.push(createSubscriptionEntry());
@@ -542,6 +563,12 @@ function bindEvents() {
   document.getElementById("close-node-dialog-btn").addEventListener("click", closeNodeDialog);
   document.getElementById("save-node-btn").addEventListener("click", () => saveNodeOverride(false));
   document.getElementById("delete-node-btn").addEventListener("click", handleDeleteCurrentNode);
+  document.getElementById("close-danger-dialog-btn").addEventListener("click", closeDangerDialog);
+  document.getElementById("danger-dialog-cancel-btn").addEventListener("click", closeDangerDialog);
+  document.getElementById("danger-dialog-confirm-btn").addEventListener("click", handleDangerDialogConfirm);
+  document.getElementById("danger-dialog").addEventListener("close", () => {
+    state.confirmDialog = null;
+  });
 
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -557,6 +584,25 @@ function bindEvents() {
       if (menu.contains(event.target)) return;
       menu.removeAttribute("open");
     });
+    if (
+      state.activeNodeDeletePopoverId &&
+      !event.target.closest("[data-popconfirm-root]") &&
+      !event.target.closest("[data-node-delete-trigger]")
+    ) {
+      state.activeNodeDeletePopoverId = "";
+      renderNodeTable();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (document.getElementById("danger-dialog")?.open) {
+      closeDangerDialog();
+      return;
+    }
+    if (state.activeNodeDeletePopoverId) {
+      state.activeNodeDeletePopoverId = "";
+      renderNodeTable();
+    }
   });
 }
 
@@ -565,6 +611,10 @@ function handleLiveFieldUpdates(event) {
   if (!target) return;
 
   if (target.id === "backend-origin" || target.id === "subscription-token") {
+    if (state.generateStatus === "success") {
+      state.generatedUrl = buildSubscriptionURL();
+      renderResult();
+    }
     updateGeneratedUrlPlaceholder();
   }
   if (target.id === "node-search") {
@@ -621,13 +671,25 @@ function applyDefaultState() {
   state.enabledRules = new Set(RULE_PRESETS.full);
   state.customRules = [];
   state.externalConfig = { ...DEFAULT_RENDER.external_config };
+  state.generatedUrl = "";
+  state.generateStatus = "idle";
+  state.refreshStatus = "idle";
+  state.lastError = "";
+  state.lastGeneratedAt = "";
+  state.resultNodeCount = 0;
+  state.resultRuleCount = 0;
   state.ruleChipsExpanded = false;
   state.activeRuleSubtab = "builtin";
   state.subscriptions = [createSubscriptionEntry({ name: "source-1", enabled: true, user_agent: "SubConvNext/0.1 Docker" })];
+  state.siteLogos = {};
+  state.siteLogoRequests = {};
   state.inlineEntries = [];
+  state.subscriptionMeta = { aggregate: null, sources: [] };
   state.nodeFilters = { q: "", type: "all", region: "ALL", status: "all", source: "" };
   state.nodePagination = { page: 1, pageSize: 25, total: 0 };
   state.selectedNodeIds = new Set();
+  state.activeNodeDeletePopoverId = "";
+  state.confirmDialog = null;
   renderTemplateOptions();
   renderRulePresetControl();
   renderRuleChips();
@@ -635,6 +697,8 @@ function applyDefaultState() {
   renderTemplateDetail();
   renderSubscriptionManager();
   renderInlineManager();
+  renderResult();
+  renderSubscriptionMeta();
   renderNodeEditor();
   renderConfigNodeSummary();
   renderDiagnostics();
@@ -689,8 +753,10 @@ function fillFormFromConfig(config) {
   renderTemplateDetail();
   renderSourceMode();
   updateGeneratedUrlPlaceholder();
+  renderResult();
   renderSubscriptionManager();
   renderInlineManager();
+  renderSubscriptionMeta();
 }
 
 function renderOutputTiles() {
@@ -1153,11 +1219,98 @@ function previewFormatExt(format) {
   return "yaml";
 }
 
+function sourceDomainFromUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    return parsed.hostname || "";
+  } catch {
+    return "";
+  }
+}
+
+function sourceLogoKey(item) {
+  const domain = sourceDomainFromUrl(item?.url || "");
+  return item?.id || domain || item?.name || "";
+}
+
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function fallbackAvatarStyle(seed) {
+  const hue = hashString(seed) % 360;
+  return `background:hsl(${hue} 70% 96%);color:hsl(${hue} 55% 38%);border-color:hsl(${hue} 45% 84%)`;
+}
+
+function fallbackAvatarLabel(item) {
+  const source = (item?.name || item?.source_name || item?.domain || "?").trim();
+  return source ? source.slice(0, 1).toUpperCase() : "?";
+}
+
+function resolveLogoPayload(item) {
+  const key = sourceLogoKey(item);
+  const cached = state.siteLogos[key];
+  if (item?.source_logo) {
+    return { kind: "image", src: item.source_logo };
+  }
+  if (cached?.logoUrl) {
+    return { kind: "image", src: cached.logoUrl };
+  }
+  return {
+    kind: "fallback",
+    label: fallbackAvatarLabel(item),
+    style: fallbackAvatarStyle(key || fallbackAvatarLabel(item)),
+  };
+}
+
+function renderSourceLogo(item, className = "source-logo") {
+  const payload = resolveLogoPayload(item);
+  if (payload.kind === "image") {
+    return `<span class="${className}"><img src="${escapeHtml(payload.src)}" alt="" loading="lazy" /></span>`;
+  }
+  return `<span class="${className} source-logo-fallback" style="${payload.style}">${escapeHtml(payload.label)}</span>`;
+}
+
+async function ensureSubscriptionLogos() {
+  const tasks = state.subscriptions
+    .filter((item) => item.url && !item.source_logo)
+    .map(async (item) => {
+      const domain = sourceDomainFromUrl(item.url);
+      const key = sourceLogoKey(item);
+      if (!domain || state.siteLogos[key] || state.siteLogoRequests[key]) return;
+      state.siteLogoRequests[key] = true;
+      try {
+        const response = await fetchJSON(`/api/site-logo?url=${encodeURIComponent(item.url)}`);
+        if (response?.ok) {
+          state.siteLogos[key] = {
+            logoUrl: response.logoUrl || "",
+            domain: response.domain || domain,
+            source: response.source || "fallback",
+          };
+        } else {
+          state.siteLogos[key] = { logoUrl: "", domain, source: "fallback" };
+        }
+      } finally {
+        delete state.siteLogoRequests[key];
+        renderSubscriptionManager();
+        renderSubscriptionMeta();
+        renderNodeEditor();
+      }
+    });
+  await Promise.all(tasks);
+}
+
 function createSubscriptionEntry(values = {}) {
   const index = state.subscriptions.length + 1;
   return {
     id: values.id || `source-${index}`,
     name: values.name || `source-${index}`,
+    source_logo: values.source_logo || "",
     enabled: values.enabled !== false,
     url: values.url || "",
     user_agent: values.user_agent || "SubConvNext/0.1 Docker",
@@ -1179,6 +1332,7 @@ function normalizeSubscriptionEntries(items) {
     createSubscriptionEntry({
       id: item.id || `source-${index + 1}`,
       name: item.name || `source-${index + 1}`,
+      source_logo: item.source_logo || "",
       enabled: item.enabled !== false,
       url: item.url || "",
       user_agent: item.user_agent || "SubConvNext/0.1 Docker",
@@ -1206,12 +1360,21 @@ function renderSubscriptionManager() {
     .map((item, index) => `
       <div class="source-row subscription-item">
         <div class="source-enable">
-          <label class="checkbox-line"><input type="checkbox" data-sub-field="enabled" data-sub-index="${index}" ${item.enabled ? "checked" : ""} /> 启用</label>
+          <span class="source-enable-label">启用</span>
+          <label class="switch compact-switch">
+            <input type="checkbox" data-sub-field="enabled" data-sub-index="${index}" ${item.enabled ? "checked" : ""} />
+            <span class="switch-track"></span>
+          </label>
         </div>
         <div class="source-main">
-          <div class="source-row-top">
-            <input class="source-name" type="text" data-sub-field="name" data-sub-index="${index}" placeholder="名称，例如 主力机场" value="${escapeHtml(item.name)}" />
-            <input class="source-url" type="text" data-sub-field="url" data-sub-index="${index}" placeholder="https://example.com/sub?token=xxx" value="${escapeHtml(item.url)}" />
+          <div class="source-fields">
+            <div class="source-name-group">
+              <input class="source-name source-name-inline" type="text" data-sub-field="name" data-sub-index="${index}" placeholder="名称，例如 主力机场" value="${escapeHtml(item.name)}" />
+              <div class="source-domain">${escapeHtml(sourceDomainFromUrl(item.url) || "未识别域名")}</div>
+            </div>
+            <div class="source-url-group">
+              <input class="source-url" type="text" data-sub-field="url" data-sub-index="${index}" placeholder="https://example.com/sub?token=xxx" value="${escapeHtml(item.url)}" />
+            </div>
           </div>
           <details class="source-advanced inline-advanced">
             <summary>User-Agent</summary>
@@ -1219,7 +1382,7 @@ function renderSubscriptionManager() {
           </details>
         </div>
         <div class="source-actions">
-          <button class="tiny-button warn-text" type="button" data-sub-action="delete" data-sub-index="${index}">删除</button>
+          <button class="tiny-button danger-ghost" type="button" data-sub-action="delete" data-sub-index="${index}">删除</button>
         </div>
       </div>
     `)
@@ -1233,6 +1396,11 @@ function renderSubscriptionManager() {
     element.addEventListener(eventName, () => {
       state.subscriptions[index][field] = isCheckbox ? element.checked : element.value;
       updateSubscriptionSummary();
+      renderSubscriptionMeta();
+      renderNodeEditor();
+      if (field === "url") {
+        renderSubscriptionManager();
+      }
     });
   });
   container.querySelectorAll("[data-sub-action='delete']").forEach((button) => {
@@ -1446,6 +1614,159 @@ function renderConfigNodeSummary() {
     .join("");
 }
 
+async function loadSubscriptionMeta() {
+  const response = await fetchJSON("/api/subscription-meta");
+  if (!response?.ok) {
+    state.subscriptionMeta = { aggregate: null, sources: [] };
+    renderSubscriptionMeta();
+    return;
+  }
+
+  state.subscriptionMeta = {
+    aggregate: response.aggregate || null,
+    sources: Array.isArray(response.sources) ? response.sources : [],
+  };
+  renderSubscriptionMeta();
+}
+
+function renderSubscriptionMeta() {
+  const overview = document.getElementById("subscription-meta-overview");
+  const list = document.getElementById("subscription-meta-list");
+  if (!overview || !list) return;
+
+  const aggregate = state.subscriptionMeta?.aggregate || null;
+  const sources = Array.isArray(state.subscriptionMeta?.sources) ? state.subscriptionMeta.sources : [];
+
+  if (!sources.length) {
+    overview.innerHTML = `
+      <div class="subscription-meta-title">暂无订阅信息</div>
+      <div class="subscription-meta-line">刷新订阅后会显示各订阅源的流量和到期时间。</div>
+    `;
+    list.innerHTML = "";
+    return;
+  }
+
+  overview.innerHTML = `
+    <div class="subscription-meta-title">总览</div>
+    <div class="subscription-meta-line">${escapeHtml(renderAggregateUsageLine(aggregate))}</div>
+    <div class="subscription-meta-line">${escapeHtml(renderAggregateRemainingLine(aggregate))}</div>
+    <div class="subscription-meta-line">${escapeHtml(renderAggregateExpireLine(aggregate))}</div>
+  `;
+
+  const showPerSource = state.config?.render?.subscription_info?.show_per_source !== false;
+  if (!showPerSource) {
+    list.innerHTML = "";
+    return;
+  }
+
+  list.innerHTML = sources
+    .map((meta) => {
+      const severity = subscriptionMetaSeverity(meta);
+      const sourceLabel = subscriptionMetaOrigin(meta);
+      const subscription = state.subscriptions.find((item) => item.id === meta.source_id || item.name === meta.source_name);
+      const displaySourceName = subscription?.name || meta.source_name || meta.source_id || "未命名订阅源";
+      return `
+        <div class="subscription-meta-item ${severity}">
+          <div class="subscription-meta-item-header">
+            <div class="subscription-meta-item-title">${escapeHtml(displaySourceName)}</div>
+            <span class="subscription-meta-pill">${escapeHtml(sourceLabel)}</span>
+          </div>
+          <div class="source-info-stack">
+            <div class="subscription-meta-line">${escapeHtml(renderSourceUsageLine(meta))}</div>
+            <div class="subscription-meta-line">${escapeHtml(renderSourceRemainingLine(meta))}</div>
+            <div class="subscription-meta-line">${escapeHtml(renderSourceExpireLine(meta))}</div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderAggregateUsageLine(aggregate) {
+  if (!aggregate) return "暂无聚合数据";
+  if (aggregate.total > 0) {
+    return `已用 ${formatBytes(aggregate.used)} / ${formatBytes(aggregate.total)}`;
+  }
+  if (aggregate.used > 0) {
+    return `已用 ${formatBytes(aggregate.used)} · 无总量信息`;
+  }
+  return "暂无流量信息";
+}
+
+function renderAggregateRemainingLine(aggregate) {
+  if (!aggregate || aggregate.total <= 0) return "无剩余流量总览";
+  return `剩余 ${formatBytes(aggregate.remaining)}`;
+}
+
+function renderAggregateExpireLine(aggregate) {
+  if (!aggregate || !aggregate.expire) return "无到期信息";
+  const source = aggregate.expire_source_name ? `${aggregate.expire_source_name} · ` : "";
+  return `最近到期：${source}${formatDate(aggregate.expire)}`;
+}
+
+function renderSourceUsageLine(meta) {
+  if (meta.total > 0) {
+    return `已用 ${formatBytes(meta.used)} / ${formatBytes(meta.total)}`;
+  }
+  if (meta.used > 0) {
+    return `已用 ${formatBytes(meta.used)} · 无总量信息`;
+  }
+  return "无流量信息";
+}
+
+function renderSourceRemainingLine(meta) {
+  if (meta.total > 0 || meta.remaining > 0) {
+    return `剩余 ${formatBytes(meta.remaining)}`;
+  }
+  return "无总量信息";
+}
+
+function renderSourceExpireLine(meta) {
+  if (!meta.expire) return "无到期信息";
+  return `到期 ${formatDate(meta.expire)}`;
+}
+
+function subscriptionMetaOrigin(meta) {
+  if (meta.from_header && meta.from_info_node) return "Header + 信息节点";
+  if (meta.from_header) return "Header";
+  if (meta.from_info_node) return "信息节点";
+  return "未获取";
+}
+
+function subscriptionMetaSeverity(meta) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (meta.expire && meta.expire <= nowSec) return "danger";
+  if (meta.used_ratio >= 0.95) return "danger";
+  if (meta.expire && meta.expire - nowSec <= 7 * 24 * 3600) return "warning";
+  if (meta.used_ratio >= 0.8) return "warning";
+  return "";
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (size <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let index = 0;
+  let current = size;
+  while (current >= 1024 && index < units.length - 1) {
+    current /= 1024;
+    index += 1;
+  }
+  const decimals = current >= 100 || index === 0 ? 0 : 1;
+  return `${current.toFixed(decimals)} ${units[index]}`;
+}
+
+function formatDate(unixSeconds) {
+  if (!unixSeconds) return "-";
+  const date = new Date(Number(unixSeconds) * 1000);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
 function summarizeRefreshState() {
   if (state.statusPayload?.refreshing) return "刷新中";
   return "空闲";
@@ -1510,6 +1831,7 @@ function buildConfigFromForm() {
     .map((item, index) => ({
       id: item.id || `source-${index + 1}`,
       name: item.name.trim() || `source-${index + 1}`,
+      source_logo: item.source_logo?.trim() || "",
       enabled: item.enabled !== false,
       url: item.url.trim(),
       user_agent: item.user_agent?.trim() || "SubConvNext/0.1 Docker",
@@ -1537,28 +1859,49 @@ async function saveCurrentConfigOnly() {
 }
 
 async function generateSubscription() {
-  const hasSubscription = state.subscriptions.some((item) => item.url.trim());
-  const hasInline = state.inlineEntries.some((item) => item.content.trim());
-  if (!hasSubscription && !hasInline && !state.nodeSummary.total) {
-    showToast("请至少添加一个订阅源或手动节点。", true);
-    return;
+  try {
+    const hasSubscription = state.subscriptions.some((item) => item.url.trim());
+    const hasInline = state.inlineEntries.some((item) => item.content.trim());
+    if (!hasSubscription && !hasInline && !state.nodeSummary.total) {
+      showToast("请至少添加一个订阅源或手动节点。", true);
+      return;
+    }
+
+    state.generateStatus = "generating";
+    state.lastError = "";
+    renderResult();
+
+    const config = buildConfigFromForm();
+    const saveResult = await saveConfig(config);
+    if (!saveResult) {
+      state.generateStatus = "error";
+      state.lastError = "保存配置失败";
+      renderResult();
+      return;
+    }
+
+    const refreshResult = await refreshNow();
+    if (!refreshResult) {
+      state.generateStatus = "error";
+      renderResult();
+      return;
+    }
+
+    state.config = config;
+    state.generatedUrl = buildSubscriptionURL();
+    state.lastGeneratedAt = new Date().toLocaleString();
+    state.generateStatus = "success";
+    renderResult();
+    updateSummary();
+    await Promise.all([loadYamlPreview(), loadStatus(), loadLogs(), refreshNodesAfterGenerate(), loadSubscriptionMeta()]);
+    renderResult();
+    showToast("订阅链接已生成。");
+  } catch (error) {
+    state.generateStatus = "error";
+    state.lastError = error?.message || String(error) || "未知错误";
+    renderResult();
+    showToast(`生成失败：${state.lastError}`, true);
   }
-
-  const config = buildConfigFromForm();
-  const saveResult = await saveConfig(config);
-  if (!saveResult) return;
-
-  const refreshResult = await refreshNow();
-  if (!refreshResult) return;
-
-  state.config = config;
-  state.generatedUrl = buildSubscriptionURL();
-  setValue("generated-url", state.generatedUrl);
-  state.lastGeneratedAt = new Date().toLocaleString();
-  renderResult(true);
-  updateSummary();
-  await Promise.all([loadYamlPreview(), loadStatus(), loadLogs(), refreshNodesAfterGenerate()]);
-  showToast("订阅链接已生成。");
 }
 
 async function saveConfig(config) {
@@ -1579,36 +1922,121 @@ async function refreshNow() {
     method: "POST",
   });
   if (!response?.ok) {
-    showToast(readAPIError(response) || "刷新失败。", true);
+    state.lastError = readAPIError(response) || "刷新失败";
+    showToast(state.lastError, true);
     return false;
   }
+  state.lastError = "";
   return true;
 }
 
-function renderResult(hasResult = false) {
-  document.getElementById("result-empty").classList.toggle("hidden", hasResult);
-  document.getElementById("result-status").classList.toggle("hidden", !hasResult);
-  document.getElementById("result-panel").classList.toggle("success-panel", hasResult);
-  if (hasResult) {
-    document.getElementById("result-status").innerHTML = `${icon("check", "status-icon success")}<span>订阅链接已生成</span>`;
+function renderResult() {
+  const panel = document.getElementById("result-panel");
+  const summaryList = document.getElementById("result-summary-list");
+  const actionStatus = document.getElementById("action-result-status");
+  const time = document.getElementById("action-result-time");
+  const input = document.getElementById("generated-url");
+  const copyButton = document.getElementById("copy-generated-url-btn");
+  const openButton = document.getElementById("open-generated-url-btn");
+  const viewButton = document.getElementById("view-generated-link-btn");
+  const generateButton = document.getElementById("generate-btn");
+  const hasResult = Boolean(state.generatedUrl);
+
+  let statusLabel = "未生成";
+  let statusText = "尚未生成订阅链接";
+  let refreshStatusText = state.refreshStatus && state.refreshStatus !== "idle" ? state.refreshStatus : "-";
+  let statusClass = "result-empty";
+  let statusDotClass = "";
+
+  if (state.generateStatus === "generating") {
+    statusLabel = "生成中";
+    statusText = "正在生成订阅链接";
+    statusClass = "result-warning";
+    statusDotClass = "warning";
+  } else if (state.generateStatus === "success" && hasResult) {
+    statusLabel = "已生成";
+    statusText = "订阅链接已生成";
+    statusClass = "";
+    statusDotClass = "success";
+  } else if (state.generateStatus === "error") {
+    statusLabel = "生成失败";
+    statusText = state.lastError || "生成失败";
+    statusClass = "result-error";
+    statusDotClass = "error";
   }
-  document.getElementById("generated-time").textContent = hasResult ? `生成时间：${state.lastGeneratedAt}` : "";
-  if (!hasResult) {
-    setValue("generated-url", "");
+
+  if (panel) {
+    panel.classList.toggle("success-panel", state.generateStatus === "success");
+    panel.classList.toggle("error-panel", state.generateStatus === "error");
+  }
+  if (actionStatus) {
+    actionStatus.className = `result-status ${statusClass}`.trim();
+    actionStatus.innerHTML = `
+      <span class="status-dot ${statusDotClass}"></span>
+      <span>${escapeHtml(statusText)}</span>
+    `;
+  }
+  if (time) {
+    time.textContent = state.lastGeneratedAt || "";
+  }
+  if (input) {
+    input.disabled = !hasResult;
+    input.placeholder = hasResult ? "" : "点击右侧按钮生成订阅链接";
+    input.value = hasResult ? state.generatedUrl : "";
+  }
+  if (copyButton) {
+    setButtonIconText(copyButton, "复制");
+    copyButton.disabled = !hasResult;
+  }
+  if (openButton) {
+    setButtonIconText(openButton, "打开");
+    openButton.disabled = !hasResult;
+  }
+  if (viewButton) {
+    viewButton.disabled = !hasResult && state.generateStatus !== "error";
+  }
+  if (generateButton) {
+    generateButton.disabled = state.generateStatus === "generating";
+    if (state.generateStatus === "generating") {
+      setButtonIconText(generateButton, "生成中...");
+    } else if (state.generateStatus === "success") {
+      setButtonIconText(generateButton, "重新生成");
+    } else {
+      setButtonIconText(generateButton, "生成订阅链接");
+    }
+  }
+
+  const items = [
+    ["状态", statusLabel],
+    ["生成时间", state.lastGeneratedAt || "-"],
+    ["节点数量", hasResult ? (state.resultNodeCount ? String(state.resultNodeCount) : "-") : "-"],
+    ["规则数量", hasResult ? (state.resultRuleCount ? String(state.resultRuleCount) : "-") : "-"],
+    ["刷新状态", hasResult ? refreshStatusText : "-"],
+  ];
+
+  if (summaryList) {
+    summaryList.innerHTML = items
+      .map(([label, value]) => `
+        <div class="summary-item">
+          <span class="summary-key">${escapeHtml(label)}</span>
+          <span class="summary-value">${escapeHtml(String(value))}</span>
+        </div>
+      `)
+      .join("");
   }
 }
 
 async function importClash() {
-  if (!getValue("generated-url").trim()) {
+  if (!state.generatedUrl.trim()) {
     await generateSubscription();
   }
-  const url = getValue("generated-url").trim();
+  const url = state.generatedUrl.trim();
   if (!url) return;
   openUrl(`clash://install-config?url=${encodeURIComponent(url)}`);
 }
 
 async function copyGeneratedUrl() {
-  const url = getValue("generated-url").trim();
+  const url = state.generatedUrl.trim();
   if (!url) {
     showToast("请先生成订阅链接。", true);
     return;
@@ -1618,6 +2046,19 @@ async function copyGeneratedUrl() {
   setButtonIconText(button, "已复制");
   window.setTimeout(() => setButtonIconText(button, "复制"), 1200);
   showToast("订阅链接已复制。");
+}
+
+function focusGeneratedLink() {
+  const bar = document.getElementById("sticky-action-bar");
+  const input = document.getElementById("generated-url");
+  if (!bar || !input) return;
+  bar.scrollIntoView({ behavior: "smooth", block: "end" });
+  input.classList.add("result-highlight");
+  if (!input.disabled) {
+    input.focus({ preventScroll: true });
+    input.select();
+  }
+  window.setTimeout(() => input.classList.remove("result-highlight"), 1600);
 }
 
 function previewYAMLWorkspace() {
@@ -1694,7 +2135,8 @@ function renderNodeTable() {
   body.innerHTML = state.nodes
     .map((node) => {
       const featureBadges = buildNodeFeatureBadges(node).join("");
-      const sourceText = `${node.source?.name || "-"}${node.source?.kind ? ` · ${node.source.kind}` : ""}`;
+      const subscription = state.subscriptions.find((item) => item.id === node.source?.id || item.name === node.source?.name);
+      const displaySourceName = subscription?.name || node.source?.name || "-";
       const disabledBadge = !node.enabled ? '<span class="mini-badge disabled">已禁用</span>' : "";
       return `
         <tr>
@@ -1720,11 +2162,19 @@ function renderNodeTable() {
           </td>
           <td><span class="address-ellipsis" title="${escapeHtml(`${node.server || "-"}:${node.port || ""}`)}">${escapeHtml(`${node.server || "-"}${node.port ? `:${node.port}` : ""}`)}</span></td>
           <td><div class="node-feature-list">${featureBadges || '<span class="mini-badge">-</span>'}</div></td>
-          <td>${escapeHtml(sourceText)}</td>
+          <td>
+            <div class="source-info-stack">
+              <div>${escapeHtml(displaySourceName)}</div>
+              <div class="meta-text">${escapeHtml(node.source?.kind || "")}</div>
+            </div>
+          </td>
           <td>
             <div class="node-actions">
               <button class="tiny-button primary-text" type="button" data-node-action="edit" data-node-id="${escapeHtml(node.id)}">编辑</button>
-              <button class="tiny-button warn-text" type="button" data-node-action="delete" data-node-id="${escapeHtml(node.id)}">删除</button>
+              <div class="node-delete-wrap">
+                <button class="tiny-button ${node.enabled === false && node.source?.kind !== "custom" ? "primary-text" : "danger-ghost"}" type="button" data-node-action="delete" data-node-delete-trigger data-node-id="${escapeHtml(node.id)}">${node.enabled === false && node.source?.kind !== "custom" ? "恢复" : "删除"}</button>
+                ${state.activeNodeDeletePopoverId === node.id ? renderNodeDeletePopconfirm(node) : ""}
+              </div>
             </div>
           </td>
         </tr>
@@ -1733,13 +2183,83 @@ function renderNodeTable() {
     .join("");
 
   body.querySelectorAll("[data-node-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", async (event) => {
       const nodeId = button.dataset.nodeId;
       const action = button.dataset.nodeAction;
       if (action === "edit") await openNodeDialog(nodeId);
-      if (action === "delete") await deleteNode(nodeId);
+      if (action === "delete") {
+        event.stopPropagation();
+        toggleNodeDeletePopover(nodeId);
+      }
     });
   });
+  body.querySelectorAll("[data-node-delete-cancel]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.activeNodeDeletePopoverId = "";
+      renderNodeTable();
+    });
+  });
+  body.querySelectorAll("[data-node-delete-confirm]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const nodeId = button.dataset.nodeDeleteConfirm;
+      const node = state.nodes.find((item) => item.id === nodeId) || state.editingNode;
+      if (node?.enabled === false && node.source?.kind !== "custom") {
+        await performRestoreNode(nodeId);
+      } else {
+        await performDeleteNode(nodeId);
+      }
+    });
+  });
+  if (state.activeNodeDeletePopoverId) {
+    window.requestAnimationFrame(() => {
+      document.querySelector(`[data-node-delete-cancel="${CSS.escape(state.activeNodeDeletePopoverId)}"]`)?.focus();
+    });
+  }
+}
+
+function toggleNodeDeletePopover(nodeId) {
+  state.activeNodeDeletePopoverId = state.activeNodeDeletePopoverId === nodeId ? "" : nodeId;
+  renderNodeTable();
+}
+
+function renderNodeDeletePopconfirm(node) {
+  const semantics = nodeDeleteSemantics(node);
+  return `
+    <div class="node-popconfirm" data-popconfirm-root>
+      <div class="node-popconfirm-title">${escapeHtml(semantics.inlineTitle)}</div>
+      <div class="node-popconfirm-desc">${escapeHtml(semantics.inlineDescription)}</div>
+      <div class="node-popconfirm-actions">
+        <button class="ghost-button small-button" type="button" data-node-delete-cancel="${escapeHtml(node.id)}">取消</button>
+        <button class="${semantics.inlineConfirmClass} small-button" type="button" data-node-delete-confirm="${escapeHtml(node.id)}">${escapeHtml(semantics.inlineConfirmText)}</button>
+      </div>
+    </div>
+  `;
+}
+
+function nodeDeleteSemantics(node) {
+  const isManual = node?.source?.kind === "custom";
+  const isDisabled = node?.enabled === false;
+  return {
+    isManual,
+    isDisabled,
+    sourceName: node?.source?.name || "-",
+    sourceType: isManual ? "手动节点" : "订阅节点",
+    inlineTitle: isDisabled && !isManual ? "恢复这个节点？" : "删除这个节点？",
+    inlineDescription: isDisabled && !isManual
+      ? "将取消本地隐藏，节点会重新参与生成。"
+      : isManual
+      ? "将从当前配置中移除，无法恢复。"
+      : "将标记为本地删除，后续订阅更新时不再显示。",
+    inlineConfirmText: isDisabled && !isManual ? "恢复" : "删除",
+    inlineConfirmClass: isDisabled && !isManual ? "secondary-button" : "danger-solid-button",
+    modalDescription: isDisabled && !isManual
+      ? "恢复后将重新显示，并继续参与后续生成。"
+      : isManual
+      ? "删除后将从当前配置中移除，此操作不可撤销。"
+      : "删除后将标记为本地隐藏，订阅刷新后不会恢复显示。",
+  };
 }
 
 function buildNodeFeatureBadges(node) {
@@ -1790,6 +2310,8 @@ function changeNodePage(direction) {
 }
 
 async function openNodeDialog(nodeId) {
+  state.activeNodeDeletePopoverId = "";
+  renderNodeTable();
   const dialog = document.getElementById("node-dialog");
   const localNode = state.nodes.find((node) => node.id === nodeId);
   if (localNode) {
@@ -1817,10 +2339,63 @@ function fillNodeDialog(node) {
   setValue("edit-node-source", `${node.source?.name || "-"}${node.source?.kind ? ` · ${node.source.kind}` : ""}`);
   setValue("edit-node-stable-short", node.stable_short || shortNodeID(node.id));
   document.getElementById("node-dialog-meta").textContent = `${node.name || "-"} · ${node.type || "-"} · ${node.source?.name || "-"}`;
+  const semantics = nodeDeleteSemantics(node);
+  const actionButton = document.getElementById("delete-node-btn");
+  const help = document.getElementById("node-dialog-help");
+  if (actionButton) {
+    actionButton.textContent = semantics.isDisabled && !semantics.isManual ? "恢复节点" : "删除节点";
+    actionButton.classList.remove("danger-ghost-button", "secondary-button");
+    actionButton.classList.add(semantics.isDisabled && !semantics.isManual ? "secondary-button" : "danger-ghost-button");
+  }
+  if (help) {
+    help.textContent = semantics.isDisabled && !semantics.isManual
+      ? "该节点当前处于本地隐藏状态，可恢复显示。"
+      : "删除操作会进入应用内确认流程，不会直接执行。";
+  }
 }
 
 function closeNodeDialog() {
   closeDialog("node-dialog");
+}
+
+function openDangerDialog(config) {
+  state.confirmDialog = config;
+  const dialog = document.getElementById("danger-dialog");
+  if (!dialog) return;
+
+  document.getElementById("danger-dialog-title").textContent = config.title || "危险操作";
+  document.getElementById("danger-dialog-subtitle").textContent = config.subtitle || "";
+  document.getElementById("danger-dialog-details").innerHTML = config.detailsHtml || "";
+  setButtonIconText("danger-dialog-confirm-btn", config.confirmText || "确认");
+
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => {
+    document.getElementById("danger-dialog-cancel-btn")?.focus();
+  });
+}
+
+function closeDangerDialog() {
+  state.confirmDialog = null;
+  closeDialog("danger-dialog");
+}
+
+async function handleDangerDialogConfirm() {
+  const config = state.confirmDialog;
+  if (!config) return;
+  if (config.action === "delete-node") {
+    const ok = await performDeleteNode(config.nodeId);
+    if (ok) {
+      closeDangerDialog();
+      if (config.closeNodeDialog) closeNodeDialog();
+    }
+    return;
+  }
+  if (config.action === "clear-overrides") {
+    const ok = await performClearNodeOverrides();
+    if (ok) {
+      closeDangerDialog();
+    }
+  }
 }
 
 function closeDialog(id) {
@@ -1871,10 +2446,30 @@ async function saveNodeOverride(regenerate) {
 }
 
 async function handleDeleteCurrentNode() {
+  const node = state.editingNode;
   const nodeId = getValue("edit-node-id");
-  if (!nodeId) return;
-  await deleteNode(nodeId);
-  closeNodeDialog();
+  if (!nodeId || !node) return;
+  const semantics = nodeDeleteSemantics(node);
+  if (semantics.isDisabled && !semantics.isManual) {
+    const ok = await performRestoreNode(nodeId);
+    if (ok) closeNodeDialog();
+    return;
+  }
+  openDangerDialog({
+    action: "delete-node",
+    nodeId,
+    closeNodeDialog: true,
+    title: "删除节点",
+    subtitle: `确定删除 “${node.name || "-"}” 吗？`,
+    confirmText: "删除节点",
+    detailsHtml: `
+      <div class="danger-dialog-info">
+        <div class="danger-dialog-row"><span>来源</span><strong>${escapeHtml(semantics.sourceName)}</strong></div>
+        <div class="danger-dialog-row"><span>类型</span><strong>${escapeHtml(semantics.sourceType)}</strong></div>
+      </div>
+      <div class="danger-dialog-note">${escapeHtml(semantics.modalDescription)}</div>
+    `,
+  });
 }
 
 async function resetNodeOverride(nodeId) {
@@ -1902,13 +2497,29 @@ async function toggleNodeEnabled(nodeId, enabled) {
   await refreshNodesAfterGenerate();
 }
 
-async function deleteNode(nodeId) {
+async function performRestoreNode(nodeId) {
+  const response = await fetchJSON("/api/nodes/enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [nodeId] }),
+  });
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "恢复节点失败。", true);
+    return false;
+  }
+  state.activeNodeDeletePopoverId = "";
+  await refreshNodesAfterGenerate();
+  showToast("节点已恢复显示。");
+  return true;
+}
+
+async function performDeleteNode(nodeId) {
   const node = state.nodes.find((item) => item.id === nodeId) || state.editingNode;
-  if (!node) return;
-  if (!window.confirm("确定删除这个节点吗？")) return;
+  if (!node) return false;
+  state.activeNodeDeletePopoverId = "";
+  renderNodeTable();
   if (node.source?.kind === "custom") {
-    await deleteCustomNode(nodeId);
-    return;
+    return performDeleteCustomNode(nodeId);
   }
   const response = await fetchJSON("/api/nodes/disable", {
     method: "POST",
@@ -1917,10 +2528,11 @@ async function deleteNode(nodeId) {
   });
   if (!response?.ok) {
     showToast(readAPIError(response) || "删除节点失败。", true);
-    return;
+    return false;
   }
   await refreshNodesAfterGenerate();
   showToast("节点已删除。");
+  return true;
 }
 
 async function copyNodeDetail(nodeId) {
@@ -1933,32 +2545,42 @@ async function copyNodeDetail(nodeId) {
   showToast("节点详情已复制。");
 }
 
-async function deleteCustomNode(nodeId) {
-  if (!window.confirm("确定删除这个手动节点吗？")) return;
+async function performDeleteCustomNode(nodeId) {
   const response = await fetchJSON(`/api/nodes/custom/${encodeURIComponent(nodeId)}`, {
     method: "DELETE",
   });
   if (!response?.ok) {
     showToast(readAPIError(response) || "删除手动节点失败。", true);
-    return;
+    return false;
   }
   state.selectedNodeIds.delete(nodeId);
   await refreshNodesAfterGenerate();
   showToast("手动节点已删除。");
+  return true;
 }
 
 async function clearNodeOverrides() {
-  if (!window.confirm("确定清空全部节点覆盖规则和禁用状态吗？")) return;
+  openDangerDialog({
+    action: "clear-overrides",
+    title: "清空覆盖规则",
+    subtitle: "确定清空全部节点覆盖规则和禁用状态吗？",
+    confirmText: "清空规则",
+    detailsHtml: `<div class="danger-dialog-note">清空后将恢复节点默认显示状态，已重命名和已禁用记录会一并移除。</div>`,
+  });
+}
+
+async function performClearNodeOverrides() {
   const response = await fetchJSON("/api/nodes/overrides/clear", {
     method: "POST",
   });
   if (!response?.ok) {
     showToast(readAPIError(response) || "清空覆盖规则失败。", true);
-    return;
+    return false;
   }
   state.selectedNodeIds.clear();
   await refreshNodesAfterGenerate();
   showToast("节点覆盖规则已清空。");
+  return true;
 }
 
 function openBulkRenameDialog(scope) {
@@ -2125,17 +2747,42 @@ function resetAddNodeForm() {
 
 async function loadYamlPreview() {
   try {
-    const response = await fetch(`${buildSubscriptionURL()}${buildSubscriptionURL().includes("?") ? "&" : "?"}_ts=${Date.now()}`);
+    const subscriptionUrl = buildSubscriptionURL();
+    const response = await fetch(`${subscriptionUrl}${subscriptionUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`);
     if (!response.ok) {
       state.yamlPreview = `加载失败：HTTP ${response.status}`;
+      state.generateStatus = state.generateStatus === "generating" ? "error" : state.generateStatus;
+      state.lastError = `YAML 预览加载失败：HTTP ${response.status}`;
       renderYamlViewer();
+      renderResult();
       return;
     }
     state.yamlPreview = await response.text();
+    const generatedAt = response.headers.get("X-SubConv-Generated-At");
+    const nodeCount = response.headers.get("X-SubConv-Node-Count");
+    const refreshStatus = response.headers.get("X-SubConv-Refresh-Status");
+    if (generatedAt) {
+      const date = new Date(generatedAt);
+      state.lastGeneratedAt = Number.isNaN(date.getTime()) ? generatedAt : date.toLocaleString();
+    }
+    if (nodeCount) {
+      state.resultNodeCount = Number.parseInt(nodeCount, 10) || 0;
+    }
+    if (refreshStatus) {
+      state.refreshStatus = refreshStatus;
+    }
+    state.resultRuleCount = countRulesInYAML(state.yamlPreview);
+    if (state.generatedUrl) {
+      state.generateStatus = "success";
+    }
     renderYamlViewer();
+    renderResult();
   } catch (error) {
     state.yamlPreview = `加载失败：${error.message}`;
+    state.generateStatus = state.generateStatus === "generating" ? "error" : state.generateStatus;
+    state.lastError = `YAML 预览加载失败：${error.message}`;
     renderYamlViewer();
+    renderResult();
   }
 }
 
@@ -2183,10 +2830,25 @@ async function loadStatus() {
   const response = await fetchJSON("/api/status");
   state.backendOnline = Boolean(response && !response.error);
   state.statusPayload = response || {};
+  if (state.statusPayload?.last_error && state.generateStatus !== "success") {
+    state.lastError = state.statusPayload.last_error;
+  }
+  if (state.statusPayload?.node_count && !state.resultNodeCount) {
+    state.resultNodeCount = state.statusPayload.node_count;
+  }
+  if (state.statusPayload?.yaml_exists && !state.generatedUrl) {
+    state.generatedUrl = buildSubscriptionURL();
+    state.generateStatus = "success";
+    if (state.statusPayload?.yaml_updated_at) {
+      const date = new Date(state.statusPayload.yaml_updated_at);
+      state.lastGeneratedAt = Number.isNaN(date.getTime()) ? state.statusPayload.yaml_updated_at : date.toLocaleString();
+    }
+  }
   const badge = document.getElementById("backend-badge");
   badge.className = `status-badge ${state.backendOnline ? "online" : "offline"}`;
   badge.innerHTML = `${icon("server", `status-icon ${state.backendOnline ? "success" : "danger"}`)}<span class="dot"></span><span>${state.backendOnline ? "Backend Online" : "Backend Offline"}</span>`;
   updateSummary();
+  renderResult();
   renderDiagnostics();
 }
 
@@ -2286,9 +2948,35 @@ async function refreshNodesAfterGenerate() {
 }
 
 function updateGeneratedUrlPlaceholder() {
-  if (!getValue("generated-url").trim() || !state.lastGeneratedAt) {
-    setValue("generated-url", buildSubscriptionURL());
+  if (state.generateStatus === "success" && state.generatedUrl) {
+    setValue("generated-url", state.generatedUrl);
+    return;
   }
+  setValue("generated-url", "");
+  const input = document.getElementById("generated-url");
+  if (input) {
+    input.placeholder = "点击右侧按钮生成订阅链接";
+  }
+}
+
+function countRulesInYAML(text) {
+  const lines = String(text || "").split("\n");
+  let inRules = false;
+  let count = 0;
+  for (const line of lines) {
+    if (/^rules:\s*$/.test(line.trim())) {
+      inRules = true;
+      continue;
+    }
+    if (!inRules) continue;
+    if (/^[^\s-]/.test(line)) break;
+    if (/^\s*-\s+/.test(line)) {
+      count += 1;
+    } else if (/^\S/.test(line.trim())) {
+      break;
+    }
+  }
+  return count;
 }
 
 function buildSubscriptionURL() {
@@ -2555,6 +3243,15 @@ async function copyText(value) {
   } finally {
     document.body.removeChild(textarea);
   }
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read file failed"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function escapeHtml(value) {

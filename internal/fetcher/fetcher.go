@@ -30,23 +30,25 @@ type Source struct {
 }
 
 type FetchedSubscription struct {
-	Name        string
-	URL         string
-	Content     []byte
-	ContentType string
-	FetchedAt   time.Time
-	FromCache   bool
+	Name                 string
+	URL                  string
+	Content              []byte
+	ContentType          string
+	SubscriptionUserinfo string
+	FetchedAt            time.Time
+	FromCache            bool
 }
 
 type CacheMeta struct {
-	URLHash       string    `json:"url_hash"`
-	FetchedAt     time.Time `json:"fetched_at"`
-	StatusCode    int       `json:"status_code"`
-	ETag          string    `json:"etag"`
-	LastModified  string    `json:"last_modified"`
-	Size          int       `json:"size"`
-	ContentType   string    `json:"content_type"`
-	OriginalURL   string    `json:"original_url"`
+	URLHash              string    `json:"url_hash"`
+	FetchedAt            time.Time `json:"fetched_at"`
+	StatusCode           int       `json:"status_code"`
+	ETag                 string    `json:"etag"`
+	LastModified         string    `json:"last_modified"`
+	Size                 int       `json:"size"`
+	ContentType          string    `json:"content_type"`
+	SubscriptionUserinfo string    `json:"subscription_userinfo,omitempty"`
+	OriginalURL          string    `json:"original_url"`
 }
 
 type Options struct {
@@ -169,11 +171,12 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 		_ = resp.Body.Close()
 
 		return FetchedSubscription{
-			Name:        source.Name,
-			URL:         source.URL,
-			Content:     body,
-			ContentType: resp.Header.Get("Content-Type"),
-			FetchedAt:   time.Now().UTC(),
+			Name:                 source.Name,
+			URL:                  source.URL,
+			Content:              body,
+			ContentType:          resp.Header.Get("Content-Type"),
+			SubscriptionUserinfo: resp.Header.Get("Subscription-Userinfo"),
+			FetchedAt:            time.Now().UTC(),
 		}, nil
 	}
 }
@@ -252,10 +255,11 @@ func (f *Fetcher) readCache(rawURL string) (FetchedSubscription, error) {
 	}
 
 	return FetchedSubscription{
-		URL:         rawURL,
-		Content:     body,
-		ContentType: meta.ContentType,
-		FetchedAt:   meta.FetchedAt,
+		URL:                  rawURL,
+		Content:              body,
+		ContentType:          meta.ContentType,
+		SubscriptionUserinfo: meta.SubscriptionUserinfo,
+		FetchedAt:            meta.FetchedAt,
 	}, nil
 }
 
@@ -270,12 +274,13 @@ func (f *Fetcher) writeCache(rawURL string, fetched FetchedSubscription) error {
 	}
 
 	meta := CacheMeta{
-		URLHash:      urlHash(rawURL),
-		FetchedAt:    fetched.FetchedAt,
-		StatusCode:   http.StatusOK,
-		Size:         len(fetched.Content),
-		ContentType:  fetched.ContentType,
-		OriginalURL:  rawURL,
+		URLHash:              urlHash(rawURL),
+		FetchedAt:            fetched.FetchedAt,
+		StatusCode:           http.StatusOK,
+		Size:                 len(fetched.Content),
+		ContentType:          fetched.ContentType,
+		SubscriptionUserinfo: fetched.SubscriptionUserinfo,
+		OriginalURL:          rawURL,
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

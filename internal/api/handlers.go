@@ -66,6 +66,27 @@ type configResponse struct {
 	Config model.Config `json:"config"`
 }
 
+type subscriptionMetaSourceResponse struct {
+	SourceID     string  `json:"source_id,omitempty"`
+	SourceName   string  `json:"source_name,omitempty"`
+	Upload       int64   `json:"upload,omitempty"`
+	Download     int64   `json:"download,omitempty"`
+	Total        int64   `json:"total,omitempty"`
+	Used         int64   `json:"used,omitempty"`
+	Remaining    int64   `json:"remaining,omitempty"`
+	UsedRatio    float64 `json:"used_ratio,omitempty"`
+	Expire       int64   `json:"expire,omitempty"`
+	FromHeader   bool    `json:"from_header,omitempty"`
+	FromInfoNode bool    `json:"from_info_node,omitempty"`
+	FetchedAt    string  `json:"fetched_at,omitempty"`
+}
+
+type subscriptionMetaResponse struct {
+	OK        bool                             `json:"ok"`
+	Aggregate model.AggregatedSubscriptionMeta `json:"aggregate"`
+	Sources   []subscriptionMetaSourceResponse `json:"sources"`
+}
+
 type refreshResponse struct {
 	OK         bool   `json:"ok"`
 	NodeCount  int    `json:"node_count"`
@@ -112,6 +133,48 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		EnabledSubscriptionCount: status.EnabledSubscriptionCount,
 		OutputPath:               status.OutputPath,
 		LastError:                maskSensitiveText(status.LastError),
+	})
+}
+
+func (s *Server) handleSubscriptionMeta(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	cfg := s.snapshotConfig()
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		return
+	}
+
+	sources := pipeline.BuildSubscriptionMetaSources(cfg, state.SubscriptionMeta)
+	responseSources := make([]subscriptionMetaSourceResponse, 0, len(sources))
+	sourceMap := make(map[string]model.SubscriptionMeta, len(sources))
+	for _, meta := range sources {
+		meta = model.NormalizeSubscriptionMeta(meta)
+		sourceMap[meta.SourceID] = meta
+		responseSources = append(responseSources, subscriptionMetaSourceResponse{
+			SourceID:     meta.SourceID,
+			SourceName:   meta.SourceName,
+			Upload:       meta.Upload,
+			Download:     meta.Download,
+			Total:        meta.Total,
+			Used:         meta.Used,
+			Remaining:    meta.Remaining,
+			UsedRatio:    meta.UsedRatio,
+			Expire:       meta.Expire,
+			FromHeader:   meta.FromHeader,
+			FromInfoNode: meta.FromInfoNode,
+			FetchedAt:    meta.FetchedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, subscriptionMetaResponse{
+		OK:        true,
+		Aggregate: pipeline.AggregateSubscriptionMetaForConfig(cfg, sourceMap),
+		Sources:   responseSources,
 	})
 }
 
@@ -267,7 +330,7 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		writeSubscriptionYAML(w, r, overrideCfg, result.YAML, "fresh", "", result.NodeCount, time.Now().UTC())
+		writeSubscriptionYAML(w, r, overrideCfg, result.YAML, result.AggregateMeta, "fresh", "", result.NodeCount, time.Now().UTC())
 		return
 	}
 
@@ -275,23 +338,24 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 	existing, readErr := os.ReadFile(cfg.Service.OutputPath)
 	hasExisting := readErr == nil && len(existing) > 0
 	expired := cacheExpired(cfg.Service.OutputPath, effectiveRefreshInterval(cfg))
+	cachedAggregate := loadSubscriptionAggregate(cfg)
 
 	if hasExisting && (!cfg.Service.RefreshOnRequest || !expired) {
-		writeSubscriptionYAML(w, r, cfg, existing, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
+		writeSubscriptionYAML(w, r, cfg, existing, cachedAggregate, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
 		return
 	}
 
 	outcome, err := s.startRefresh("subscription refresh")
 	if errors.Is(err, ErrRefreshInProgress) {
 		if hasExisting {
-			writeSubscriptionYAML(w, r, cfg, existing, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
+			writeSubscriptionYAML(w, r, cfg, existing, cachedAggregate, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
 			return
 		}
 		if s.waitForRefresh(time.Duration(cfg.Service.FetchTimeoutSeconds) * time.Second) {
 			latest, latestErr := os.ReadFile(cfg.Service.OutputPath)
 			if latestErr == nil && len(latest) > 0 {
 				latestStatus := s.snapshotStatus()
-				writeSubscriptionYAML(w, r, cfg, latest, "fresh", "", latestStatus.NodeCount, latestStatus.YAMLUpdatedAt)
+				writeSubscriptionYAML(w, r, cfg, latest, loadSubscriptionAggregate(cfg), "fresh", "", latestStatus.NodeCount, latestStatus.YAMLUpdatedAt)
 				return
 			}
 		}
@@ -304,14 +368,14 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 			message = "no nodes available for rendering"
 		}
 		if cfg.Service.StaleIfError && hasExisting {
-			writeSubscriptionYAML(w, r, cfg, existing, "stale", "upstream refresh failed, served stale config", status.NodeCount, status.YAMLUpdatedAt)
+			writeSubscriptionYAML(w, r, cfg, existing, cachedAggregate, "stale", "upstream refresh failed, served stale config", status.NodeCount, status.YAMLUpdatedAt)
 			return
 		}
 		writeAPIError(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", message)
 		return
 	}
 
-	writeSubscriptionYAML(w, r, cfg, outcome.Result.YAML, "fresh", "", outcome.Result.NodeCount, outcome.At)
+	writeSubscriptionYAML(w, r, cfg, outcome.Result.YAML, outcome.Result.AggregateMeta, "fresh", "", outcome.Result.NodeCount, outcome.At)
 }
 
 func subscriptionTokenAllowed(cfg model.Config, r *http.Request) bool {
@@ -322,13 +386,24 @@ func subscriptionTokenAllowed(cfg model.Config, r *http.Request) bool {
 	return r.URL.Query().Get("token") == token
 }
 
-func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Config, data []byte, refreshStatus, warning string, nodeCount int, generatedAt time.Time) {
+func loadSubscriptionAggregate(cfg model.Config) model.AggregatedSubscriptionMeta {
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		return model.AggregatedSubscriptionMeta{}
+	}
+	return pipeline.AggregateSubscriptionMetaForConfig(cfg, state.SubscriptionMeta)
+}
+
+func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Config, data []byte, aggregate model.AggregatedSubscriptionMeta, refreshStatus, warning string, nodeCount int, generatedAt time.Time) {
 	filename := sanitizeOutputFilename(cfg.Render.OutputFilename)
 	if filename == "" {
 		filename = "mihomo.yaml"
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if userinfo := pipeline.BuildSubscriptionMetaHeader(cfg, aggregate); userinfo != "" {
+		w.Header().Set("Subscription-Userinfo", userinfo)
+	}
 	if !generatedAt.IsZero() {
 		w.Header().Set("X-SubConv-Generated-At", generatedAt.UTC().Format(time.RFC3339))
 	}

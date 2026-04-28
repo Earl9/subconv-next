@@ -47,6 +47,7 @@ type RenderOptions struct {
 	AdditionalRules         []string                 `json:"additional_rules"`
 	RuleProviders           []RuleProviderConfig     `json:"rule_providers"`
 	CustomProxyGroups       []CustomProxyGroupConfig `json:"custom_proxy_groups"`
+	SubscriptionInfo        *SubscriptionInfoConfig  `json:"subscription_info,omitempty"`
 }
 
 func DefaultRenderOptions() RenderOptions {
@@ -87,8 +88,9 @@ func DefaultRenderOptions() RenderOptions {
 			TemplateKey:   "none",
 			TemplateLabel: "不选择，由接口提供方提供",
 		},
-		RuleMode:     "custom",
-		EnabledRules: []string{},
-		CustomRules:  []CustomRule{},
+		RuleMode:         "custom",
+		EnabledRules:     []string{},
+		CustomRules:      []CustomRule{},
+		SubscriptionInfo: DefaultSubscriptionInfoConfig(),
 	}
 }

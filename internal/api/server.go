@@ -28,6 +28,9 @@ type Server struct {
 	refreshRunning bool
 	refreshDone    chan struct{}
 
+	siteLogoMu    sync.RWMutex
+	siteLogoCache map[string]siteLogoCacheEntry
+
 	refreshBeforeRun func()
 	refreshAfterRun  func()
 }
@@ -49,6 +52,7 @@ func NewServer(version string, cfg model.Config) *Server {
 			YAMLExists:               yamlFileExists(cfg.Service.OutputPath),
 			YAMLUpdatedAt:            yamlFileUpdatedAt(cfg.Service.OutputPath),
 		},
+		siteLogoCache: map[string]siteLogoCacheEntry{},
 	}
 }
 
@@ -57,6 +61,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/site-logo", s.handleSiteLogo)
+	mux.HandleFunc("/api/subscription-meta", s.handleSubscriptionMeta)
 	mux.HandleFunc("/api/nodes", s.handleNodes)
 	mux.HandleFunc("/api/nodes/", s.handleNodeSubroutes)
 	mux.HandleFunc("/api/parse", s.handleParse)
@@ -64,6 +70,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/sub/mihomo.yaml", s.handleSubscriptionYAML)
+	mux.HandleFunc("/favicon.svg", serveEmbeddedAsset("favicon.svg", "image/svg+xml"))
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
+			return
+		}
+		http.Redirect(w, r, "/favicon.svg", http.StatusTemporaryRedirect)
+	})
 	mux.HandleFunc("/style.css", serveEmbeddedAsset("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("/app.js", serveEmbeddedAsset("app.js", "application/javascript; charset=utf-8"))
 	mux.HandleFunc("/", serveIndex)
@@ -242,8 +256,8 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
 		return
 	}
 	serveEmbeddedAsset("index.html", "text/html; charset=utf-8")(w, r)
@@ -251,8 +265,8 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 
 func serveEmbeddedAsset(name, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
 			return
 		}
 		data, err := staticui.Assets.ReadFile(name)
@@ -264,6 +278,9 @@ func serveEmbeddedAsset(name, contentType string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store, max-age=0")
 		w.Header().Set("Pragma", "no-cache")
 		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodHead {
+			return
+		}
 		_, _ = w.Write(data)
 	}
 }

@@ -20,18 +20,22 @@ import (
 var ErrNoNodes = errors.New("no nodes available for rendering")
 
 type CollectResult struct {
-	Nodes    []model.NodeIR
-	Warnings []string
-	Errors   []parser.ParseError
+	Nodes            []model.NodeIR
+	Warnings         []string
+	Errors           []parser.ParseError
+	SubscriptionMeta map[string]model.SubscriptionMeta
 }
 
 type RenderResult struct {
-	Nodes      []model.NodeIR
-	NodeCount  int
-	YAML       []byte
-	OutputPath string
-	Warnings   []string
-	Errors     []parser.ParseError
+	Nodes            []model.NodeIR
+	NodeCount        int
+	YAML             []byte
+	OutputPath       string
+	Warnings         []string
+	Errors           []parser.ParseError
+	State            model.NodeState
+	SubscriptionMeta map[string]model.SubscriptionMeta
+	AggregateMeta    model.AggregatedSubscriptionMeta
 }
 
 func CollectNodes(cfg model.Config) CollectResult {
@@ -43,7 +47,9 @@ func CollectPreviewNodes(cfg model.Config) CollectResult {
 }
 
 func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
-	var result CollectResult
+	result := CollectResult{
+		SubscriptionMeta: map[string]model.SubscriptionMeta{},
+	}
 
 	for _, inline := range cfg.Inline {
 		if !inline.Enabled || strings.TrimSpace(inline.Content) == "" {
@@ -90,12 +96,22 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 				continue
 			}
 
+			sourceID := firstNonEmptyString(sub.ID, sourceURLHash(sub.URL), sub.Name)
 			parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
-				ID:      sub.ID,
+				ID:      sourceID,
 				Name:    sub.Name,
 				Kind:    "subscription",
 				URLHash: sourceURLHash(sub.URL),
 			})
+			source := model.SourceInfo{
+				ID:      sourceID,
+				Name:    sub.Name,
+				Kind:    "subscription",
+				URLHash: sourceURLHash(sub.URL),
+			}
+			if meta, ok := buildSourceSubscriptionMeta(source, fetched, parsed.Nodes); ok {
+				result.SubscriptionMeta[source.ID] = meta
+			}
 			if applyFilters {
 				filteredNodes, filteredCount := filterSubscriptionNodes(parsed.Nodes, sub)
 				if filteredCount > 0 {
@@ -122,30 +138,40 @@ func RenderConfig(cfg model.Config) (RenderResult, error) {
 
 	collected := CollectNodesWithState(cfg, state, true, true)
 	collected.Nodes = applyRenderPreferences(collected.Nodes, cfg.Render)
+	state.SubscriptionMeta = cloneSubscriptionMetaMap(collected.SubscriptionMeta)
 	if len(collected.Nodes) == 0 {
 		return RenderResult{
-			Warnings: collected.Warnings,
-			Errors:   collected.Errors,
+			Warnings:         collected.Warnings,
+			Errors:           collected.Errors,
+			State:            state,
+			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
 		}, ErrNoNodes
 	}
 
 	rendered, err := renderer.RenderMihomo(collected.Nodes, renderer.OptionsFromConfig(cfg))
 	if err != nil {
 		return RenderResult{
-			Nodes:     collected.Nodes,
-			NodeCount: len(collected.Nodes),
-			Warnings:  collected.Warnings,
-			Errors:    collected.Errors,
+			Nodes:            collected.Nodes,
+			NodeCount:        len(collected.Nodes),
+			Warnings:         collected.Warnings,
+			Errors:           collected.Errors,
+			State:            state,
+			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
 		}, err
 	}
 
 	return RenderResult{
-		Nodes:      collected.Nodes,
-		NodeCount:  len(collected.Nodes),
-		YAML:       appendTrailingNewline(rendered),
-		OutputPath: cfg.Service.OutputPath,
-		Warnings:   collected.Warnings,
-		Errors:     collected.Errors,
+		Nodes:            collected.Nodes,
+		NodeCount:        len(collected.Nodes),
+		YAML:             appendTrailingNewline(rendered),
+		OutputPath:       cfg.Service.OutputPath,
+		Warnings:         collected.Warnings,
+		Errors:           collected.Errors,
+		State:            state,
+		SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+		AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
 	}, nil
 }
 

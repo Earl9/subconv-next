@@ -45,6 +45,7 @@ type ServiceConfig struct {
 type SubscriptionConfig struct {
 	ID                 string   `json:"id,omitempty"`
 	Name               string   `json:"name"`
+	SourceLogo         string   `json:"source_logo,omitempty"`
 	Enabled            bool     `json:"enabled"`
 	URL                string   `json:"url"`
 	UserAgent          string   `json:"user_agent"`
@@ -108,6 +109,7 @@ type RenderConfig struct {
 	AdditionalRules         []string                 `json:"additional_rules"`
 	RuleProviders           []RuleProviderConfig     `json:"rule_providers"`
 	CustomProxyGroups       []CustomProxyGroupConfig `json:"custom_proxy_groups"`
+	SubscriptionInfo        *SubscriptionInfoConfig  `json:"subscription_info,omitempty"`
 }
 
 type DNSConfig struct {
@@ -440,6 +442,7 @@ func DefaultRenderConfig() RenderConfig {
 		AdditionalRules:         []string{},
 		RuleProviders:           []RuleProviderConfig{},
 		CustomProxyGroups:       []CustomProxyGroupConfig{},
+		SubscriptionInfo:        DefaultSubscriptionInfoConfig(),
 	}
 }
 

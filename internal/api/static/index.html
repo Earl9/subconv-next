@@ -4,13 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SubConv Next 订阅转换</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/favicon.ico" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="app-header">
         <div class="brand">
-          <div class="brand-mark">S</div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="4" width="7" height="7" rx="2.5" fill="rgba(255,255,255,0.96)"></rect>
+              <rect x="14" y="13" width="7" height="7" rx="2.5" fill="rgba(255,255,255,0.96)"></rect>
+              <path d="M9.5 7.5h2.8a3.2 3.2 0 0 1 3.2 3.2v2.8" stroke="rgba(255,255,255,0.96)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="m11.8 15.2 3.7-3.7" stroke="rgba(255,255,255,0.96)" stroke-width="2.2" stroke-linecap="round"></path>
+            </svg>
+          </div>
           <div>
             <h1>SubConv Next 订阅转换</h1>
             <p>将原始订阅快速转换为 Clash / Mihomo 可用的订阅配置</p>
@@ -35,7 +44,7 @@
       </nav>
 
       <section id="workspace-config" class="workspace-panel active">
-        <div class="config-grid">
+        <div class="config-grid content-grid">
           <div class="config-main">
             <section class="panel">
               <div class="panel-head">
@@ -70,8 +79,9 @@
                 <div class="target-panel">
                   <div class="sub-section-title">
                     <span class="section-badge" data-icon-name="target"></span>
-                    <span>转换目标</span>
+                    <span>转换参数</span>
                   </div>
+                  <p class="field-help">客户端目标、订阅地址输出和访问保护配置。</p>
 
                   <div class="field">
                     <label class="required" for="client-type">客户端类型</label>
@@ -104,6 +114,7 @@
                     <span class="section-badge" data-icon-name="filter"></span>
                     <span>筛选条件</span>
                   </div>
+                  <p class="field-help">按节点名称匹配，适合做首轮包含或排除过滤。</p>
                   <div class="filter-grid">
                     <div class="field">
                       <label for="include-keywords">包含关键词</label>
@@ -328,31 +339,24 @@
               <div class="panel-head simple-head">
                 <div class="card-title">
                   <span class="section-badge" data-icon-name="check"></span>
-                  <h2>生成结果</h2>
+                  <h2>生成状态</h2>
                 </div>
               </div>
+              <div id="result-summary-list" class="summary-list"></div>
+              <div class="panel-actions">
+                <button id="view-generated-link-btn" class="secondary-button small-button" type="button">查看链接</button>
+              </div>
+            </section>
 
-              <div id="result-empty" class="empty-state">等待生成订阅链接</div>
-
-              <div id="result-content">
-                <div id="result-status" class="result-status hidden">
-                  <span class="success-dot"></span>
-                  <span>订阅链接已生成</span>
-                </div>
-                <div id="generated-time" class="meta-text"></div>
-                <p id="generated-note" class="meta-text">将此地址导入 Clash / Mihomo。客户端更新订阅时，会自动通过 SubConv Next 拉取上游并生成最新配置。</p>
-
-                <div class="field compact-field">
-                  <label for="generated-url">新订阅链接</label>
-                  <input id="generated-url" type="text" readonly />
-                </div>
-
-                <div class="result-actions">
-                  <button id="copy-generated-url-btn" class="secondary-button small-button" type="button">复制</button>
-                  <button id="open-generated-url-btn" class="ghost-button small-button" type="button">打开</button>
-                  <button id="import-generated-btn" class="ghost-button small-button" type="button">一键导入</button>
+            <section class="panel subscription-meta-panel">
+              <div class="panel-head simple-head">
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="server"></span>
+                  <h2>订阅信息</h2>
                 </div>
               </div>
+              <div id="subscription-meta-overview" class="subscription-meta-overview"></div>
+              <div id="subscription-meta-list" class="subscription-meta-list"></div>
             </section>
 
             <section class="panel node-summary-panel">
@@ -371,12 +375,30 @@
           </aside>
         </div>
 
-        <div class="sticky-action-bar">
+        <div class="sticky-action-wrap">
           <div class="sticky-action-inner">
-            <button id="generate-btn" class="primary-button" type="button">生成订阅链接</button>
-            <button id="import-btn" class="secondary-button" type="button">一键导入 Clash</button>
-            <button id="save-config-btn" class="ghost-button" type="button">保存配置</button>
-            <button id="preview-btn" class="ghost-button" type="button">预览 YAML</button>
+            <div id="sticky-action-bar" class="sticky-action-bar">
+              <div class="action-result-row">
+                <div id="action-result-status" class="result-status result-empty">
+                  <span class="status-dot"></span>
+                  <span>尚未生成订阅链接</span>
+                  <span id="action-result-time" class="result-time"></span>
+                </div>
+
+                <div id="result-link-row" class="result-link-row">
+                  <input id="generated-url" type="text" readonly disabled placeholder="点击右侧按钮生成订阅链接" />
+                  <button id="copy-generated-url-btn" class="secondary-button small-button" type="button">复制</button>
+                  <button id="open-generated-url-btn" class="ghost-button small-button" type="button">打开</button>
+                </div>
+              </div>
+
+              <div class="action-buttons-row">
+                <button id="generate-btn" class="primary-button" type="button">生成订阅链接</button>
+                <button id="import-btn" class="secondary-button" type="button">一键导入 Clash</button>
+                <button id="save-config-btn" class="ghost-button" type="button">保存配置</button>
+                <button id="preview-btn" class="ghost-button" type="button">预览 YAML</button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -586,14 +608,46 @@
                   <input id="edit-node-stable-short" type="text" readonly />
                 </div>
               </div>
-              <p class="field-help">删除节点会将远程节点标记为本地删除，手动节点则直接移除。</p>
+              <p id="node-dialog-help" class="field-help">删除操作会进入应用内确认流程，不会直接执行。</p>
             </section>
           </div>
 
-          <div class="modal-actions">
-            <button id="save-node-btn" class="primary-button" type="button">保存名称</button>
-            <button id="delete-node-btn" class="secondary-button" type="button">删除节点</button>
-            <button class="ghost-button" type="button" data-close-dialog="node-dialog">取消</button>
+          <div class="modal-actions split-actions">
+            <div class="modal-actions-danger">
+              <button id="delete-node-btn" class="danger-ghost-button" type="button">删除节点</button>
+            </div>
+            <div class="modal-actions-primary">
+              <button class="ghost-button" type="button" data-close-dialog="node-dialog">取消</button>
+              <button id="save-node-btn" class="primary-button" type="button">保存名称</button>
+            </div>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="danger-dialog" class="modal-dialog narrow-dialog danger-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head danger-dialog-head">
+            <div class="danger-dialog-copy">
+              <div class="danger-icon-wrap">
+                <span class="danger-icon" data-icon-name="trash"></span>
+              </div>
+              <div>
+                <h3 id="danger-dialog-title">删除节点</h3>
+                <p id="danger-dialog-subtitle" class="meta-text"></p>
+              </div>
+            </div>
+            <button id="close-danger-dialog-btn" class="icon-button" type="button">×</button>
+          </div>
+
+          <div id="danger-dialog-details" class="danger-dialog-details"></div>
+
+          <div class="modal-actions split-actions">
+            <div class="modal-actions-danger">
+              <button id="danger-dialog-confirm-btn" class="danger-solid-button" type="button">删除节点</button>
+            </div>
+            <div class="modal-actions-primary">
+              <button id="danger-dialog-cancel-btn" class="ghost-button" type="button">取消</button>
+            </div>
           </div>
         </form>
       </dialog>

@@ -75,6 +75,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 	if cfg.Render.CustomProxyGroups == nil {
 		cfg.Render.CustomProxyGroups = []model.CustomProxyGroupConfig{}
 	}
+	cfg.Render.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(cfg.Render.SubscriptionInfo)
 	if !cfg.Render.SourcePrefix {
 		// keep explicit false as-is
 	} else {
@@ -141,6 +142,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 			sub.Name = fmt.Sprintf("source-%d", i+1)
 		}
 		sub.Name = uniqueDisplayName(sub.Name, seenSubNames)
+		sub.SourceLogo = strings.TrimSpace(sub.SourceLogo)
 		if strings.TrimSpace(sub.ID) == "" {
 			sub.ID = stableConfigID("sub", sub.Name, sub.URL, i)
 		}
@@ -222,6 +224,9 @@ func Validate(cfg model.Config) error {
 
 	if !isAllowedDedupeScope(cfg.Render.DedupeScope) {
 		return fmt.Errorf("render.dedupe_scope must be one of global, per_source, none")
+	}
+	if err := validateSubscriptionInfoConfig(cfg.Render.SubscriptionInfo); err != nil {
+		return err
 	}
 	if err := validateCustomRules(cfg.Render.CustomRules); err != nil {
 		return err
@@ -362,6 +367,24 @@ func isAllowedDedupeScope(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validateSubscriptionInfoConfig(cfg *model.SubscriptionInfoConfig) error {
+	cfg = model.NormalizeSubscriptionInfoConfig(cfg)
+	if cfg == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.MergeStrategy)) {
+	case "sum", "first", "none":
+	default:
+		return fmt.Errorf("render.subscription_info.merge_strategy must be one of sum, first, none")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.ExpireStrategy)) {
+	case "earliest", "latest", "first":
+	default:
+		return fmt.Errorf("render.subscription_info.expire_strategy must be one of earliest, latest, first")
+	}
+	return nil
 }
 
 func validateCustomRules(rules []model.CustomRule) error {

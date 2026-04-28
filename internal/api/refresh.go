@@ -88,6 +88,14 @@ func (s *Server) executeRefresh(cfg model.Config, reason string) (*refreshOutcom
 		}
 		return nil, err
 	}
+	if err := pipeline.SaveNodeState(cfg, result.State); err != nil {
+		s.setRefreshFailure(err.Error(), now)
+		s.appendLog(reason + " state save failed: " + err.Error())
+		if s.refreshAfterRun != nil {
+			s.refreshAfterRun()
+		}
+		return nil, err
+	}
 	if err := pipeline.WriteRendered(result.OutputPath, result.YAML); err != nil {
 		s.setRefreshFailure(err.Error(), now)
 		s.appendLog(reason + " write failed: " + err.Error())

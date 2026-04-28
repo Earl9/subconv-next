@@ -32,22 +32,59 @@
     "mode": "rule",
     "log_level": "info",
     "ipv6": false,
+    "dns_enabled": true,
+    "enhanced_mode": "fake-ip",
     "emoji": true,
     "show_node_type": true,
     "include_info_node": true,
+    "skip_tls_verify": false,
     "udp": true,
+    "node_list": false,
+    "sort_nodes": false,
     "filter_illegal": true,
+    "insert_url": false,
     "group_proxy_mode": "compact",
     "source_prefix": true,
     "source_prefix_format": "[{source}] {name}",
     "source_prefix_separator": " ",
     "dedupe_scope": "global",
+    "geodata_mode": true,
+    "geo_auto_update": true,
+    "geodata_loader": "standard",
+    "geo_update_interval": 24,
+    "geox_url": {
+      "geoip": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+      "geosite": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+      "mmdb": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+      "asn": "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb"
+    },
+    "output_filename": "mihomo.yaml",
     "source_mode": "rules",
     "template_rule_mode": "rules",
     "external_config": {
       "template_key": "none",
       "template_label": "跟随当前服务模板"
     },
-    "rule_mode": "balanced"
+    "rule_mode": "balanced",
+    "enabled_rules": [
+      "private",
+      "domestic",
+      "microsoft",
+      "apple",
+      "google",
+      "github",
+      "ai",
+      "telegram",
+      "streaming",
+      "non_cn"
+    ],
+    "custom_rules": [],
+    "subscription_info": {
+      "enabled": true,
+      "expose_header": true,
+      "show_per_source": true,
+      "merge_strategy": "sum",
+      "expire_strategy": "earliest"
+    }
   }
 }

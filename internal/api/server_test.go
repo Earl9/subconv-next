@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"subconv-next/internal/model"
+	"subconv-next/internal/pipeline"
 )
 
 func TestHandleHealthz(t *testing.T) {
@@ -76,6 +77,64 @@ func TestHandleStatus(t *testing.T) {
 	}
 	if body.RefreshInterval != cfg.Service.RefreshInterval {
 		t.Fatalf("body.RefreshInterval = %d, want %d", body.RefreshInterval, cfg.Service.RefreshInterval)
+	}
+}
+
+func TestHandleSubscriptionMeta(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-1", Name: "主力机场", Enabled: true, URL: "https://example.com/a", UserAgent: model.DefaultUserAgent},
+		{ID: "source-2", Name: "备用机场", Enabled: true, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
+	}
+
+	if err := pipeline.SaveNodeState(cfg, model.NodeState{
+		SubscriptionMeta: map[string]model.SubscriptionMeta{
+			"source-1": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-1",
+				SourceName: "主力机场",
+				Download:   30 * 1024 * 1024 * 1024,
+				Total:      200 * 1024 * 1024 * 1024,
+				Expire:     1779235200,
+				FromHeader: true,
+			}),
+			"source-2": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-2",
+				SourceName: "备用机场",
+				Download:   10 * 1024 * 1024 * 1024,
+				Total:      100 * 1024 * 1024 * 1024,
+				Expire:     1780185600,
+				FromHeader: true,
+			}),
+		},
+	}); err != nil {
+		t.Fatalf("SaveNodeState() error = %v", err)
+	}
+
+	server := NewServer("0.1.0-test", cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription-meta", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body subscriptionMetaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.OK {
+		t.Fatalf("body.OK = false, want true")
+	}
+	if body.Aggregate.Total != 300*1024*1024*1024 || body.Aggregate.Used != 40*1024*1024*1024 {
+		t.Fatalf("body.Aggregate = %#v, want aggregated total/used", body.Aggregate)
+	}
+	if body.Aggregate.Expire != 1779235200 || body.Aggregate.ExpireSourceName != "主力机场" {
+		t.Fatalf("body.Aggregate = %#v, want earliest expire from source-1", body.Aggregate)
+	}
+	if len(body.Sources) != 2 {
+		t.Fatalf("len(body.Sources) = %d, want 2", len(body.Sources))
 	}
 }
 
@@ -445,6 +504,104 @@ func TestHandleSubscriptionYAMLRequiresTokenWhenConfigured(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestHandleSubscriptionYAMLUserinfoAggregateHeader(t *testing.T) {
+	dir := t.TempDir()
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(dir, "state.json")
+	cfg.Service.OutputPath = filepath.Join(dir, "mihomo.yaml")
+	cfg.Service.RefreshOnRequest = false
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-1", Name: "主力机场", Enabled: true, URL: "https://example.com/a", UserAgent: model.DefaultUserAgent},
+		{ID: "source-2", Name: "备用机场", Enabled: true, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
+	}
+	if err := os.WriteFile(cfg.Service.OutputPath, []byte("mixed-port: 7897\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := pipeline.SaveNodeState(cfg, model.NodeState{
+		SubscriptionMeta: map[string]model.SubscriptionMeta{
+			"source-1": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-1",
+				SourceName: "主力机场",
+				Upload:     0,
+				Download:   30 * 1024 * 1024 * 1024,
+				Total:      200 * 1024 * 1024 * 1024,
+				Expire:     1779235200,
+				FromHeader: true,
+			}),
+			"source-2": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-2",
+				SourceName: "备用机场",
+				Upload:     0,
+				Download:   10 * 1024 * 1024 * 1024,
+				Total:      100 * 1024 * 1024 * 1024,
+				Expire:     1780185600,
+				FromHeader: true,
+			}),
+		},
+	}); err != nil {
+		t.Fatalf("SaveNodeState() error = %v", err)
+	}
+
+	server := NewServer("0.1.0-test", cfg)
+	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Subscription-Userinfo"); got != "upload=0; download=42949672960; total=322122547200; expire=1779235200" {
+		t.Fatalf("Subscription-Userinfo = %q, want aggregated header", got)
+	}
+}
+
+func TestHandleSubscriptionYAMLOmitsUserinfoWhenMergeStrategyNone(t *testing.T) {
+	dir := t.TempDir()
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(dir, "state.json")
+	cfg.Service.OutputPath = filepath.Join(dir, "mihomo.yaml")
+	cfg.Service.RefreshOnRequest = false
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-1", Name: "主力机场", Enabled: true, URL: "https://example.com/a", UserAgent: model.DefaultUserAgent},
+	}
+	cfg.Render.SubscriptionInfo = &model.SubscriptionInfoConfig{
+		Enabled:        true,
+		ExposeHeader:   true,
+		ShowPerSource:  true,
+		MergeStrategy:  "none",
+		ExpireStrategy: "earliest",
+	}
+	if err := os.WriteFile(cfg.Service.OutputPath, []byte("mixed-port: 7897\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := pipeline.SaveNodeState(cfg, model.NodeState{
+		SubscriptionMeta: map[string]model.SubscriptionMeta{
+			"source-1": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-1",
+				SourceName: "主力机场",
+				Download:   30 * 1024 * 1024 * 1024,
+				Total:      200 * 1024 * 1024 * 1024,
+				Expire:     1779235200,
+				FromHeader: true,
+			}),
+		},
+	}); err != nil {
+		t.Fatalf("SaveNodeState() error = %v", err)
+	}
+
+	server := NewServer("0.1.0-test", cfg)
+	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Subscription-Userinfo"); got != "" {
+		t.Fatalf("Subscription-Userinfo = %q, want empty when merge_strategy=none", got)
 	}
 }
 

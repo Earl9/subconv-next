@@ -20,6 +20,7 @@ type StatefulCollectResult struct {
 	Warnings           []string
 	Errors             []parser.ParseError
 	ValidationWarnings []NodeValidationWarning
+	SubscriptionMeta   map[string]model.SubscriptionMeta
 }
 
 func LoadNodeState(cfg model.Config) (model.NodeState, error) {
@@ -51,6 +52,7 @@ func CollectNodesWithState(cfg model.Config, state model.NodeState, applyFilters
 		Warnings:           collected.Warnings,
 		Errors:             collected.Errors,
 		ValidationWarnings: validationWarnings,
+		SubscriptionMeta:   cloneSubscriptionMetaMap(collected.SubscriptionMeta),
 	}
 }
 

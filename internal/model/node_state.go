@@ -7,9 +7,10 @@ import (
 )
 
 type NodeState struct {
-	NodeOverrides map[string]NodeOverride `json:"node_overrides,omitempty"`
-	DisabledNodes []string                `json:"disabled_nodes,omitempty"`
-	CustomNodes   []NodeIR                `json:"custom_nodes,omitempty"`
+	NodeOverrides    map[string]NodeOverride     `json:"node_overrides,omitempty"`
+	DisabledNodes    []string                    `json:"disabled_nodes,omitempty"`
+	CustomNodes      []NodeIR                    `json:"custom_nodes,omitempty"`
+	SubscriptionMeta map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
 }
 
 type NodeOverride struct {
@@ -34,9 +35,10 @@ type NodeOverrideFields struct {
 
 func DefaultNodeState() NodeState {
 	return NodeState{
-		NodeOverrides: map[string]NodeOverride{},
-		DisabledNodes: []string{},
-		CustomNodes:   []NodeIR{},
+		NodeOverrides:    map[string]NodeOverride{},
+		DisabledNodes:    []string{},
+		CustomNodes:      []NodeIR{},
+		SubscriptionMeta: map[string]SubscriptionMeta{},
 	}
 }
 
@@ -49,6 +51,9 @@ func NormalizeNodeState(state NodeState) NodeState {
 	}
 	if state.CustomNodes == nil {
 		state.CustomNodes = []NodeIR{}
+	}
+	if state.SubscriptionMeta == nil {
+		state.SubscriptionMeta = map[string]SubscriptionMeta{}
 	}
 
 	state.DisabledNodes = cleanStringSlice(state.DisabledNodes)
@@ -108,6 +113,20 @@ func NormalizeNodeState(state NodeState) NodeState {
 		normalizedCustom = append(normalizedCustom, node)
 	}
 	state.CustomNodes = normalizedCustom
+
+	for sourceID, meta := range state.SubscriptionMeta {
+		cleanID := sanitizeText(sourceID)
+		if cleanID == "" {
+			delete(state.SubscriptionMeta, sourceID)
+			continue
+		}
+		meta.SourceID = firstNonEmpty(meta.SourceID, cleanID)
+		meta = NormalizeSubscriptionMeta(meta)
+		if cleanID != sourceID {
+			delete(state.SubscriptionMeta, sourceID)
+		}
+		state.SubscriptionMeta[cleanID] = meta
+	}
 
 	return state
 }
