@@ -203,8 +203,15 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 	setString(section, "output_path", &dst.OutputPath)
 	setString(section, "cache_dir", &dst.CacheDir)
 	setString(section, "state_path", &dst.StatePath)
+	setString(section, "subscription_token", &dst.SubscriptionToken)
 	if err := setInt(section, "refresh_interval", &dst.RefreshInterval); err != nil {
 		return fmt.Errorf("service.refresh_interval: %w", err)
+	}
+	if err := setBool(section, "refresh_on_request", &dst.RefreshOnRequest); err != nil {
+		return fmt.Errorf("service.refresh_on_request: %w", err)
+	}
+	if err := setBool(section, "stale_if_error", &dst.StaleIfError); err != nil {
+		return fmt.Errorf("service.stale_if_error: %w", err)
 	}
 	if err := setInt(section, "max_subscription_bytes", &dst.MaxSubscriptionBytes); err != nil {
 		return fmt.Errorf("service.max_subscription_bytes: %w", err)

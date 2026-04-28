@@ -23,11 +23,11 @@
         <div class="topbar-actions">
           <button id="refresh-btn" class="button primary">刷新</button>
           <button id="save-btn" class="button ghost">保存</button>
-          <a class="button ghost" href="/sub/mihomo.yaml?download=1" target="_blank" rel="noreferrer">下载 YAML</a>
+          <a id="download-yaml-btn" class="button ghost" href="/sub/mihomo.yaml?download=1" target="_blank" rel="noreferrer">下载 YAML</a>
         </div>
       </header>
 
-      <section class="compact-summary">
+      <section id="compact-summary" class="compact-summary">
         <div class="summary-chip">
           <span class="metric-label">节点</span>
           <strong id="metric-nodes">0</strong>
@@ -45,8 +45,8 @@
       <section class="panel subscription-panel">
         <div class="section-head compact-head">
           <div>
-            <p class="eyebrow">订阅链接</p>
-            <h2>当前订阅地址</h2>
+            <p id="subscription-panel-eyebrow" class="eyebrow">订阅链接</p>
+            <h2 id="subscription-panel-title">当前订阅地址</h2>
           </div>
           <div class="toolbar">
             <button id="copy-sub-url-btn" class="button primary">复制订阅链接</button>
@@ -54,7 +54,7 @@
           </div>
         </div>
         <div class="field full-span">
-          <label for="sub-link-output">Mihomo 订阅 URL</label>
+          <label id="sub-link-label" for="sub-link-output">Mihomo 订阅 URL</label>
           <input id="sub-link-output" type="text" readonly value="正在生成订阅链接..." />
           <p class="field-hint">订阅链接会根据你当前访问页面使用的主机名和端口自动生成。</p>
         </div>
@@ -66,66 +66,88 @@
             <div class="section-head compact-head">
               <div>
                 <p class="eyebrow">配置</p>
-                <h2>导入与规则</h2>
+                <h2 id="builder-title">快速转换</h2>
               </div>
-              <button id="config-save-btn" class="button subtle">保存配置</button>
+              <div class="toolbar">
+                <div class="mode-switch" role="tablist" aria-label="模式切换">
+                  <button id="mode-basic-btn" type="button" class="mode-pill active">默认模式</button>
+                  <button id="mode-advanced-btn" type="button" class="mode-pill">高级模式</button>
+                </div>
+                <button id="config-save-btn" class="button subtle">保存配置</button>
+              </div>
             </div>
 
-            <section class="config-block">
-              <div class="block-head">
-                <h3>远程订阅</h3>
-                <button id="add-subscription-btn" class="button subtle">新增</button>
+            <section id="basic-mode-panel" class="config-block">
+              <h3>默认模式</h3>
+              <div class="field full-span">
+                <label for="basic-subscription-input">订阅链接</label>
+                <textarea id="basic-subscription-input" rows="4" placeholder="直接粘贴远程订阅链接，例如：https://example.com/sub?token=xxx"></textarea>
               </div>
-              <div id="subscriptions-list" class="stack"></div>
+              <div class="toolbar">
+                <button id="basic-generate-btn" class="button primary">生成转换订阅链接</button>
+                <button id="basic-clear-btn" class="button subtle" type="button">清空</button>
+                <button id="basic-open-btn" class="button ghost" type="button">打开结果</button>
+              </div>
+              <p class="field-hint">默认模式仅使用当前输入的远程订阅链接，规则与输出格式沿用你已经配置好的转换参数。</p>
             </section>
 
-            <section class="config-block">
-              <div class="block-head">
-                <h3>手动导入</h3>
-                <button id="add-inline-btn" class="button subtle">新增</button>
-              </div>
-              <div class="field full-span">
-                <label>支持格式</label>
-                <div class="format-hints">
-                  <span class="hint-chip">YAML 配置</span>
-                  <span class="hint-chip">ss://</span>
-                  <span class="hint-chip">vmess://</span>
-                  <span class="hint-chip">vless://</span>
-                  <span class="hint-chip">trojan://</span>
-                  <span class="hint-chip">anytls://</span>
-                  <span class="hint-chip">hysteria2:// / hy2://</span>
-                  <span class="hint-chip">tuic://</span>
-                  <span class="hint-chip">WireGuard 配置片段</span>
+            <div id="advanced-mode-panel">
+              <section class="config-block">
+                <div class="block-head">
+                  <h3>远程订阅</h3>
+                  <button id="add-subscription-btn" class="button subtle">新增</button>
                 </div>
-              </div>
-              <div id="inline-list" class="stack"></div>
-            </section>
+                <div id="subscriptions-list" class="stack"></div>
+              </section>
 
-            <section class="config-block">
-              <h3>规则集选择</h3>
-              <div id="ruleset-catalog" class="stack"></div>
-            </section>
+              <section class="config-block">
+                <div class="block-head">
+                  <h3>手动导入</h3>
+                  <button id="add-inline-btn" class="button subtle">新增</button>
+                </div>
+                <div class="field full-span">
+                  <label>支持格式</label>
+                  <div class="format-hints">
+                    <span class="hint-chip">YAML 配置</span>
+                    <span class="hint-chip">ss://</span>
+                    <span class="hint-chip">vmess://</span>
+                    <span class="hint-chip">vless://</span>
+                    <span class="hint-chip">trojan://</span>
+                    <span class="hint-chip">anytls://</span>
+                    <span class="hint-chip">hysteria2:// / hy2://</span>
+                    <span class="hint-chip">tuic://</span>
+                    <span class="hint-chip">WireGuard 配置片段</span>
+                  </div>
+                </div>
+                <div id="inline-list" class="stack"></div>
+              </section>
 
-            <section class="config-block">
-              <h3>附加规则</h3>
-              <div class="field full-span">
-                <label for="additional-rules-input">规则列表</label>
-                <textarea id="additional-rules-input" rows="8" placeholder="每行一条 Mihomo 规则，例如：&#10;DOMAIN-SUFFIX,openai.com,AI&#10;PROCESS-NAME,Telegram,Telegram"></textarea>
-              </div>
-            </section>
+              <section class="config-block">
+                <h3>规则集选择</h3>
+                <div id="ruleset-catalog" class="stack"></div>
+              </section>
 
-            <section class="config-block">
-              <div class="block-head">
-                <h3>自定义规则提供器</h3>
-                <button id="add-provider-btn" class="button subtle">新增提供器</button>
-              </div>
-              <div id="providers-list" class="stack"></div>
-            </section>
+              <section class="config-block">
+                <h3>附加规则</h3>
+                <div class="field full-span">
+                  <label for="additional-rules-input">规则列表</label>
+                  <textarea id="additional-rules-input" rows="8" placeholder="每行一条 Mihomo 规则，例如：&#10;DOMAIN-SUFFIX,openai.com,AI&#10;PROCESS-NAME,Telegram,Telegram"></textarea>
+                </div>
+              </section>
 
-            <section class="config-block">
-              <h3>DNS 配置</h3>
-              <div id="dns-fields" class="stack"></div>
-            </section>
+              <section class="config-block">
+                <div class="block-head">
+                  <h3>自定义规则提供器</h3>
+                  <button id="add-provider-btn" class="button subtle">新增提供器</button>
+                </div>
+                <div id="providers-list" class="stack"></div>
+              </section>
+
+              <section class="config-block">
+                <h3>DNS 配置</h3>
+                <div id="dns-fields" class="stack"></div>
+              </section>
+            </div>
           </section>
         </article>
 

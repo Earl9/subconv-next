@@ -92,6 +92,31 @@ func TestParseContentWireGuardURI(t *testing.T) {
 	}
 }
 
+func TestParseContentVLESSXHTTP(t *testing.T) {
+	content := []byte("vless://uuid-1@example.com:443?type=xhttp&security=reality&sni=example.com&fp=chrome&pbk=pub&sid=abcd&path=%2Fdemo&mode=auto&no-grpc-header=false#xhttp")
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+
+	node := result.Nodes[0]
+	if node.Transport.Network != "xhttp" {
+		t.Fatalf("Transport.Network = %q, want xhttp", node.Transport.Network)
+	}
+	if node.Transport.Path != "/demo" {
+		t.Fatalf("Transport.Path = %q, want /demo", node.Transport.Path)
+	}
+	if node.Transport.Mode != "auto" {
+		t.Fatalf("Transport.Mode = %q, want auto", node.Transport.Mode)
+	}
+	if node.Transport.NoGRPCHeader == nil || *node.Transport.NoGRPCHeader != false {
+		t.Fatalf("Transport.NoGRPCHeader = %#v, want false pointer", node.Transport.NoGRPCHeader)
+	}
+	if got, _ := node.Raw["encryption"].(string); got != "none" {
+		t.Fatalf("raw encryption = %#v, want none", node.Raw["encryption"])
+	}
+}
+
 func TestParseWireGuardConfig(t *testing.T) {
 	content := []byte(`
 [Interface]

@@ -1,37 +1,44 @@
 package renderer
 
 import (
+	"bytes"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	"subconv-next/internal/model"
+	"subconv-next/internal/templatecatalog"
 )
 
 const probeURL = "https://www.gstatic.com/generate_204"
-
-var defaultDNSServers = []string{
-	"https://1.1.1.1/dns-query",
-	"https://8.8.8.8/dns-query",
-}
 
 var regionGroups = []struct {
 	Tag  string
 	Name string
 }{
-	{Tag: "HK", Name: "香港"},
-	{Tag: "JP", Name: "日本"},
-	{Tag: "US", Name: "美国"},
-	{Tag: "SG", Name: "新加坡"},
-	{Tag: "TW", Name: "台湾"},
-	{Tag: "KR", Name: "韩国"},
-	{Tag: "DE", Name: "德国"},
-	{Tag: "GB", Name: "英国"},
-	{Tag: "FR", Name: "法国"},
-	{Tag: "CA", Name: "加拿大"},
-	{Tag: "AU", Name: "澳大利亚"},
+	{Tag: "HK", Name: "🇭🇰 香港"},
+	{Tag: "JP", Name: "🇯🇵 日本"},
+	{Tag: "US", Name: "🇺🇸 美国"},
+	{Tag: "SG", Name: "🇸🇬 新加坡"},
+	{Tag: "TW", Name: "🇹🇼 台湾"},
+	{Tag: "GB", Name: "🇬🇧 英国"},
+	{Tag: "DE", Name: "🇩🇪 德国"},
+	{Tag: "NL", Name: "🇳🇱 荷兰"},
+	{Tag: "RU", Name: "🇷🇺 俄罗斯"},
+	{Tag: "KR", Name: "🇰🇷 韩国"},
+	{Tag: "FR", Name: "🇫🇷 法国"},
+	{Tag: "CA", Name: "🇨🇦 加拿大"},
+	{Tag: "AU", Name: "🇦🇺 澳大利亚"},
 }
+
+const (
+	groupNodeSelect = "🚀 节点选择"
+	groupAutoSelect = "⚡ 自动选择"
+	groupFinal      = "🐟 漏网之鱼"
+)
 
 type mihomoConfig struct {
 	MixedPort               int                           `yaml:"mixed-port"`
@@ -43,12 +50,18 @@ type mihomoConfig struct {
 	TCPConcurrent           bool                          `yaml:"tcp-concurrent,omitempty"`
 	FindProcessMode         string                        `yaml:"find-process-mode,omitempty"`
 	GlobalClientFingerprint string                        `yaml:"global-client-fingerprint,omitempty"`
+	GeodataMode             bool                          `yaml:"geodata-mode,omitempty"`
+	GeoAutoUpdate           bool                          `yaml:"geo-auto-update,omitempty"`
+	GeodataLoader           string                        `yaml:"geodata-loader,omitempty"`
+	GeoUpdateInterval       int                           `yaml:"geo-update-interval,omitempty"`
+	GeoxURL                 *mihomoGeoxURL                `yaml:"geox-url,omitempty"`
 	DNS                     *mihomoDNS                    `yaml:"dns,omitempty"`
 	Profile                 *mihomoProfile                `yaml:"profile,omitempty"`
 	Sniffer                 *mihomoSniffer                `yaml:"sniffer,omitempty"`
 	Proxies                 []mihomoProxy                 `yaml:"proxies"`
 	ProxyGroups             []mihomoProxyGroup            `yaml:"proxy-groups"`
 	RuleProviders           map[string]mihomoRuleProvider `yaml:"rule-providers,omitempty"`
+	RuleProviderOrder       []string                      `yaml:"-"`
 	Rules                   []string                      `yaml:"rules"`
 }
 
@@ -73,6 +86,13 @@ type mihomoDNSFallbackFilter struct {
 	Domain []string `yaml:"domain,omitempty"`
 }
 
+type mihomoGeoxURL struct {
+	GeoIP   string `yaml:"geoip,omitempty"`
+	GeoSite string `yaml:"geosite,omitempty"`
+	MMDB    string `yaml:"mmdb,omitempty"`
+	ASN     string `yaml:"asn,omitempty"`
+}
+
 type mihomoProfile struct {
 	StoreSelected bool `yaml:"store-selected,omitempty"`
 	StoreFakeIP   bool `yaml:"store-fake-ip,omitempty"`
@@ -94,6 +114,7 @@ type mihomoProxy struct {
 	Type                     string                 `yaml:"type"`
 	Server                   string                 `yaml:"server,omitempty"`
 	Port                     int                    `yaml:"port,omitempty"`
+	Encryption               string                 `yaml:"encryption,omitempty"`
 	Cipher                   string                 `yaml:"cipher,omitempty"`
 	Password                 string                 `yaml:"password,omitempty"`
 	Username                 string                 `yaml:"username,omitempty"`
@@ -105,12 +126,15 @@ type mihomoProxy struct {
 	ServerName               string                 `yaml:"servername,omitempty"`
 	SNI                      string                 `yaml:"sni,omitempty"`
 	ClientFingerprint        string                 `yaml:"client-fingerprint,omitempty"`
+	PacketEncoding           string                 `yaml:"packet-encoding,omitempty"`
 	SkipCertVerify           *bool                  `yaml:"skip-cert-verify,omitempty"`
 	ALPN                     []string               `yaml:"alpn,omitempty"`
 	Flow                     string                 `yaml:"flow,omitempty"`
 	RealityOpts              *mihomoRealityOpts     `yaml:"reality-opts,omitempty"`
 	WSOpts                   *mihomoWSOpts          `yaml:"ws-opts,omitempty"`
 	GrpcOpts                 *mihomoGRPCOpts        `yaml:"grpc-opts,omitempty"`
+	H2Opts                   *mihomoH2Opts          `yaml:"h2-opts,omitempty"`
+	XHTTPOpts                *mihomoXHTTPOpts       `yaml:"xhttp-opts,omitempty"`
 	Obfs                     string                 `yaml:"obfs,omitempty"`
 	ObfsPassword             string                 `yaml:"obfs-password,omitempty"`
 	CongestionController     string                 `yaml:"congestion-controller,omitempty"`
@@ -149,6 +173,17 @@ type mihomoGRPCOpts struct {
 	GrpcServiceName string `yaml:"grpc-service-name,omitempty"`
 }
 
+type mihomoH2Opts struct {
+	Host []string `yaml:"host,omitempty"`
+	Path string   `yaml:"path,omitempty"`
+}
+
+type mihomoXHTTPOpts struct {
+	Path         string `yaml:"path,omitempty"`
+	Mode         string `yaml:"mode,omitempty"`
+	NoGRPCHeader *bool  `yaml:"no-grpc-header,omitempty"`
+}
+
 type mihomoWGPeer struct {
 	Server       string      `yaml:"server,omitempty"`
 	Port         int         `yaml:"port,omitempty"`
@@ -164,6 +199,7 @@ type mihomoProxyGroup struct {
 	Proxies  []string `yaml:"proxies"`
 	URL      string   `yaml:"url,omitempty"`
 	Interval int      `yaml:"interval,omitempty"`
+	Lazy     *bool    `yaml:"lazy,omitempty"`
 }
 
 type mihomoRuleProvider struct {
@@ -179,6 +215,15 @@ type mihomoRuleProvider struct {
 	Payload   []string            `yaml:"payload,omitempty"`
 }
 
+type compiledCustomRule struct {
+	Rule           model.CustomRule
+	TargetGroup    string
+	CreateGroup    bool
+	Provider       *mihomoRuleProvider
+	RuleLine       string
+	InsertPosition string
+}
+
 func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts := model.DefaultRenderOptions()
 	opts.Template = cfg.Service.Template
@@ -189,6 +234,33 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.IPv6 = cfg.Render.IPv6
 	opts.DNSEnabled = cfg.Render.DNSEnabled
 	opts.EnhancedMode = cfg.Render.EnhancedMode
+	opts.Emoji = cfg.Render.Emoji
+	opts.ShowNodeType = cfg.Render.ShowNodeType
+	opts.IncludeInfoNode = cfg.Render.IncludeInfoNode
+	opts.SkipTLSVerify = cfg.Render.SkipTLSVerify
+	opts.UDP = cfg.Render.UDP
+	opts.NodeList = cfg.Render.NodeList
+	opts.SortNodes = cfg.Render.SortNodes
+	opts.FilterIllegal = cfg.Render.FilterIllegal
+	opts.InsertURL = cfg.Render.InsertURL
+	opts.GroupProxyMode = cfg.Render.GroupProxyMode
+	opts.SourcePrefix = cfg.Render.SourcePrefix
+	opts.SourcePrefixFormat = cfg.Render.SourcePrefixFormat
+	opts.SourcePrefixSeparator = cfg.Render.SourcePrefixSeparator
+	opts.DedupeScope = cfg.Render.DedupeScope
+	opts.GeodataMode = cfg.Render.GeodataMode
+	opts.GeoAutoUpdate = cfg.Render.GeoAutoUpdate
+	opts.GeodataLoader = cfg.Render.GeodataLoader
+	opts.GeoUpdateInterval = cfg.Render.GeoUpdateInterval
+	opts.GeoxURL = cfg.Render.GeoxURL
+	opts.IncludeKeywords = cfg.Render.IncludeKeywords
+	opts.ExcludeKeywords = cfg.Render.ExcludeKeywords
+	opts.OutputFilename = cfg.Render.OutputFilename
+	opts.TemplateRuleMode = firstNonEmptyString(cfg.Render.SourceMode, cfg.Render.TemplateRuleMode)
+	opts.ExternalConfig = cfg.Render.ExternalConfig
+	opts.RuleMode = cfg.Render.RuleMode
+	opts.EnabledRules = append([]string(nil), cfg.Render.EnabledRules...)
+	opts.CustomRules = append([]model.CustomRule(nil), cfg.Render.CustomRules...)
 	opts.UnifiedDelay = cfg.Render.UnifiedDelay
 	opts.TCPConcurrent = cfg.Render.TCPConcurrent
 	opts.FindProcessMode = cfg.Render.FindProcessMode
@@ -222,19 +294,51 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	if strings.TrimSpace(opts.EnhancedMode) == "" {
 		opts.EnhancedMode = defaults.EnhancedMode
 	}
+	if strings.TrimSpace(opts.GroupProxyMode) == "" {
+		opts.GroupProxyMode = defaults.GroupProxyMode
+	}
+	if strings.TrimSpace(opts.TemplateRuleMode) == "" {
+		opts.TemplateRuleMode = defaults.TemplateRuleMode
+	}
+	if strings.TrimSpace(opts.ExternalConfig.TemplateKey) == "" {
+		opts.ExternalConfig.TemplateKey = defaults.ExternalConfig.TemplateKey
+	}
+	if strings.TrimSpace(opts.ExternalConfig.TemplateLabel) == "" {
+		opts.ExternalConfig.TemplateLabel = defaults.ExternalConfig.TemplateLabel
+	}
 
+	return applyTemplateMode(opts)
+}
+
+func applyTemplateMode(opts model.RenderOptions) model.RenderOptions {
+	if !strings.EqualFold(strings.TrimSpace(opts.TemplateRuleMode), "template") {
+		return opts
+	}
+
+	preset := templatecatalog.Resolve(opts.ExternalConfig.TemplateKey, opts.Template)
+	if strings.TrimSpace(preset.Template) != "" {
+		opts.Template = preset.Template
+	}
+	if strings.TrimSpace(preset.RuleMode) != "" {
+		opts.RuleMode = preset.RuleMode
+	}
+	opts.EnabledRules = append([]string(nil), preset.EnabledRules...)
+	if strings.TrimSpace(preset.GroupProxyMode) != "" {
+		opts.GroupProxyMode = preset.GroupProxyMode
+	}
 	return opts
 }
 
 func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error) {
 	opts = NormalizeRenderOptions(opts)
-	nodes = model.NormalizeNodes(nodes)
+	nodes = model.NormalizeNodesNoDedupe(nodes)
 	nodes = ensureUniqueNames(nodes)
 
 	proxies, err := buildProxies(nodes)
 	if err != nil {
 		return nil, err
 	}
+	resolvedEnabledRules := resolveEnabledRules(opts.RuleMode, opts.EnabledRules)
 
 	cfg := mihomoConfig{
 		MixedPort:               opts.MixedPort,
@@ -246,51 +350,59 @@ func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error
 		TCPConcurrent:           opts.TCPConcurrent,
 		FindProcessMode:         opts.FindProcessMode,
 		GlobalClientFingerprint: opts.GlobalClientFingerprint,
+		GeodataMode:             opts.GeodataMode,
+		GeoAutoUpdate:           opts.GeoAutoUpdate,
+		GeodataLoader:           strings.TrimSpace(opts.GeodataLoader),
+		GeoUpdateInterval:       opts.GeoUpdateInterval,
 		Proxies:                 proxies,
-		ProxyGroups:             buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups),
-		RuleProviders:           buildRuleProviders(opts.RuleProviders),
-		Rules:                   buildRules(opts.Template, opts.FinalPolicy, opts.AdditionalRules, opts.RuleProviders),
+		RuleProviders:           buildRuleProviders(opts.RuleProviders, resolvedEnabledRules, opts.CustomRules, opts.CustomProxyGroups),
+		RuleProviderOrder:       orderedProviderNames(resolvedEnabledRules),
+		Rules:                   buildRules(opts.Template, opts.FinalPolicy, resolvedEnabledRules, opts.AdditionalRules, opts.RuleProviders, opts.CustomRules, opts.CustomProxyGroups),
 	}
+	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, resolvedEnabledRules, opts.CustomRules, opts.GroupProxyMode)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ProxyGroups = proxyGroups
+	cfg.GeoxURL = buildGeoxURLConfig(opts.GeoxURL)
 	cfg.DNS = buildDNSConfig(opts)
 	cfg.Profile = buildProfileConfig(opts.Profile)
 	cfg.Sniffer = buildSnifferConfig(opts.Sniffer)
+	if err := failOnCriticalWarnings(ValidateMihomoConfig(cfg)); err != nil {
+		return nil, err
+	}
 
 	return renderConfig(cfg), nil
 }
 
 func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
-	if opts.DNS == nil {
-		if !opts.DNSEnabled {
-			return nil
-		}
-		return &mihomoDNS{
-			Enable:       true,
-			IPv6:         opts.IPv6,
-			EnhancedMode: strings.TrimSpace(opts.EnhancedMode),
-			Nameserver:   append([]string(nil), defaultDNSServers...),
-		}
+	if !opts.DNSEnabled {
+		return nil
 	}
 
-	cfg := opts.DNS
+	defaultRender := model.DefaultRenderConfig()
+	base := defaultRender.DNS
+	if base == nil {
+		return nil
+	}
+
+	cfg := *base
+	if opts.DNS != nil {
+		cfg = *opts.DNS
+	}
+
 	dns := &mihomoDNS{
 		Enable:            cfg.Enable,
 		Listen:            strings.TrimSpace(cfg.Listen),
 		UseSystemHosts:    model.Bool(cfg.UseSystemHosts),
 		IPv6:              opts.IPv6,
-		EnhancedMode:      strings.TrimSpace(cfg.EnhancedMode),
+		EnhancedMode:      firstNonEmptyString(strings.TrimSpace(cfg.EnhancedMode), strings.TrimSpace(opts.EnhancedMode)),
 		FakeIPRange:       strings.TrimSpace(cfg.FakeIPRange),
 		DefaultNameserver: cloneStrings(cfg.DefaultNameserver),
 		Nameserver:        cloneStrings(cfg.Nameserver),
 		Fallback:          cloneStrings(cfg.Fallback),
 		FakeIPFilter:      cloneStrings(cfg.FakeIPFilter),
 		NameserverPolicy:  cloneStringSliceMap(cfg.NameserverPolicy),
-	}
-
-	if dns.EnhancedMode == "" {
-		dns.EnhancedMode = strings.TrimSpace(opts.EnhancedMode)
-	}
-	if dns.Enable && len(dns.Nameserver) == 0 {
-		dns.Nameserver = append([]string(nil), defaultDNSServers...)
 	}
 	if cfg.FallbackFilter != nil {
 		dns.FallbackFilter = &mihomoDNSFallbackFilter{
@@ -299,11 +411,13 @@ func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
 			Domain: cloneStrings(cfg.FallbackFilter.Domain),
 		}
 	}
-
 	return dns
 }
 
 func buildProfileConfig(cfg *model.ProfileConfig) *mihomoProfile {
+	if cfg == nil {
+		cfg = model.DefaultRenderConfig().Profile
+	}
 	if cfg == nil {
 		return nil
 	}
@@ -313,7 +427,25 @@ func buildProfileConfig(cfg *model.ProfileConfig) *mihomoProfile {
 	}
 }
 
+func buildGeoxURLConfig(cfg *model.GeoxURLConfig) *mihomoGeoxURL {
+	if cfg == nil {
+		cfg = model.DefaultRenderConfig().GeoxURL
+	}
+	if cfg == nil {
+		return nil
+	}
+	return &mihomoGeoxURL{
+		GeoIP:   strings.TrimSpace(cfg.GeoIP),
+		GeoSite: strings.TrimSpace(cfg.GeoSite),
+		MMDB:    strings.TrimSpace(cfg.MMDB),
+		ASN:     strings.TrimSpace(cfg.ASN),
+	}
+}
+
 func buildSnifferConfig(cfg *model.SnifferConfig) *mihomoSniffer {
+	if cfg == nil {
+		cfg = model.DefaultRenderConfig().Sniffer
+	}
 	if cfg == nil {
 		return nil
 	}
@@ -378,10 +510,12 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		applyTransport(&proxy, node.Transport)
 	case model.ProtocolVLESS:
 		proxy.UUID = node.Auth.UUID
+		proxy.Encryption = firstNonEmptyString(rawString(node.Raw, "encryption"), "none")
 		proxy.Network = node.Transport.Network
 		proxy.TLS = node.TLS.Enabled
 		proxy.ServerName = node.TLS.SNI
 		proxy.ClientFingerprint = node.TLS.ClientFingerprint
+		proxy.PacketEncoding = rawString(node.Raw, "packetEncoding")
 		proxy.Flow = rawString(node.Raw, "flow")
 		if node.TLS.Reality != nil {
 			proxy.RealityOpts = &mihomoRealityOpts{
@@ -397,13 +531,13 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.TLS = true
 		proxy.SNI = node.TLS.SNI
 		proxy.ALPN = node.TLS.ALPN
-		proxy.SkipCertVerify = model.Bool(node.TLS.Insecure)
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		applyTransport(&proxy, node.Transport)
 	case model.ProtocolHysteria2:
 		proxy.Password = node.Auth.Password
 		proxy.SNI = node.TLS.SNI
 		proxy.ALPN = node.TLS.ALPN
-		proxy.SkipCertVerify = model.Bool(node.TLS.Insecure)
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		proxy.Obfs = rawString(node.Raw, "obfs")
 		proxy.ObfsPassword = rawString(node.Raw, "obfsPassword")
 	case model.ProtocolTUIC:
@@ -411,7 +545,7 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.Password = node.Auth.Password
 		proxy.SNI = node.TLS.SNI
 		proxy.ALPN = node.TLS.ALPN
-		proxy.SkipCertVerify = model.Bool(node.TLS.Insecure)
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		proxy.CongestionController = rawString(node.Raw, "congestionController")
 		proxy.UDPRelayMode = rawString(node.Raw, "udpRelayMode")
 		proxy.ReduceRTT = rawBoolPointer(node.Raw, "reduceRTT")
@@ -420,7 +554,7 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.SNI = node.TLS.SNI
 		proxy.ALPN = node.TLS.ALPN
 		proxy.ClientFingerprint = node.TLS.ClientFingerprint
-		proxy.SkipCertVerify = model.Bool(node.TLS.Insecure)
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		proxy.IdleSessionCheckInterval = rawScalar(node.Raw, "idleSessionCheckInterval")
 		proxy.IdleSessionTimeout = rawScalar(node.Raw, "idleSessionTimeout")
 		proxy.MinIdleSession = rawScalar(node.Raw, "minIdleSession")
@@ -477,6 +611,24 @@ func applyTransport(proxy *mihomoProxy, transport model.TransportOptions) {
 				GrpcServiceName: transport.ServiceName,
 			}
 		}
+	case "h2":
+		opts := &mihomoH2Opts{
+			Path: transport.Path,
+		}
+		if len(transport.H2Hosts) > 0 {
+			opts.Host = append([]string(nil), transport.H2Hosts...)
+		} else if transport.Host != "" {
+			opts.Host = []string{transport.Host}
+		}
+		if opts.Path != "" || len(opts.Host) > 0 {
+			proxy.H2Opts = opts
+		}
+	case "xhttp":
+		proxy.XHTTPOpts = &mihomoXHTTPOpts{
+			Path:         transport.Path,
+			Mode:         firstNonEmptyString(transport.Mode, "auto"),
+			NoGRPCHeader: firstNonNilBool(transport.NoGRPCHeader, model.Bool(false)),
+		}
 	}
 }
 
@@ -495,125 +647,127 @@ func buildWGPeers(peers []model.WGPeer) []mihomoWGPeer {
 	return out
 }
 
-func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []model.CustomProxyGroupConfig) []mihomoProxyGroup {
-	template = strings.ToLower(strings.TrimSpace(template))
+func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []model.CustomProxyGroupConfig, enabledRules []string, customRules []model.CustomRule, groupProxyMode string) ([]mihomoProxyGroup, error) {
+	groupProxyMode = strings.ToLower(strings.TrimSpace(groupProxyMode))
+	if groupProxyMode == "" {
+		groupProxyMode = "compact"
+	}
 	allNames := nodeNames(nodes)
 	if len(allNames) == 0 {
 		return []mihomoProxyGroup{
 			{
-				Name:    "节点选择",
+				Name:    groupNodeSelect,
 				Type:    "select",
 				Proxies: []string{"DIRECT"},
 			},
-		}
+		}, nil
 	}
 
 	groupNames := map[string]struct{}{}
 	var groups []mihomoProxyGroup
 
-	addGroup := func(group mihomoProxyGroup) {
+	addGroup := func(group mihomoProxyGroup) error {
 		group.Proxies = uniqueOrdered(group.Proxies)
 		if len(group.Proxies) == 0 {
-			return
+			return nil
+		}
+		if _, exists := groupNames[group.Name]; exists {
+			return fmt.Errorf("duplicate proxy-group name %q", group.Name)
 		}
 		groups = append(groups, group)
 		groupNames[group.Name] = struct{}{}
-	}
-
-	hasAuto := true
-	hasFallback := template != "lite"
-	if hasAuto {
-		addGroup(mihomoProxyGroup{
-			Name:     "自动选择",
-			Type:     "url-test",
-			Proxies:  allNames,
-			URL:      probeURL,
-			Interval: 300,
-		})
-	}
-	if hasFallback {
-		addGroup(mihomoProxyGroup{
-			Name:     "故障转移",
-			Type:     "fallback",
-			Proxies:  allNames,
-			URL:      probeURL,
-			Interval: 300,
-		})
+		return nil
 	}
 
 	regionNameOrder := regionProxyNames(nodes)
+	var regionGroupNames []string
 	for _, region := range regionGroups {
 		names := regionNameOrder[region.Tag]
 		if len(names) == 0 {
 			continue
 		}
-		regionProxies := []string{"自动选择", "DIRECT"}
-		if hasFallback {
-			regionProxies = []string{"自动选择", "故障转移", "DIRECT"}
+		regionGroupNames = append(regionGroupNames, region.Name)
+	}
+
+	if err := addGroup(mihomoProxyGroup{
+		Name:    groupNodeSelect,
+		Type:    "select",
+		Proxies: append([]string{groupAutoSelect, "DIRECT", "REJECT"}, append(append([]string{}, regionGroupNames...), allNames...)...),
+	}); err != nil {
+		return nil, err
+	}
+	if err := addGroup(mihomoProxyGroup{
+		Name:     groupAutoSelect,
+		Type:     "url-test",
+		Proxies:  allNames,
+		URL:      probeURL,
+		Interval: 300,
+		Lazy:     model.Bool(false),
+	}); err != nil {
+		return nil, err
+	}
+
+	for _, region := range regionGroups {
+		names := regionNameOrder[region.Tag]
+		if len(names) == 0 {
+			continue
 		}
-		addGroup(mihomoProxyGroup{
+		if err := addGroup(mihomoProxyGroup{
 			Name:    region.Name,
 			Type:    "select",
-			Proxies: append(regionProxies, names...),
-		})
-	}
-
-	selectProxies := []string{}
-	if hasAuto {
-		selectProxies = append(selectProxies, "自动选择")
-	}
-	if hasFallback {
-		selectProxies = append(selectProxies, "故障转移")
-	}
-	selectProxies = append(selectProxies, "DIRECT")
-	if template == "lite" {
-		selectProxies = append(selectProxies, "REJECT")
-	}
-	for _, region := range regionGroups {
-		if _, ok := groupNames[region.Name]; ok {
-			selectProxies = append(selectProxies, region.Name)
+			Proxies: append([]string{groupAutoSelect, "DIRECT"}, names...),
+		}); err != nil {
+			return nil, err
 		}
 	}
-	selectProxies = append(selectProxies, allNames...)
 
-	addGroup(mihomoProxyGroup{
-		Name:    "节点选择",
-		Type:    "select",
-		Proxies: selectProxies,
-	})
-
-	if template != "lite" {
-		serviceGroupProxies := []string{"节点选择", "自动选择", "故障转移", "DIRECT"}
-		for _, region := range regionGroups {
-			if _, ok := groupNames[region.Name]; ok {
-				serviceGroupProxies = append(serviceGroupProxies, region.Name)
+	resolvedCustomRules := resolveCustomRules(customRules, enabledRules, regionGroupNames, customGroups)
+	if len(enabledRules) > 0 || len(resolvedCustomRules) > 0 {
+		for _, category := range orderedRuleCategories(enabledRules) {
+			if err := addGroup(mihomoProxyGroup{
+				Name:    category.GroupName,
+				Type:    "select",
+				Proxies: serviceGroupProxiesForCategory(category.Key, groupProxyMode, regionGroupNames, allNames),
+			}); err != nil {
+				return nil, err
 			}
 		}
 
-		addGroup(mihomoProxyGroup{Name: "AI", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "流媒体", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "Telegram", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "GitHub", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "Microsoft", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "Apple", Type: "select", Proxies: serviceGroupProxies})
-		addGroup(mihomoProxyGroup{Name: "国内直连", Type: "select", Proxies: []string{"DIRECT", "节点选择"}})
-		addGroup(mihomoProxyGroup{Name: "漏网之鱼", Type: "select", Proxies: []string{"节点选择", "自动选择", "DIRECT"}})
+		customGroupProxies := serviceGroupProxiesForCategory("", groupProxyMode, regionGroupNames, allNames)
+		for _, rule := range resolvedCustomRules {
+			if !rule.CreateGroup {
+				continue
+			}
+			if err := addGroup(mihomoProxyGroup{Name: rule.TargetGroup, Type: "select", Proxies: customGroupProxies}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := addGroup(mihomoProxyGroup{
+		Name:    groupFinal,
+		Type:    "select",
+		Proxies: serviceGroupProxiesForCategory("", groupProxyMode, regionGroupNames, allNames),
+	}); err != nil {
+		return nil, err
 	}
 
 	for _, group := range customGroups {
 		if !group.Enabled {
 			continue
 		}
-		addGroup(mihomoProxyGroup{
+		if err := addGroup(mihomoProxyGroup{
 			Name:     group.Name,
 			Type:     strings.ToLower(strings.TrimSpace(group.Type)),
 			Proxies:  append([]string(nil), group.Members...),
 			URL:      strings.TrimSpace(group.URL),
 			Interval: group.Interval,
-		})
+		}); err != nil {
+			return nil, err
+		}
 	}
 
-	return groups
+	return groups, nil
 }
 
 func regionProxyNames(nodes []model.NodeIR) map[string][]string {
@@ -630,68 +784,241 @@ func regionProxyNames(nodes []model.NodeIR) map[string][]string {
 	return regionNames
 }
 
-func buildRules(template string, finalPolicy string, additionalRules []string, providers []model.RuleProviderConfig) []string {
-	template = strings.ToLower(strings.TrimSpace(template))
-	finalPolicy = strings.TrimSpace(finalPolicy)
-	if finalPolicy == "" {
-		finalPolicy = defaultFinalPolicy(template)
-	}
-	baseRules := []string{}
-	if template == "lite" {
-		baseRules = []string{
-			"GEOSITE,private,DIRECT",
-			"GEOIP,private,DIRECT,no-resolve",
-			"GEOSITE,cn,DIRECT",
-			"GEOIP,CN,DIRECT",
-			fmt.Sprintf("MATCH,%s", finalPolicy),
+func serviceGroupProxiesForCategory(categoryKey, groupProxyMode string, regionGroupNames, allNames []string) []string {
+	switch categoryKey {
+	case "adblock":
+		return []string{"REJECT", "DIRECT", groupNodeSelect}
+	case "private", "domestic":
+		return []string{"DIRECT", "REJECT", groupNodeSelect, groupAutoSelect}
+	default:
+		proxies := []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"}
+		if groupProxyMode == "regional" || groupProxyMode == "full" {
+			proxies = append(proxies, regionGroupNames...)
 		}
-		return mergeRules(baseRules, additionalRules, providerRules(providers))
+		if groupProxyMode == "full" {
+			proxies = append(proxies, allNames...)
+		}
+		return proxies
+	}
+}
+
+func resolveCustomRules(rules []model.CustomRule, enabledRules []string, regionGroupNames []string, customGroups []model.CustomProxyGroupConfig) []compiledCustomRule {
+	reserved := map[string]struct{}{
+		groupNodeSelect: {},
+		groupAutoSelect: {},
+		groupFinal:      {},
+	}
+	for _, region := range regionGroupNames {
+		reserved[region] = struct{}{}
+	}
+	for _, category := range orderedRuleCategories(enabledRules) {
+		reserved[category.GroupName] = struct{}{}
+	}
+	for _, group := range customGroups {
+		if strings.TrimSpace(group.Name) != "" {
+			reserved[group.Name] = struct{}{}
+		}
 	}
 
-	baseRules = []string{
-		"GEOSITE,telegram,Telegram",
-		"GEOSITE,github,GitHub",
-		"GEOSITE,microsoft,Microsoft",
-		"GEOSITE,apple,Apple",
-		"GEOSITE,openai,AI",
-		"GEOSITE,netflix,流媒体",
-		"GEOSITE,private,DIRECT",
-		"GEOIP,private,DIRECT,no-resolve",
-		"GEOSITE,cn,国内直连",
-		"GEOIP,CN,国内直连",
-		fmt.Sprintf("MATCH,%s", finalPolicy),
+	var out []compiledCustomRule
+	for _, rule := range rules {
+		if !rule.Enabled || strings.TrimSpace(rule.Key) == "" || strings.TrimSpace(rule.Label) == "" {
+			continue
+		}
+		targetGroup := strings.TrimSpace(rule.TargetGroup)
+		createGroup := false
+		switch strings.ToLower(strings.TrimSpace(rule.TargetMode)) {
+		case "direct":
+			targetGroup = "DIRECT"
+		case "reject":
+			targetGroup = "REJECT"
+		case "existing_group":
+			if targetGroup == "" {
+				targetGroup = groupNodeSelect
+			}
+		default:
+			createGroup = true
+			if targetGroup == "" {
+				targetGroup = customRuleDisplayName(rule)
+			}
+			targetGroup = uniqueGroupName(targetGroup, reserved)
+			reserved[targetGroup] = struct{}{}
+		}
+
+		compiled := compiledCustomRule{
+			Rule:           rule,
+			TargetGroup:    targetGroup,
+			CreateGroup:    createGroup,
+			InsertPosition: firstNonEmptyString(strings.TrimSpace(rule.InsertPosition), "before_match"),
+		}
+
+		if !strings.EqualFold(strings.TrimSpace(rule.SourceType), "group_only") {
+			provider := buildCustomRuleProvider(rule)
+			compiled.Provider = &provider
+			compiled.RuleLine = renderRuleSet(RuleSpec{
+				Provider:    rule.Key,
+				TargetGroup: targetGroup,
+				NoResolve:   rule.NoResolve,
+			})
+		}
+
+		out = append(out, compiled)
 	}
+	return out
+}
+
+func customRulesForPosition(rules []compiledCustomRule, position string) []string {
+	var out []string
+	for _, rule := range rules {
+		if rule.RuleLine == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(rule.InsertPosition), position) {
+			out = append(out, rule.RuleLine)
+		}
+	}
+	return out
+}
+
+func buildCustomRuleProvider(rule model.CustomRule) mihomoRuleProvider {
+	sourceType := strings.ToLower(strings.TrimSpace(rule.SourceType))
+	switch sourceType {
+	case "http":
+		return mihomoRuleProvider{
+			Type:     "http",
+			Behavior: strings.ToLower(strings.TrimSpace(rule.Behavior)),
+			URL:      strings.TrimSpace(rule.URL),
+			Path:     firstNonEmptyString(strings.TrimSpace(rule.Path), customRuleProviderPath(rule)),
+			Interval: rule.Interval,
+			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
+		}
+	case "file":
+		return mihomoRuleProvider{
+			Type:     "file",
+			Behavior: strings.ToLower(strings.TrimSpace(rule.Behavior)),
+			Path:     strings.TrimSpace(rule.Path),
+			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
+		}
+	default:
+		return mihomoRuleProvider{
+			Type:     "inline",
+			Behavior: strings.ToLower(strings.TrimSpace(rule.Behavior)),
+			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
+			Payload:  append([]string(nil), rule.Payload...),
+		}
+	}
+}
+
+func customRuleProviderPath(rule model.CustomRule) string {
+	format := strings.ToLower(strings.TrimSpace(rule.Format))
+	switch format {
+	case "mrs":
+		return "./ruleset/" + rule.Key + ".mrs"
+	case "text":
+		return "./ruleset/" + rule.Key + ".txt"
+	default:
+		return "./ruleset/" + rule.Key + ".yaml"
+	}
+}
+
+func customRuleDisplayName(rule model.CustomRule) string {
+	if strings.TrimSpace(rule.Icon) != "" {
+		return strings.TrimSpace(rule.Icon + " " + rule.Label)
+	}
+	return strings.TrimSpace(rule.Label)
+}
+
+func uniqueGroupName(name string, reserved map[string]struct{}) string {
+	candidate := strings.TrimSpace(name)
+	if candidate == "" {
+		candidate = "自定义规则"
+	}
+	if _, ok := reserved[candidate]; !ok {
+		return candidate
+	}
+	for i := 2; ; i++ {
+		next := fmt.Sprintf("%s %d", candidate, i)
+		if _, ok := reserved[next]; !ok {
+			return next
+		}
+	}
+}
+
+func buildRules(template string, finalPolicy string, enabledRules []string, additionalRules []string, providers []model.RuleProviderConfig, customRules []model.CustomRule, customGroups []model.CustomProxyGroupConfig) []string {
+	finalPolicy = strings.TrimSpace(finalPolicy)
+	if finalPolicy == "" {
+		finalPolicy = groupFinal
+	}
+
+	var baseRules []string
+	enabled := normalizeEnabledRuleKeys(enabledRules)
+	resolvedCustomRules := resolveCustomRules(customRules, enabled, nil, customGroups)
+	for _, category := range orderedRuleCategories(enabled) {
+		if category.Key == "domestic" {
+			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_domestic")...)
+		}
+		if category.Key == "non_cn" {
+			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_non_cn")...)
+		}
+		if category.Key == "domestic" {
+			for _, spec := range category.Rules {
+				baseRules = append(baseRules, renderRuleSet(spec))
+			}
+			continue
+		}
+		for _, spec := range category.Rules {
+			baseRules = append(baseRules, renderRuleSet(spec))
+		}
+		if category.Key == "adblock" {
+			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "after_adblock")...)
+		}
+	}
+	if containsString(enabled, "domestic") {
+		baseRules = append(baseRules, renderRuleSet(RuleSpec{
+			Provider:    "cn",
+			TargetGroup: "🔒 国内服务",
+		}))
+	}
+
+	baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_match")...)
+	baseRules = append(baseRules, fmt.Sprintf("MATCH,%s", normalizeFinalPolicyName(finalPolicy)))
 	return mergeRules(baseRules, additionalRules, providerRules(providers))
 }
 
-func defaultFinalPolicy(template string) string {
-	if strings.EqualFold(strings.TrimSpace(template), "lite") {
-		return "节点选择"
+func renderRuleSet(spec RuleSpec) string {
+	rule := fmt.Sprintf("RULE-SET,%s,%s", spec.Provider, spec.TargetGroup)
+	if spec.NoResolve {
+		rule += ",no-resolve"
 	}
-	return "漏网之鱼"
+	return rule
+}
+
+func normalizeFinalPolicyName(value string) string {
+	switch strings.TrimSpace(value) {
+	case "", "漏网之鱼":
+		return groupFinal
+	case "节点选择":
+		return groupNodeSelect
+	default:
+		return value
+	}
 }
 
 func mergeRules(baseRules, additionalRules, providerRules []string) []string {
 	base := uniqueOrdered(baseRules)
-	extras := normalizeRules(additionalRules)
 	providerExtras := normalizeRules(providerRules)
-	if len(extras) == 0 && len(providerExtras) == 0 {
-		return base
+	extras := normalizeRules(additionalRules)
+	matchRule := ""
+	if len(base) > 0 && strings.HasPrefix(strings.TrimSpace(base[len(base)-1]), "MATCH,") {
+		matchRule = base[len(base)-1]
+		base = base[:len(base)-1]
 	}
-
-	matchIndex := len(base)
-	for i, rule := range base {
-		if strings.HasPrefix(strings.TrimSpace(rule), "MATCH,") {
-			matchIndex = i
-			break
-		}
-	}
-
-	head := append([]string(nil), base[:matchIndex]...)
-	tail := append([]string(nil), base[matchIndex:]...)
-	merged := append(head, providerExtras...)
+	merged := append([]string{}, base...)
+	merged = append(merged, providerExtras...)
 	merged = append(merged, extras...)
-	merged = append(merged, tail...)
+	if matchRule != "" {
+		merged = append(merged, matchRule)
+	}
 	return uniqueOrdered(merged)
 }
 
@@ -707,12 +1034,24 @@ func normalizeRules(rules []string) []string {
 	return uniqueOrdered(normalized)
 }
 
-func buildRuleProviders(providers []model.RuleProviderConfig) map[string]mihomoRuleProvider {
-	if len(providers) == 0 {
+func buildRuleProviders(providers []model.RuleProviderConfig, enabledRules []string, customRules []model.CustomRule, customGroups []model.CustomProxyGroupConfig) map[string]mihomoRuleProvider {
+	if len(providers) == 0 && len(enabledRules) == 0 && len(customRules) == 0 {
 		return nil
 	}
 
 	out := make(map[string]mihomoRuleProvider)
+	for _, category := range orderedRuleCategories(enabledRules) {
+		for _, provider := range category.Providers {
+			out[provider.Name] = mihomoRuleProvider{
+				Type:     provider.Type,
+				URL:      provider.URL,
+				Path:     provider.Path,
+				Interval: provider.Interval,
+				Behavior: provider.Behavior,
+				Format:   provider.Format,
+			}
+		}
+	}
 	for _, provider := range providers {
 		if !provider.Enabled {
 			continue
@@ -723,9 +1062,11 @@ func buildRuleProviders(providers []model.RuleProviderConfig) map[string]mihomoR
 			URL:      strings.TrimSpace(provider.URL),
 			Path:     providerPath(provider),
 			Interval: provider.Interval,
-			Proxy:    strings.TrimSpace(provider.Proxy),
 			Behavior: strings.ToLower(strings.TrimSpace(provider.Behavior)),
 			Format:   strings.ToLower(strings.TrimSpace(provider.Format)),
+		}
+		if strings.TrimSpace(provider.Proxy) != "" {
+			entry.Proxy = strings.TrimSpace(provider.Proxy)
 		}
 		if provider.SizeLimit > 0 {
 			entry.SizeLimit = provider.SizeLimit
@@ -737,6 +1078,12 @@ func buildRuleProviders(providers []model.RuleProviderConfig) map[string]mihomoR
 			entry.Payload = append([]string(nil), provider.Payload...)
 		}
 		out[provider.Name] = entry
+	}
+	for _, rule := range resolveCustomRules(customRules, enabledRules, nil, customGroups) {
+		if rule.Provider == nil {
+			continue
+		}
+		out[rule.Rule.Key] = *rule.Provider
 	}
 
 	if len(out) == 0 {
@@ -818,6 +1165,25 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonNilBool(values ...*bool) *bool {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
 func cloneStringSliceMap(values map[string][]string) map[string][]string {
 	if len(values) == 0 {
 		return nil
@@ -879,6 +1245,28 @@ func uniqueOrdered(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func containsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+var yamlUnicodeEscapePattern = regexp.MustCompile(`\\U[0-9A-Fa-f]{8}|\\u[0-9A-Fa-f]{4}`)
+
+func unescapeYAMLUnicodeEscapes(value string) string {
+	return yamlUnicodeEscapePattern.ReplaceAllStringFunc(value, func(match string) string {
+		decoded, err := strconv.Unquote(`"` + match + `"`)
+		if err != nil {
+			return match
+		}
+		return decoded
+	})
 }
 
 func rawString(raw map[string]interface{}, key string) string {
@@ -1002,59 +1390,572 @@ func cloneStringMap(values map[string]interface{}) map[string]interface{} {
 }
 
 func renderConfig(cfg mihomoConfig) []byte {
-	var w yamlWriter
+	sections := make([]struct {
+		key   string
+		value *yaml.Node
+	}, 0, 21)
 
-	w.scalar(0, "mixed-port", cfg.MixedPort)
-	w.scalar(0, "allow-lan", cfg.AllowLAN)
-	w.scalar(0, "mode", cfg.Mode)
-	w.scalar(0, "log-level", cfg.LogLevel)
-	w.scalar(0, "ipv6", cfg.IPv6)
+	addSection := func(key string, value *yaml.Node) {
+		if value == nil {
+			return
+		}
+		sections = append(sections, struct {
+			key   string
+			value *yaml.Node
+		}{key: key, value: value})
+	}
+
+	addSection("mixed-port", scalarNode(cfg.MixedPort))
+	addSection("allow-lan", scalarNode(cfg.AllowLAN))
+	addSection("mode", scalarNode(cfg.Mode))
+	addSection("log-level", scalarNode(cfg.LogLevel))
+	addSection("ipv6", scalarNode(cfg.IPv6))
 	if cfg.UnifiedDelay {
-		w.scalar(0, "unified-delay", cfg.UnifiedDelay)
+		addSection("unified-delay", scalarNode(cfg.UnifiedDelay))
 	}
 	if cfg.TCPConcurrent {
-		w.scalar(0, "tcp-concurrent", cfg.TCPConcurrent)
+		addSection("tcp-concurrent", scalarNode(cfg.TCPConcurrent))
 	}
 	if cfg.FindProcessMode != "" {
-		w.scalar(0, "find-process-mode", cfg.FindProcessMode)
+		addSection("find-process-mode", scalarNode(cfg.FindProcessMode))
 	}
 	if cfg.GlobalClientFingerprint != "" {
-		w.scalar(0, "global-client-fingerprint", cfg.GlobalClientFingerprint)
+		addSection("global-client-fingerprint", scalarNode(cfg.GlobalClientFingerprint))
 	}
 	if cfg.DNS != nil {
-		w.line(0, "dns:")
-		renderDNS(&w, 4, *cfg.DNS)
+		addSection("dns", buildDNSNode(*cfg.DNS))
 	}
 	if cfg.Profile != nil {
-		w.line(0, "profile:")
-		renderProfile(&w, 4, *cfg.Profile)
+		addSection("profile", buildProfileNode(*cfg.Profile))
 	}
 	if cfg.Sniffer != nil {
-		w.line(0, "sniffer:")
-		renderSniffer(&w, 4, *cfg.Sniffer)
+		addSection("sniffer", buildSnifferNode(*cfg.Sniffer))
 	}
-
-	w.line(0, "proxies:")
-	for _, proxy := range cfg.Proxies {
-		renderProxy(&w, 4, proxy)
+	if cfg.GeodataMode {
+		addSection("geodata-mode", scalarNode(cfg.GeodataMode))
 	}
-
-	w.line(0, "proxy-groups:")
-	for _, group := range cfg.ProxyGroups {
-		renderProxyGroup(&w, 4, group)
+	if cfg.GeoAutoUpdate {
+		addSection("geo-auto-update", scalarNode(cfg.GeoAutoUpdate))
 	}
-
+	if cfg.GeodataLoader != "" {
+		addSection("geodata-loader", scalarNode(cfg.GeodataLoader))
+	}
+	if cfg.GeoUpdateInterval > 0 {
+		addSection("geo-update-interval", scalarNode(cfg.GeoUpdateInterval))
+	}
+	if cfg.GeoxURL != nil {
+		addSection("geox-url", buildGeoxURLNode(*cfg.GeoxURL))
+	}
+	addSection("proxies", buildProxiesNode(cfg.Proxies))
+	addSection("proxy-groups", buildProxyGroupsNode(cfg.ProxyGroups))
 	if len(cfg.RuleProviders) > 0 {
-		w.line(0, "rule-providers:")
-		renderRuleProviders(&w, 4, cfg.RuleProviders)
+		addSection("rule-providers", buildRuleProvidersNode(cfg.RuleProviders, cfg.RuleProviderOrder))
 	}
+	addSection("rules", buildRulesNode(cfg.Rules))
 
-	w.line(0, "rules:")
-	for _, rule := range cfg.Rules {
-		w.listScalar(4, rule)
+	var out bytes.Buffer
+	for index, section := range sections {
+		if index > 0 {
+			out.WriteString("\n\n")
+		}
+		doc := mappingNode()
+		appendMap(doc, section.key, section.value)
+
+		var buf bytes.Buffer
+		enc := yaml.NewEncoder(&buf)
+		enc.SetIndent(2)
+		if err := enc.Encode(doc); err != nil {
+			panic(err)
+		}
+		_ = enc.Close()
+		out.Write(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	}
+	return []byte(unescapeYAMLUnicodeEscapes(out.String()))
+}
 
-	return []byte(strings.TrimRight(w.String(), "\n"))
+func buildDNSNode(dns mihomoDNS) *yaml.Node {
+	node := mappingNode()
+	appendMap(node, "enable", scalarNode(dns.Enable))
+	if dns.Listen != "" {
+		appendMap(node, "listen", scalarNode(dns.Listen))
+	}
+	if dns.UseSystemHosts != nil {
+		appendMap(node, "use-system-hosts", scalarNode(*dns.UseSystemHosts))
+	}
+	appendMap(node, "ipv6", scalarNode(dns.IPv6))
+	if dns.EnhancedMode != "" {
+		appendMap(node, "enhanced-mode", scalarNode(dns.EnhancedMode))
+	}
+	if dns.FakeIPRange != "" {
+		appendMap(node, "fake-ip-range", scalarNode(dns.FakeIPRange))
+	}
+	if len(dns.DefaultNameserver) > 0 {
+		appendMap(node, "default-nameserver", flowStringSeqNode(dns.DefaultNameserver))
+	}
+	if len(dns.Nameserver) > 0 {
+		appendMap(node, "nameserver", flowStringSeqNode(dns.Nameserver))
+	}
+	if len(dns.Fallback) > 0 {
+		appendMap(node, "fallback", flowStringSeqNode(dns.Fallback))
+	}
+	if dns.FallbackFilter != nil {
+		filter := flowMappingNode()
+		appendMap(filter, "geoip", scalarNode(dns.FallbackFilter.GeoIP))
+		if len(dns.FallbackFilter.IPCIDR) > 0 {
+			appendMap(filter, "ipcidr", flowStringSeqNode(dns.FallbackFilter.IPCIDR))
+		}
+		if len(dns.FallbackFilter.Domain) > 0 {
+			appendMap(filter, "domain", flowStringSeqNode(dns.FallbackFilter.Domain))
+		}
+		appendMap(node, "fallback-filter", filter)
+	}
+	if len(dns.FakeIPFilter) > 0 {
+		appendMap(node, "fake-ip-filter", flowStringSeqNode(dns.FakeIPFilter))
+	}
+	if len(dns.NameserverPolicy) > 0 {
+		policy := mappingNode()
+		keys := make([]string, 0, len(dns.NameserverPolicy))
+		for key := range dns.NameserverPolicy {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			appendMap(policy, key, stringSeqNode(dns.NameserverPolicy[key]))
+		}
+		appendMap(node, "nameserver-policy", policy)
+	}
+	return node
+}
+
+func buildGeoxURLNode(cfg mihomoGeoxURL) *yaml.Node {
+	node := mappingNode()
+	if cfg.GeoIP != "" {
+		appendMap(node, "geoip", scalarNode(cfg.GeoIP))
+	}
+	if cfg.GeoSite != "" {
+		appendMap(node, "geosite", scalarNode(cfg.GeoSite))
+	}
+	if cfg.MMDB != "" {
+		appendMap(node, "mmdb", scalarNode(cfg.MMDB))
+	}
+	if cfg.ASN != "" {
+		appendMap(node, "asn", scalarNode(cfg.ASN))
+	}
+	return node
+}
+
+func buildProfileNode(profile mihomoProfile) *yaml.Node {
+	node := mappingNode()
+	appendMap(node, "store-selected", scalarNode(profile.StoreSelected))
+	appendMap(node, "store-fake-ip", scalarNode(profile.StoreFakeIP))
+	return node
+}
+
+func buildSnifferNode(sniffer mihomoSniffer) *yaml.Node {
+	node := mappingNode()
+	appendMap(node, "enable", scalarNode(sniffer.Enable))
+	appendMap(node, "parse-pure-ip", scalarNode(sniffer.ParsePureIP))
+	if len(sniffer.Sniff) == 0 {
+		return node
+	}
+	sniff := mappingNode()
+	for _, key := range []string{"HTTP", "QUIC", "TLS"} {
+		rule, ok := sniffer.Sniff[key]
+		if !ok {
+			continue
+		}
+		ruleNode := mappingNode()
+		if len(rule.Ports) > 0 {
+			appendMap(ruleNode, "ports", stringSeqNode(rule.Ports))
+		}
+		if key == "HTTP" {
+			appendMap(ruleNode, "override-destination", scalarNode(rule.OverrideDestination))
+		}
+		appendMap(sniff, key, ruleNode)
+	}
+	appendMap(node, "sniff", sniff)
+	return node
+}
+
+func buildProxiesNode(proxies []mihomoProxy) *yaml.Node {
+	seq := sequenceNode()
+	for _, proxy := range proxies {
+		seq.Content = append(seq.Content, buildProxyNode(proxy))
+	}
+	return seq
+}
+
+func buildProxyNode(proxy mihomoProxy) *yaml.Node {
+	node := flowMappingNode()
+	appendMap(node, "name", scalarNode(proxy.Name))
+	appendMap(node, "type", scalarNode(proxy.Type))
+	if proxy.Server != "" {
+		appendMap(node, "server", scalarNode(proxy.Server))
+	}
+	if proxy.Port != 0 {
+		appendMap(node, "port", scalarNode(proxy.Port))
+	}
+	if proxy.Encryption != "" {
+		appendMap(node, "encryption", scalarNode(proxy.Encryption))
+	}
+	if proxy.Cipher != "" {
+		appendMap(node, "cipher", scalarNode(proxy.Cipher))
+	}
+	if proxy.Password != "" {
+		appendMap(node, "password", scalarNode(proxy.Password))
+	}
+	if proxy.Username != "" {
+		appendMap(node, "username", scalarNode(proxy.Username))
+	}
+	if proxy.UUID != "" {
+		appendMap(node, "uuid", scalarNode(proxy.UUID))
+	}
+	if proxy.AlterID != nil {
+		appendMap(node, "alterId", nodeFromAny(proxy.AlterID))
+	}
+	if proxy.Network != "" {
+		appendMap(node, "network", scalarNode(proxy.Network))
+	}
+	if proxy.TLS {
+		appendMap(node, "tls", scalarNode(proxy.TLS))
+	}
+	if proxy.UDP != nil {
+		appendMap(node, "udp", scalarNode(*proxy.UDP))
+	}
+	if proxy.ServerName != "" {
+		appendMap(node, "servername", scalarNode(proxy.ServerName))
+	}
+	if proxy.SNI != "" {
+		appendMap(node, "sni", scalarNode(proxy.SNI))
+	}
+	if proxy.ClientFingerprint != "" {
+		appendMap(node, "client-fingerprint", scalarNode(proxy.ClientFingerprint))
+	}
+	if proxy.PacketEncoding != "" {
+		appendMap(node, "packet-encoding", scalarNode(proxy.PacketEncoding))
+	}
+	if proxy.SkipCertVerify != nil {
+		appendMap(node, "skip-cert-verify", scalarNode(*proxy.SkipCertVerify))
+	}
+	if len(proxy.ALPN) > 0 {
+		appendMap(node, "alpn", flowStringSeqNode(proxy.ALPN))
+	}
+	if proxy.Flow != "" {
+		appendMap(node, "flow", scalarNode(proxy.Flow))
+	}
+	if proxy.RealityOpts != nil {
+		reality := flowMappingNode()
+		if proxy.RealityOpts.PublicKey != "" {
+			appendMap(reality, "public-key", scalarNode(proxy.RealityOpts.PublicKey))
+		}
+		if proxy.RealityOpts.ShortID != "" {
+			appendMap(reality, "short-id", scalarNode(proxy.RealityOpts.ShortID))
+		}
+		if proxy.RealityOpts.SpiderX != "" {
+			appendMap(reality, "spider-x", scalarNode(proxy.RealityOpts.SpiderX))
+		}
+		appendMap(node, "reality-opts", reality)
+	}
+	if proxy.WSOpts != nil {
+		ws := flowMappingNode()
+		if proxy.WSOpts.Path != "" {
+			appendMap(ws, "path", scalarNode(proxy.WSOpts.Path))
+		}
+		if len(proxy.WSOpts.Headers) > 0 {
+			headers := flowMappingNode()
+			for _, key := range sortedKeysString(proxy.WSOpts.Headers) {
+				appendMap(headers, key, scalarNode(proxy.WSOpts.Headers[key]))
+			}
+			appendMap(ws, "headers", headers)
+		}
+		appendMap(node, "ws-opts", ws)
+	}
+	if proxy.GrpcOpts != nil && proxy.GrpcOpts.GrpcServiceName != "" {
+		grpc := flowMappingNode()
+		appendMap(grpc, "grpc-service-name", scalarNode(proxy.GrpcOpts.GrpcServiceName))
+		appendMap(node, "grpc-opts", grpc)
+	}
+	if proxy.H2Opts != nil {
+		h2 := flowMappingNode()
+		if len(proxy.H2Opts.Host) > 0 {
+			appendMap(h2, "host", flowStringSeqNode(proxy.H2Opts.Host))
+		}
+		if proxy.H2Opts.Path != "" {
+			appendMap(h2, "path", scalarNode(proxy.H2Opts.Path))
+		}
+		appendMap(node, "h2-opts", h2)
+	}
+	if proxy.XHTTPOpts != nil {
+		xhttp := flowMappingNode()
+		if proxy.XHTTPOpts.Path != "" {
+			appendMap(xhttp, "path", scalarNode(proxy.XHTTPOpts.Path))
+		}
+		if proxy.XHTTPOpts.Mode != "" {
+			appendMap(xhttp, "mode", scalarNode(proxy.XHTTPOpts.Mode))
+		}
+		if proxy.XHTTPOpts.NoGRPCHeader != nil {
+			appendMap(xhttp, "no-grpc-header", scalarNode(*proxy.XHTTPOpts.NoGRPCHeader))
+		}
+		appendMap(node, "xhttp-opts", xhttp)
+	}
+	if proxy.Obfs != "" {
+		appendMap(node, "obfs", scalarNode(proxy.Obfs))
+	}
+	if proxy.ObfsPassword != "" {
+		appendMap(node, "obfs-password", scalarNode(proxy.ObfsPassword))
+	}
+	if proxy.CongestionController != "" {
+		appendMap(node, "congestion-controller", scalarNode(proxy.CongestionController))
+	}
+	if proxy.UDPRelayMode != "" {
+		appendMap(node, "udp-relay-mode", scalarNode(proxy.UDPRelayMode))
+	}
+	if proxy.ReduceRTT != nil {
+		appendMap(node, "reduce-rtt", scalarNode(*proxy.ReduceRTT))
+	}
+	if proxy.IdleSessionCheckInterval != nil {
+		appendMap(node, "idle-session-check-interval", nodeFromAny(proxy.IdleSessionCheckInterval))
+	}
+	if proxy.IdleSessionTimeout != nil {
+		appendMap(node, "idle-session-timeout", nodeFromAny(proxy.IdleSessionTimeout))
+	}
+	if proxy.MinIdleSession != nil {
+		appendMap(node, "min-idle-session", nodeFromAny(proxy.MinIdleSession))
+	}
+	if proxy.IP != "" {
+		appendMap(node, "ip", scalarNode(proxy.IP))
+	}
+	if proxy.IPv6 != "" {
+		appendMap(node, "ipv6", scalarNode(proxy.IPv6))
+	}
+	if proxy.PrivateKey != "" {
+		appendMap(node, "private-key", scalarNode(proxy.PrivateKey))
+	}
+	if proxy.PublicKey != "" {
+		appendMap(node, "public-key", scalarNode(proxy.PublicKey))
+	}
+	if len(proxy.AllowedIPs) > 0 {
+		appendMap(node, "allowed-ips", flowStringSeqNode(proxy.AllowedIPs))
+	}
+	if proxy.PreSharedKey != "" {
+		appendMap(node, "pre-shared-key", scalarNode(proxy.PreSharedKey))
+	}
+	if proxy.Reserved != nil {
+		appendMap(node, "reserved", nodeFromAny(proxy.Reserved))
+	}
+	if proxy.PersistentKeepalive != 0 {
+		appendMap(node, "persistent-keepalive", scalarNode(proxy.PersistentKeepalive))
+	}
+	if proxy.MTU != 0 {
+		appendMap(node, "mtu", scalarNode(proxy.MTU))
+	}
+	if proxy.RemoteDNSResolve != nil {
+		appendMap(node, "remote-dns-resolve", scalarNode(*proxy.RemoteDNSResolve))
+	}
+	if len(proxy.DNS) > 0 {
+		appendMap(node, "dns", flowStringSeqNode(proxy.DNS))
+	}
+	if len(proxy.Peers) > 0 {
+		peers := flowSequenceNode()
+		for _, peer := range proxy.Peers {
+			peerNode := flowMappingNode()
+			if peer.Server != "" {
+				appendMap(peerNode, "server", scalarNode(peer.Server))
+			}
+			if peer.Port != 0 {
+				appendMap(peerNode, "port", scalarNode(peer.Port))
+			}
+			if peer.PublicKey != "" {
+				appendMap(peerNode, "public-key", scalarNode(peer.PublicKey))
+			}
+			if peer.PreSharedKey != "" {
+				appendMap(peerNode, "pre-shared-key", scalarNode(peer.PreSharedKey))
+			}
+			if len(peer.AllowedIPs) > 0 {
+				appendMap(peerNode, "allowed-ips", flowStringSeqNode(peer.AllowedIPs))
+			}
+			if peer.Reserved != nil {
+				appendMap(peerNode, "reserved", nodeFromAny(peer.Reserved))
+			}
+			peers.Content = append(peers.Content, peerNode)
+		}
+		appendMap(node, "peers", peers)
+	}
+	if len(proxy.AmneziaWGOption) > 0 {
+		appendMap(node, "amnezia-wg-option", nodeFromAny(proxy.AmneziaWGOption))
+	}
+	return node
+}
+
+func buildProxyGroupsNode(groups []mihomoProxyGroup) *yaml.Node {
+	seq := sequenceNode()
+	for _, group := range groups {
+		node := flowMappingNode()
+		appendMap(node, "name", scalarNode(group.Name))
+		appendMap(node, "type", scalarNode(group.Type))
+		appendMap(node, "proxies", flowStringSeqNode(group.Proxies))
+		if group.URL != "" {
+			appendMap(node, "url", scalarNode(group.URL))
+		}
+		if group.Interval != 0 {
+			appendMap(node, "interval", scalarNode(group.Interval))
+		}
+		if group.Lazy != nil {
+			appendMap(node, "lazy", scalarNode(*group.Lazy))
+		}
+		seq.Content = append(seq.Content, node)
+	}
+	return seq
+}
+
+func buildRuleProvidersNode(providers map[string]mihomoRuleProvider, preferredOrder []string) *yaml.Node {
+	node := mappingNode()
+	for _, key := range orderedProviderRenderKeys(providers, preferredOrder) {
+		provider := providers[key]
+		providerNode := flowMappingNode()
+		appendMap(providerNode, "type", scalarNode(provider.Type))
+		if provider.Behavior != "" {
+			appendMap(providerNode, "behavior", scalarNode(provider.Behavior))
+		}
+		if provider.URL != "" {
+			appendMap(providerNode, "url", scalarNode(provider.URL))
+		}
+		if provider.Path != "" {
+			appendMap(providerNode, "path", scalarNode(provider.Path))
+		}
+		if provider.Interval != 0 {
+			appendMap(providerNode, "interval", scalarNode(provider.Interval))
+		}
+		if provider.Format != "" {
+			appendMap(providerNode, "format", scalarNode(provider.Format))
+		}
+		if provider.Proxy != "" {
+			appendMap(providerNode, "proxy", scalarNode(provider.Proxy))
+		}
+		if provider.SizeLimit > 0 {
+			appendMap(providerNode, "size-limit", scalarNode(provider.SizeLimit))
+		}
+		if len(provider.Header) > 0 {
+			headers := flowMappingNode()
+			headerKeys := make([]string, 0, len(provider.Header))
+			for headerKey := range provider.Header {
+				headerKeys = append(headerKeys, headerKey)
+			}
+			sort.Strings(headerKeys)
+			for _, headerKey := range headerKeys {
+				appendMap(headers, headerKey, flowStringSeqNode(provider.Header[headerKey]))
+			}
+			appendMap(providerNode, "header", headers)
+		}
+		if len(provider.Payload) > 0 {
+			appendMap(providerNode, "payload", flowStringSeqNode(provider.Payload))
+		}
+		appendMap(node, key, providerNode)
+	}
+	return node
+}
+
+func buildRulesNode(rules []string) *yaml.Node {
+	return stringSeqNode(rules)
+}
+
+func mappingNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+}
+
+func sequenceNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+}
+
+func flowMappingNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle}
+}
+
+func flowSequenceNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
+}
+
+func appendMap(node *yaml.Node, key string, value *yaml.Node) {
+	if node == nil || value == nil {
+		return
+	}
+	node.Content = append(node.Content, scalarStringNode(key), value)
+}
+
+func scalarStringNode(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Value: value}
+}
+
+func scalarNode(value interface{}) *yaml.Node {
+	switch typed := value.(type) {
+	case string:
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: typed}
+	case bool:
+		if typed {
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+	case int:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(typed)}
+	case int64:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.FormatInt(typed, 10)}
+	default:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fmt.Sprint(value)}
+	}
+}
+
+func stringSeqNode(values []string) *yaml.Node {
+	seq := sequenceNode()
+	for _, value := range values {
+		seq.Content = append(seq.Content, scalarNode(value))
+	}
+	return seq
+}
+
+func flowStringSeqNode(values []string) *yaml.Node {
+	seq := flowSequenceNode()
+	for _, value := range values {
+		seq.Content = append(seq.Content, scalarNode(value))
+	}
+	return seq
+}
+
+func nodeFromAny(value interface{}) *yaml.Node {
+	switch typed := value.(type) {
+	case *yaml.Node:
+		return typed
+	case nil:
+		return nil
+	case string, bool, int, int64:
+		return scalarNode(typed)
+	case []string:
+		return flowStringSeqNode(typed)
+	case []int:
+		seq := flowSequenceNode()
+		for _, item := range typed {
+			seq.Content = append(seq.Content, scalarNode(item))
+		}
+		return seq
+	case []interface{}:
+		seq := flowSequenceNode()
+		for _, item := range typed {
+			seq.Content = append(seq.Content, nodeFromAny(item))
+		}
+		return seq
+	case map[string]interface{}:
+		node := flowMappingNode()
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			appendMap(node, key, nodeFromAny(typed[key]))
+		}
+		return node
+	default:
+		return scalarNode(fmt.Sprint(value))
+	}
 }
 
 func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
@@ -1129,6 +2030,21 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 	}
 }
 
+func renderGeoxURL(w *yamlWriter, indent int, cfg mihomoGeoxURL) {
+	if cfg.GeoIP != "" {
+		w.scalar(indent, "geoip", cfg.GeoIP)
+	}
+	if cfg.GeoSite != "" {
+		w.scalar(indent, "geosite", cfg.GeoSite)
+	}
+	if cfg.MMDB != "" {
+		w.scalar(indent, "mmdb", cfg.MMDB)
+	}
+	if cfg.ASN != "" {
+		w.scalar(indent, "asn", cfg.ASN)
+	}
+}
+
 func renderProfile(w *yamlWriter, indent int, profile mihomoProfile) {
 	w.scalar(indent, "store-selected", profile.StoreSelected)
 	w.scalar(indent, "store-fake-ip", profile.StoreFakeIP)
@@ -1166,6 +2082,9 @@ func renderProxy(w *yamlWriter, indent int, proxy mihomoProxy) {
 	if proxy.Port != 0 {
 		w.scalar(indent+2, "port", proxy.Port)
 	}
+	if proxy.Encryption != "" {
+		w.scalar(indent+2, "encryption", proxy.Encryption)
+	}
 	if proxy.Cipher != "" {
 		w.scalar(indent+2, "cipher", proxy.Cipher)
 	}
@@ -1198,6 +2117,9 @@ func renderProxy(w *yamlWriter, indent int, proxy mihomoProxy) {
 	}
 	if proxy.ClientFingerprint != "" {
 		w.scalar(indent+2, "client-fingerprint", proxy.ClientFingerprint)
+	}
+	if proxy.PacketEncoding != "" {
+		w.scalar(indent+2, "packet-encoding", proxy.PacketEncoding)
 	}
 	if proxy.SkipCertVerify != nil {
 		w.scalar(indent+2, "skip-cert-verify", *proxy.SkipCertVerify)
@@ -1236,6 +2158,27 @@ func renderProxy(w *yamlWriter, indent int, proxy mihomoProxy) {
 	if proxy.GrpcOpts != nil && proxy.GrpcOpts.GrpcServiceName != "" {
 		w.line(indent+2, "grpc-opts:")
 		w.scalar(indent+4, "grpc-service-name", proxy.GrpcOpts.GrpcServiceName)
+	}
+	if proxy.H2Opts != nil {
+		w.line(indent+2, "h2-opts:")
+		if len(proxy.H2Opts.Host) > 0 {
+			w.list(indent+4, "host", proxy.H2Opts.Host)
+		}
+		if proxy.H2Opts.Path != "" {
+			w.scalar(indent+4, "path", proxy.H2Opts.Path)
+		}
+	}
+	if proxy.XHTTPOpts != nil {
+		w.line(indent+2, "xhttp-opts:")
+		if proxy.XHTTPOpts.Path != "" {
+			w.scalar(indent+4, "path", proxy.XHTTPOpts.Path)
+		}
+		if proxy.XHTTPOpts.Mode != "" {
+			w.scalar(indent+4, "mode", proxy.XHTTPOpts.Mode)
+		}
+		if proxy.XHTTPOpts.NoGRPCHeader != nil {
+			w.scalar(indent+4, "no-grpc-header", *proxy.XHTTPOpts.NoGRPCHeader)
+		}
 	}
 	if proxy.Obfs != "" {
 		w.scalar(indent+2, "obfs", proxy.Obfs)
@@ -1331,24 +2274,19 @@ func renderProxyGroup(w *yamlWriter, indent int, group mihomoProxyGroup) {
 	if group.Interval != 0 {
 		w.scalar(indent+2, "interval", group.Interval)
 	}
+	if group.Lazy != nil {
+		w.scalar(indent+2, "lazy", *group.Lazy)
+	}
 }
 
-func renderRuleProviders(w *yamlWriter, indent int, providers map[string]mihomoRuleProvider) {
-	keys := make([]string, 0, len(providers))
-	for key := range providers {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
+func renderRuleProviders(w *yamlWriter, indent int, providers map[string]mihomoRuleProvider, preferredOrder []string) {
+	keys := orderedProviderRenderKeys(providers, preferredOrder)
 	for _, key := range keys {
 		provider := providers[key]
 		w.line(indent, fmt.Sprintf("%s:", key))
 		w.scalar(indent+2, "type", provider.Type)
 		if provider.Behavior != "" {
 			w.scalar(indent+2, "behavior", provider.Behavior)
-		}
-		if provider.Format != "" {
-			w.scalar(indent+2, "format", provider.Format)
 		}
 		if provider.URL != "" {
 			w.scalar(indent+2, "url", provider.URL)
@@ -1358,6 +2296,9 @@ func renderRuleProviders(w *yamlWriter, indent int, providers map[string]mihomoR
 		}
 		if provider.Interval != 0 {
 			w.scalar(indent+2, "interval", provider.Interval)
+		}
+		if provider.Format != "" {
+			w.scalar(indent+2, "format", provider.Format)
 		}
 		if provider.Proxy != "" {
 			w.scalar(indent+2, "proxy", provider.Proxy)
@@ -1380,6 +2321,30 @@ func renderRuleProviders(w *yamlWriter, indent int, providers map[string]mihomoR
 			w.list(indent+2, "payload", provider.Payload)
 		}
 	}
+}
+
+func orderedProviderRenderKeys(providers map[string]mihomoRuleProvider, preferredOrder []string) []string {
+	seen := make(map[string]struct{}, len(providers))
+	var keys []string
+	for _, key := range preferredOrder {
+		if _, ok := providers[key]; !ok {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	var rest []string
+	for key := range providers {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		rest = append(rest, key)
+	}
+	sort.Strings(rest)
+	return append(keys, rest...)
 }
 
 func renderInterfaceField(w *yamlWriter, indent int, key string, value interface{}) {
@@ -1436,6 +2401,16 @@ func sortedKeysString(values map[string]string) []string {
 
 type yamlWriter struct {
 	builder strings.Builder
+}
+
+func (w *yamlWriter) blank() {
+	if w.builder.Len() == 0 {
+		return
+	}
+	if strings.HasSuffix(w.builder.String(), "\n\n") {
+		return
+	}
+	w.builder.WriteByte('\n')
 }
 
 func (w *yamlWriter) line(indent int, value string) {

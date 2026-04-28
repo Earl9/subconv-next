@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -37,6 +38,7 @@ type NodeIR struct {
 	UDP       *bool                  `json:"udp,omitempty"`
 	Tags      []string               `json:"tags,omitempty"`
 	Source    SourceInfo             `json:"source,omitempty"`
+	Sources   []SourceInfo           `json:"sources,omitempty"`
 	Raw       map[string]interface{} `json:"raw,omitempty"`
 	Warnings  []string               `json:"warnings,omitempty"`
 }
@@ -74,25 +76,28 @@ type ECHOptions struct {
 }
 
 type TransportOptions struct {
-	Network     string            `json:"network,omitempty"`
-	Path        string            `json:"path,omitempty"`
-	Host        string            `json:"host,omitempty"`
-	ServiceName string            `json:"service_name,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
+	Network      string            `json:"network,omitempty"`
+	Path         string            `json:"path,omitempty"`
+	Host         string            `json:"host,omitempty"`
+	ServiceName  string            `json:"service_name,omitempty"`
+	Mode         string            `json:"mode,omitempty"`
+	NoGRPCHeader *bool             `json:"no_grpc_header,omitempty"`
+	H2Hosts      []string          `json:"h2_hosts,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
 }
 
 type WireGuardOptions struct {
-	IP                   string                 `json:"ip,omitempty"`
-	IPv6                 string                 `json:"ipv6,omitempty"`
-	AllowedIPs           []string               `json:"allowed_ips,omitempty"`
-	Reserved             []int                  `json:"reserved,omitempty"`
-	ReservedString       string                 `json:"reserved_string,omitempty"`
-	MTU                  int                    `json:"mtu,omitempty"`
-	PersistentKeepalive  int                    `json:"persistent_keepalive,omitempty"`
-	RemoteDNSResolve     bool                   `json:"remote_dns_resolve,omitempty"`
-	DNS                  []string               `json:"dns,omitempty"`
-	Peers                []WGPeer               `json:"peers,omitempty"`
-	AmneziaWG            map[string]interface{} `json:"amnezia_wg,omitempty"`
+	IP                  string                 `json:"ip,omitempty"`
+	IPv6                string                 `json:"ipv6,omitempty"`
+	AllowedIPs          []string               `json:"allowed_ips,omitempty"`
+	Reserved            []int                  `json:"reserved,omitempty"`
+	ReservedString      string                 `json:"reserved_string,omitempty"`
+	MTU                 int                    `json:"mtu,omitempty"`
+	PersistentKeepalive int                    `json:"persistent_keepalive,omitempty"`
+	RemoteDNSResolve    bool                   `json:"remote_dns_resolve,omitempty"`
+	DNS                 []string               `json:"dns,omitempty"`
+	Peers               []WGPeer               `json:"peers,omitempty"`
+	AmneziaWG           map[string]interface{} `json:"amnezia_wg,omitempty"`
 }
 
 type WGPeer struct {
@@ -105,8 +110,10 @@ type WGPeer struct {
 }
 
 type SourceInfo struct {
-	Name string `json:"name,omitempty"`
-	Kind string `json:"kind,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	URLHash string `json:"url_hash,omitempty"`
 }
 
 func Bool(v bool) *bool {
@@ -114,19 +121,31 @@ func Bool(v bool) *bool {
 }
 
 func NormalizeNodes(nodes []NodeIR) []NodeIR {
+	return NormalizeNodesWithScope(nodes, "global")
+}
+
+func NormalizeNodesNoDedupe(nodes []NodeIR) []NodeIR {
 	normalized := make([]NodeIR, 0, len(nodes))
 	for _, node := range nodes {
 		normalized = append(normalized, NormalizeNode(node))
 	}
-	return DedupeNodes(normalized)
+	return normalized
+}
+
+func NormalizeNodesWithScope(nodes []NodeIR, scope string) []NodeIR {
+	normalized := NormalizeNodesNoDedupe(nodes)
+	return DedupeNodesByScope(normalized, scope)
 }
 
 func NormalizeNode(node NodeIR) NodeIR {
 	node.Type = Protocol(strings.ToLower(strings.TrimSpace(string(node.Type))))
 	node.Name = sanitizeText(node.Name)
 	node.Server = strings.ToLower(strings.TrimSpace(node.Server))
+	node.Source.ID = sanitizeText(node.Source.ID)
 	node.Source.Name = sanitizeText(node.Source.Name)
 	node.Source.Kind = sanitizeText(node.Source.Kind)
+	node.Source.URLHash = sanitizeText(node.Source.URLHash)
+	node.Sources = normalizeSourceList(node.Source, node.Sources)
 
 	if node.Port < 0 {
 		node.Port = 0
@@ -151,28 +170,100 @@ func NormalizeNode(node NodeIR) NodeIR {
 }
 
 func StableNodeID(node NodeIR) string {
-	payload := strings.Join([]string{
+	return StableNodeIDWithScope(node, "global", 0)
+}
+
+func StableNodeIDWithScope(node NodeIR, scope string, originalIndex int) string {
+	authDigest := sha256Hex(authFingerprint(node.Auth))
+	transportDigest := sha256Hex(transportFingerprint(node))
+	parts := []string{
 		string(node.Type),
 		strings.ToLower(strings.TrimSpace(node.Server)),
 		fmt.Sprintf("%d", node.Port),
-		sanitizeText(node.Name),
-		authFingerprint(node.Auth),
-	}, "|")
+		authDigest,
+		transportDigest,
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "per_source":
+		parts = append(parts, strings.ToLower(strings.TrimSpace(node.Source.ID)))
+	case "none":
+		parts = append(parts, strings.ToLower(strings.TrimSpace(node.Source.ID)), fmt.Sprintf("%d", originalIndex))
+	default:
+	}
+	payload := strings.Join(parts, "|")
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
 }
 
+func transportFingerprint(node NodeIR) string {
+	parts := []string{
+		strings.TrimSpace(node.Transport.Network),
+		strings.TrimSpace(node.Transport.Path),
+		strings.TrimSpace(node.Transport.Host),
+		strings.TrimSpace(node.Transport.ServiceName),
+		strings.TrimSpace(node.Transport.Mode),
+		strings.TrimSpace(node.TLS.SNI),
+		strings.TrimSpace(node.TLS.ClientFingerprint),
+		strings.TrimSpace(node.TLS.Fingerprint),
+	}
+
+	if node.Transport.NoGRPCHeader != nil {
+		parts = append(parts, strconv.FormatBool(*node.Transport.NoGRPCHeader))
+	}
+	parts = append(parts, append([]string(nil), node.Transport.H2Hosts...)...)
+
+	if node.TLS.Reality != nil {
+		parts = append(parts,
+			strings.TrimSpace(node.TLS.Reality.PublicKey),
+			strings.TrimSpace(node.TLS.Reality.ShortID),
+			strings.TrimSpace(node.TLS.Reality.SpiderX),
+		)
+	}
+	if node.TLS.ECH != nil {
+		parts = append(parts, strconv.FormatBool(node.TLS.ECH.Enabled), strings.TrimSpace(node.TLS.ECH.Config))
+	}
+	if node.WireGuard != nil {
+		parts = append(parts,
+			strings.TrimSpace(node.WireGuard.IP),
+			strings.TrimSpace(node.WireGuard.IPv6),
+			strconv.Itoa(node.WireGuard.MTU),
+			strconv.Itoa(node.WireGuard.PersistentKeepalive),
+		)
+		parts = append(parts, append([]string(nil), node.WireGuard.AllowedIPs...)...)
+	}
+	return strings.Join(parts, "|")
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
 func DedupeNodes(nodes []NodeIR) []NodeIR {
+	return DedupeNodesByScope(nodes, "global")
+}
+
+func DedupeNodesByScope(nodes []NodeIR, scope string) []NodeIR {
 	seen := make(map[string]int, len(nodes))
 	out := make([]NodeIR, 0, len(nodes))
 
-	for _, node := range nodes {
-		key := dedupeKey(node)
+	for index, node := range nodes {
+		node.ID = StableNodeIDWithScope(node, scope, index)
+		if strings.EqualFold(strings.TrimSpace(node.Source.Kind), "custom") && !strings.HasPrefix(node.ID, "custom-") {
+			node.ID = "custom-" + node.ID
+		}
+		key := dedupeKey(node, scope, index)
 		if idx, ok := seen[key]; ok {
+			if strings.EqualFold(strings.TrimSpace(scope), "none") {
+				seen[key] = len(out)
+				out = append(out, node)
+				continue
+			}
 			existing := out[idx]
 			existing.Tags = mergeUniqueStrings(existing.Tags, node.Tags)
 			existing.Warnings = mergeUniqueStrings(existing.Warnings, node.Warnings)
 			existing.Warnings = mergeUniqueStrings(existing.Warnings, []string{duplicateWarning(node.Source)})
+			existing.Sources = mergeSources(existing.Sources, append([]SourceInfo{existing.Source}, node.Source)...)
 			out[idx] = existing
 			continue
 		}
@@ -182,6 +273,51 @@ func DedupeNodes(nodes []NodeIR) []NodeIR {
 	}
 
 	return out
+}
+
+func normalizeSourceList(primary SourceInfo, sources []SourceInfo) []SourceInfo {
+	var out []SourceInfo
+	if primary.ID != "" || primary.Name != "" || primary.Kind != "" || primary.URLHash != "" {
+		out = append(out, normalizeSource(primary))
+	}
+	for _, source := range sources {
+		out = append(out, normalizeSource(source))
+	}
+	return mergeSources(nil, out...)
+}
+
+func normalizeSource(source SourceInfo) SourceInfo {
+	source.ID = sanitizeText(source.ID)
+	source.Name = sanitizeText(source.Name)
+	source.Kind = sanitizeText(source.Kind)
+	source.URLHash = sanitizeText(source.URLHash)
+	return source
+}
+
+func mergeSources(existing []SourceInfo, more ...SourceInfo) []SourceInfo {
+	seen := make(map[string]struct{}, len(existing)+len(more))
+	var out []SourceInfo
+	combined := append(append([]SourceInfo{}, existing...), more...)
+	for _, source := range combined {
+		source = normalizeSource(source)
+		key := strings.Join([]string{source.ID, source.Name, source.Kind, source.URLHash}, "|")
+		if key == "|||" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, source)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func MergeSourcesForView(node NodeIR) []SourceInfo {
+	return mergeSources(node.Sources, node.Source)
 }
 
 func defaultNodeName(node NodeIR) string {
@@ -211,7 +347,7 @@ func authFingerprint(auth Auth) string {
 	return strings.Join(values, "|")
 }
 
-func dedupeKey(node NodeIR) string {
+func dedupeKey(node NodeIR, scope string, originalIndex int) string {
 	transport := strings.Join([]string{
 		node.Transport.Network,
 		node.Transport.Path,
@@ -234,7 +370,19 @@ func dedupeKey(node NodeIR) string {
 		authKey,
 		transport,
 		node.TLS.SNI,
+		sourceDedupeKey(node.Source, scope, originalIndex),
 	}, "|")
+}
+
+func sourceDedupeKey(source SourceInfo, scope string, originalIndex int) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "per_source":
+		return strings.ToLower(strings.TrimSpace(source.ID))
+	case "none":
+		return strings.ToLower(strings.TrimSpace(source.ID)) + "|" + fmt.Sprintf("%d", originalIndex)
+	default:
+		return ""
+	}
 }
 
 func duplicateWarning(source SourceInfo) string {
@@ -258,6 +406,8 @@ func inferRegionTags(name string) []string {
 		{tag: "KR", substringPatterns: []string{"韩国", "KOREA", "韩"}, tokenPatterns: []string{"KR"}},
 		{tag: "DE", substringPatterns: []string{"德国", "GERMANY"}, tokenPatterns: []string{"DE"}},
 		{tag: "GB", substringPatterns: []string{"英国", "UNITED KINGDOM"}, tokenPatterns: []string{"GB", "UK"}},
+		{tag: "NL", substringPatterns: []string{"荷兰", "NETHERLANDS"}, tokenPatterns: []string{"NL"}},
+		{tag: "RU", substringPatterns: []string{"俄罗斯", "RUSSIA"}, tokenPatterns: []string{"RU"}},
 		{tag: "FR", substringPatterns: []string{"法国", "FRANCE"}, tokenPatterns: []string{"FR"}},
 		{tag: "CA", substringPatterns: []string{"加拿大", "CANADA"}, tokenPatterns: []string{"CA"}},
 		{tag: "AU", substringPatterns: []string{"澳大利亚", "AUSTRALIA"}, tokenPatterns: []string{"AU"}},

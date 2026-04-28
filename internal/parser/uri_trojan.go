@@ -30,6 +30,9 @@ func parseTrojan(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	node.Transport.Network = firstQuery(q, "type", "network")
 	node.Transport.Host = firstQuery(q, "host")
 	node.Transport.Path = firstQuery(q, "path")
+	if node.TLS.Insecure {
+		setRaw(&node, "skipCertVerify", true)
+	}
 	if raw := unknownQueryParams(q, "sni", "servername", "alpn", "allowInsecure", "allow-insecure", "insecure", "skip-cert-verify", "type", "network", "host", "path"); raw != nil {
 		node.Raw = raw
 	}

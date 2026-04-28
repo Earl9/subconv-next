@@ -68,3 +68,31 @@ func TestInferRegionTagsNoFalsePositiveFromNodeSuffix(t *testing.T) {
 		t.Fatalf("inferRegionTags(ss-node) = %#v, want empty", got)
 	}
 }
+
+func TestStableNodeIDIgnoresDisplayNameButTracksSecretDigest(t *testing.T) {
+	base := NormalizeNode(NodeIR{
+		Type:   ProtocolVLESS,
+		Name:   "Node A",
+		Server: "example.com",
+		Port:   443,
+		Auth:   Auth{UUID: "uuid-1"},
+		Source: SourceInfo{Name: "source-1", Kind: "subscription"},
+	})
+
+	renamed := base
+	renamed.ID = ""
+	renamed.Name = "Node B"
+	if StableNodeID(base) != StableNodeID(renamed) {
+		t.Fatalf("StableNodeID changed after rename: %q != %q", StableNodeID(base), StableNodeID(renamed))
+	}
+
+	changedSecret := base
+	changedSecret.ID = ""
+	changedSecret.Auth.UUID = "uuid-2"
+	if StableNodeID(base) == StableNodeID(changedSecret) {
+		t.Fatalf("StableNodeID did not change after secret fingerprint changed")
+	}
+	if StableNodeID(base) == "uuid-1" || StableNodeID(base) == "uuid-2" {
+		t.Fatalf("StableNodeID leaked secret content: %q", StableNodeID(base))
+	}
+}

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SubConv Next 订阅转换</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div>
+            <h1>SubConv Next 订阅转换</h1>
+            <p>将原始订阅快速转换为 Clash / Mihomo 可用的订阅配置</p>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <span id="backend-badge" class="status-badge online">
+            <span class="dot"></span>
+            Backend Online
+          </span>
+          <span class="version-badge">v1.0.0</span>
+          <button class="icon-button" type="button" title="帮助说明">?</button>
+        </div>
+      </header>
+
+      <nav class="workspace-tabs" aria-label="主工作区">
+        <button id="workspace-tab-config" class="workspace-tab active" type="button" data-workspace="config" data-button-icon="settings">配置生成</button>
+        <button id="workspace-tab-nodes" class="workspace-tab" type="button" data-workspace="nodes" data-button-icon="nodes">节点编辑</button>
+        <button id="workspace-tab-yaml" class="workspace-tab" type="button" data-workspace="yaml" data-button-icon="code">YAML 预览</button>
+        <button id="workspace-tab-diagnostics" class="workspace-tab" type="button" data-workspace="diagnostics" data-button-icon="terminal">诊断日志</button>
+      </nav>
+
+      <section id="workspace-config" class="workspace-panel active">
+        <div class="config-grid">
+          <div class="config-main">
+            <section class="panel">
+              <div class="panel-head">
+                <span class="section-badge" data-icon-name="settings"></span>
+                <div>
+                  <h2>基础设置</h2>
+                  <p class="panel-subtitle">订阅源、输出文件和基础筛选条件。</p>
+                </div>
+              </div>
+
+              <div class="basic-layout">
+                <div class="basic-sources">
+                  <div class="sub-section-head">
+                    <div class="sub-section-copy">
+                      <div class="sub-section-title">
+                        <span class="section-badge" data-icon-name="link"></span>
+                        <span>订阅源</span>
+                      </div>
+                      <p class="field-help">为每个订阅地址设置名称，生成节点时可自动标记来源。</p>
+                    </div>
+                    <div class="toolbar-group">
+                      <button id="add-subscription-btn" class="secondary-button small-button" type="button">添加订阅源</button>
+                      <button id="open-batch-import-btn" class="ghost-button small-button" type="button">批量导入</button>
+                    </div>
+                  </div>
+                  <div id="subscription-list" class="subscription-list"></div>
+                  <div class="source-foot">
+                    <p id="subscription-summary" class="field-help">已配置：0 个订阅源 · 0 个手动节点 · 0 个启用源</p>
+                  </div>
+                </div>
+
+                <div class="target-panel">
+                  <div class="sub-section-title">
+                    <span class="section-badge" data-icon-name="target"></span>
+                    <span>转换目标</span>
+                  </div>
+
+                  <div class="field">
+                    <label class="required" for="client-type">客户端类型</label>
+                    <select id="client-type">
+                      <option value="mihomo">Mihomo / Clash Meta</option>
+                      <option value="clash">Clash</option>
+                      <option value="singbox" disabled>Sing-box（Coming soon）</option>
+                    </select>
+                  </div>
+
+                  <div class="field">
+                    <label class="required" for="backend-origin">后端地址</label>
+                    <input id="backend-origin" type="text" placeholder="例如：http://10.0.0.66:9876 或域名地址" />
+                  </div>
+
+                  <div class="field">
+                    <label for="output-filename">转换文件名</label>
+                    <input id="output-filename" type="text" placeholder="例如：mihomo.yaml" />
+                  </div>
+
+                  <div class="field">
+                    <label for="subscription-token">订阅访问 Token</label>
+                    <input id="subscription-token" type="text" placeholder="留空表示不启用 Token" />
+                    <p class="field-help">配置后访问 /sub/mihomo.yaml 时需要附带 ?token=...</p>
+                  </div>
+                </div>
+
+                <div class="filter-panel">
+                  <div class="sub-section-title">
+                    <span class="section-badge" data-icon-name="filter"></span>
+                    <span>筛选条件</span>
+                  </div>
+                  <div class="filter-grid">
+                    <div class="field">
+                      <label for="include-keywords">包含关键词</label>
+                      <input id="include-keywords" type="text" placeholder="节点名包含的关键字，支持正则" />
+                      <p class="field-help">支持正则匹配节点名称，留空表示不过滤。</p>
+                    </div>
+
+                    <div class="field">
+                      <label for="exclude-keywords">排除关键词</label>
+                      <input id="exclude-keywords" type="text" placeholder="节点名不包含的关键字，支持正则" />
+                      <p class="field-help">支持正则匹配节点名称，留空表示不过滤。</p>
+                    </div>
+                  </div>
+                </div>
+
+                <details class="manual-inline-section">
+                  <summary>
+                    <span class="summary-inline">
+                      <span class="section-badge" data-icon-name="code"></span>
+                      <span>手动节点</span>
+                    </span>
+                  </summary>
+                  <p class="field-help">用于粘贴单个节点 URI 或 WireGuard 配置片段。</p>
+                  <div id="inline-list" class="subscription-list"></div>
+                  <div class="panel-actions">
+                    <button id="add-inline-btn" class="secondary-button small-button" type="button">添加手动节点</button>
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <span class="section-badge" data-icon-name="sliders"></span>
+                <div>
+                  <h2>输出选项</h2>
+                  <p class="panel-subtitle">影响最终 YAML 展示与默认行为的输出开关。</p>
+                </div>
+              </div>
+              <div id="options-grid" class="options-grid compact-options-grid"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <span class="section-badge" data-icon-name="rule"></span>
+                <div>
+                  <h2>规则来源</h2>
+                  <p class="panel-subtitle">选择规则模式或模板模式，决定生成时的规则来源与模板结构。</p>
+                </div>
+              </div>
+
+              <div class="info-banner">模板模式将使用完整模板覆盖规则类别选择，优先级更高。</div>
+
+              <div class="source-tabs">
+                <button id="source-mode-rules" class="tab-button active" type="button">规则模式</button>
+                <button id="source-mode-template" class="tab-button" type="button">模板模式</button>
+              </div>
+
+              <div id="rules-mode-panel" class="source-panel">
+                <div class="rule-mode-subtabs hidden">
+                  <button id="rule-subtab-builtin" class="tab-button active" type="button">内置规则</button>
+                  <button id="rule-subtab-custom" class="tab-button" type="button">自定义规则</button>
+                </div>
+
+                <div id="rule-builtin-panel" class="rule-subpanel">
+                  <div class="preset-row">
+                    <div class="preset-label">规则预设</div>
+                    <div class="preset-control" id="rule-preset-control">
+                      <button class="preset-chip" type="button" data-rule-mode="minimal">最小化</button>
+                      <button class="preset-chip" type="button" data-rule-mode="balanced">均衡</button>
+                      <button class="preset-chip active" type="button" data-rule-mode="full">全面</button>
+                      <button class="preset-chip" type="button" data-rule-mode="custom">自定义</button>
+                    </div>
+                  </div>
+
+                  <div id="rule-chip-grid" class="chip-grid"></div>
+                  <div id="rule-chip-extra-wrap" class="rule-extra-wrap hidden">
+                    <div id="rule-chip-grid-extra" class="chip-grid"></div>
+                  </div>
+
+                  <div class="rule-actions-row">
+                    <button id="toggle-rule-chips-btn" class="ghost-button small-button" type="button">展开全部</button>
+                  </div>
+                </div>
+
+                <div id="rule-custom-panel" class="rule-subpanel hidden">
+                  <div class="custom-rule-layout inline-custom-rule-layout">
+                    <section class="custom-rule-list-panel">
+                      <div class="sub-section-title">
+                        <span class="section-badge" data-icon-name="list"></span>
+                        <span>当前自定义规则</span>
+                      </div>
+                      <div id="custom-rule-list" class="custom-rule-list"></div>
+                    </section>
+
+                    <section class="custom-rule-editor-panel">
+                      <div class="sub-section-title">
+                        <span class="section-badge" data-icon-name="rule"></span>
+                        <span>规则编辑器</span>
+                      </div>
+                      <input id="custom-rule-edit-index" type="hidden" />
+                      <div class="field">
+                        <label for="custom-rule-key">规则 Key</label>
+                        <input id="custom-rule-key" type="text" placeholder="例如 my_rule" />
+                        <p class="field-help">用于内部识别，建议使用小写英文、数字和下划线。</p>
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-label">显示名称</label>
+                        <input id="custom-rule-label" type="text" placeholder="例如 我的规则" />
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-emoji">图标 / Emoji，可选</label>
+                        <input id="custom-rule-emoji" type="text" placeholder="例如 🧩" />
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-target-mode">目标策略</label>
+                        <select id="custom-rule-target-mode">
+                          <option value="new_group">新建同名代理组</option>
+                          <option value="existing_group">使用现有目标</option>
+                          <option value="direct">DIRECT</option>
+                          <option value="reject">REJECT</option>
+                        </select>
+                      </div>
+                      <div class="field" id="custom-rule-target-group-wrap">
+                        <label for="custom-rule-target-group">目标组名称</label>
+                        <input id="custom-rule-target-group" type="text" placeholder="例如 节点选择 / 自动选择 / 自定义代理组" />
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-source-type">规则来源类型</label>
+                        <select id="custom-rule-source-type">
+                          <option value="inline">内联规则</option>
+                          <option value="http">远程规则集 URL</option>
+                          <option value="file">本地文件路径</option>
+                          <option value="group_only">仅创建代理组，不生成规则</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-behavior">规则行为</label>
+                        <select id="custom-rule-behavior">
+                          <option value="domain">domain</option>
+                          <option value="ipcidr">ipcidr</option>
+                          <option value="classical">classical</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-format">规则格式</label>
+                        <select id="custom-rule-format">
+                          <option value="text">text</option>
+                          <option value="yaml">yaml</option>
+                          <option value="mrs">mrs</option>
+                        </select>
+                      </div>
+                      <div class="field" id="custom-rule-url-wrap">
+                        <label for="custom-rule-url">远程规则 URL</label>
+                        <input id="custom-rule-url" type="text" placeholder="https://example.com/rules/my_rule.mrs" />
+                      </div>
+                      <div class="field" id="custom-rule-path-wrap">
+                        <label for="custom-rule-path">本地文件路径</label>
+                        <input id="custom-rule-path" type="text" placeholder="./ruleset/my_rule.yaml" />
+                      </div>
+                      <div class="field" id="custom-rule-interval-wrap">
+                        <label for="custom-rule-interval">更新间隔</label>
+                        <input id="custom-rule-interval" type="number" min="1" placeholder="86400" />
+                      </div>
+                      <div class="field">
+                        <label for="custom-rule-insert-position">插入位置</label>
+                        <select id="custom-rule-insert-position">
+                          <option value="before_match">before_match</option>
+                          <option value="after_adblock">after_adblock</option>
+                          <option value="before_domestic">before_domestic</option>
+                          <option value="before_non_cn">before_non_cn</option>
+                        </select>
+                      </div>
+                      <label class="checkbox-line"><input id="custom-rule-enabled" type="checkbox" checked /> 启用该规则</label>
+                      <label class="checkbox-line"><input id="custom-rule-no-resolve" type="checkbox" /> no-resolve</label>
+                      <div class="field full-span" id="custom-rule-payload-wrap">
+                        <label for="custom-rule-payload">内联规则内容</label>
+                        <textarea id="custom-rule-payload" rows="10" class="code-textarea" placeholder="+.example.com&#10;example.org&#10;DOMAIN-SUFFIX,example.com"></textarea>
+                      </div>
+                      <div class="field">
+                        <label>预览</label>
+                        <pre id="custom-rule-preview" class="custom-rule-preview">未填写</pre>
+                      </div>
+                      <div class="modal-actions">
+                        <button id="save-custom-rule-btn" class="primary-button" type="button">保存规则</button>
+                        <button id="reset-custom-rule-form-btn" class="ghost-button" type="button">新建规则</button>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </div>
+
+              <div id="template-mode-panel" class="source-panel hidden">
+                <div class="field">
+                  <label for="template-select">模板目录</label>
+                  <select id="template-select"></select>
+                  <p class="field-help">下拉选择内置兼容模板目录，模板模式启用后将接管规则来源与代理组结构。</p>
+                </div>
+
+                <div id="template-detail-card" class="template-detail-card"></div>
+
+                <div id="custom-template-url-wrap" class="field hidden">
+                  <label for="custom-template-url">外部配置 URL</label>
+                  <input id="custom-template-url" type="text" placeholder="https://example.com/config.yaml" />
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="config-side">
+            <section class="panel summary-panel">
+              <div class="panel-head simple-head">
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="database"></span>
+                  <h2>当前配置摘要</h2>
+                </div>
+              </div>
+              <div id="summary-list" class="summary-list"></div>
+            </section>
+
+            <section id="result-panel" class="panel result-panel">
+              <div class="panel-head simple-head">
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="check"></span>
+                  <h2>生成结果</h2>
+                </div>
+              </div>
+
+              <div id="result-empty" class="empty-state">等待生成订阅链接</div>
+
+              <div id="result-content">
+                <div id="result-status" class="result-status hidden">
+                  <span class="success-dot"></span>
+                  <span>订阅链接已生成</span>
+                </div>
+                <div id="generated-time" class="meta-text"></div>
+                <p id="generated-note" class="meta-text">将此地址导入 Clash / Mihomo。客户端更新订阅时，会自动通过 SubConv Next 拉取上游并生成最新配置。</p>
+
+                <div class="field compact-field">
+                  <label for="generated-url">新订阅链接</label>
+                  <input id="generated-url" type="text" readonly />
+                </div>
+
+                <div class="result-actions">
+                  <button id="copy-generated-url-btn" class="secondary-button small-button" type="button">复制</button>
+                  <button id="open-generated-url-btn" class="ghost-button small-button" type="button">打开</button>
+                  <button id="import-generated-btn" class="ghost-button small-button" type="button">一键导入</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel node-summary-panel">
+              <div class="panel-head simple-head">
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="nodes"></span>
+                  <h2>节点摘要</h2>
+                </div>
+              </div>
+              <div id="config-node-summary-list" class="summary-list"></div>
+              <div class="panel-actions">
+                <button id="summary-refresh-btn" class="ghost-button small-button" type="button">立即刷新</button>
+                <button id="open-node-editor-btn" class="secondary-button" type="button">进入节点编辑</button>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <div class="sticky-action-bar">
+          <div class="sticky-action-inner">
+            <button id="generate-btn" class="primary-button" type="button">生成订阅链接</button>
+            <button id="import-btn" class="secondary-button" type="button">一键导入 Clash</button>
+            <button id="save-config-btn" class="ghost-button" type="button">保存配置</button>
+            <button id="preview-btn" class="ghost-button" type="button">预览 YAML</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="workspace-nodes" class="workspace-panel hidden">
+        <section class="panel node-editor-page">
+          <div class="panel-head">
+            <span class="section-badge" data-icon-name="nodes"></span>
+            <div>
+              <h2>节点编辑器</h2>
+              <p class="panel-subtitle">查看、筛选和编辑解析后的节点；修改会保存为本地覆盖规则，订阅更新后仍会自动应用。</p>
+            </div>
+          </div>
+
+          <div id="node-stats-strip" class="stats-strip"></div>
+
+          <div class="node-toolbar shell-toolbar">
+            <div class="toolbar-group toolbar-group-left">
+              <input id="node-search" type="text" placeholder="搜索节点名称、服务器、协议、地区" />
+              <select id="node-type-filter">
+                <option value="all">全部协议</option>
+                <option value="ss">ss</option>
+                <option value="vmess">vmess</option>
+                <option value="vless">vless</option>
+                <option value="trojan">trojan</option>
+                <option value="hysteria2">hysteria2</option>
+                <option value="tuic">tuic</option>
+                <option value="anytls">anytls</option>
+                <option value="wireguard">wireguard</option>
+                <option value="http">http</option>
+                <option value="socks5">socks5</option>
+              </select>
+              <select id="node-region-filter">
+                <option value="ALL">全部地区</option>
+                <option value="HK">香港</option>
+                <option value="JP">日本</option>
+                <option value="US">美国</option>
+                <option value="SG">新加坡</option>
+                <option value="TW">台湾</option>
+                <option value="KR">韩国</option>
+                <option value="GB">英国</option>
+                <option value="DE">德国</option>
+                <option value="NL">荷兰</option>
+                <option value="RU">俄罗斯</option>
+                <option value="OTHER">其它</option>
+              </select>
+              <select id="node-status-filter">
+                <option value="all">全部节点</option>
+                <option value="enabled">已启用</option>
+                <option value="disabled">已禁用</option>
+                <option value="modified">已修改</option>
+                <option value="warning">有警告</option>
+              </select>
+              <select id="node-source-filter">
+                <option value="">全部来源</option>
+              </select>
+            </div>
+
+            <div class="toolbar-group toolbar-group-right">
+              <button id="refresh-nodes-btn" class="ghost-button small-button" type="button">刷新节点列表</button>
+            </div>
+          </div>
+
+          <div class="node-table-wrap tall-table">
+            <table class="node-table modern-node-table">
+              <thead>
+                <tr>
+                  <th>节点</th>
+                  <th>协议 / 地区</th>
+                  <th>地址</th>
+                  <th>特性</th>
+                  <th>来源</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="node-table-body">
+                <tr>
+                  <td colspan="6" class="table-empty">正在加载节点列表...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="table-footer">
+            <div class="table-footer-left">
+              <label for="node-page-size">每页显示</label>
+              <select id="node-page-size">
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
+            <div class="table-footer-right">
+              <button id="node-prev-page-btn" class="ghost-button small-button" type="button">上一页</button>
+              <span id="node-page-info" class="meta-text">第 1 页</span>
+              <button id="node-next-page-btn" class="ghost-button small-button" type="button">下一页</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="workspace-yaml" class="workspace-panel hidden">
+        <section class="panel full-panel">
+          <div class="panel-head simple-head">
+            <div>
+              <div class="card-title">
+                <span class="section-badge" data-icon-name="code"></span>
+                <h2>YAML 预览</h2>
+              </div>
+              <p class="panel-subtitle">独立查看、搜索、复制和下载当前生成的 Mihomo YAML。</p>
+            </div>
+          </div>
+
+          <div class="yaml-toolbar">
+            <div class="toolbar-group toolbar-group-left">
+              <button id="refresh-yaml-btn" class="ghost-button small-button" type="button">刷新预览</button>
+              <button id="download-yaml-btn" class="ghost-button small-button" type="button">下载 YAML</button>
+              <button id="copy-yaml-btn" class="secondary-button small-button" type="button">复制全部</button>
+            </div>
+            <div class="toolbar-group toolbar-group-right">
+              <input id="yaml-search" type="text" placeholder="搜索 YAML 内容" />
+              <label class="checkbox-line compact-check"><input id="yaml-wrap-toggle" type="checkbox" checked /> 自动换行</label>
+            </div>
+          </div>
+
+          <div class="yaml-meta-bar">
+            <span id="yaml-search-meta" class="meta-text">预览内容为前 500 行，完整内容请下载使用。</span>
+          </div>
+
+          <div id="yaml-viewer" class="yaml-viewer wrapped">
+            <pre id="yaml-line-numbers" class="yaml-gutter"></pre>
+            <pre id="yaml-code-content" class="yaml-code-content"></pre>
+          </div>
+        </section>
+      </section>
+
+      <section id="workspace-diagnostics" class="workspace-panel hidden">
+        <div class="diagnostic-grid">
+          <section class="panel">
+            <div class="panel-head simple-head">
+              <div>
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="alert"></span>
+                  <h2>生成诊断</h2>
+                </div>
+                <p class="panel-subtitle">基于节点校验结果与最近运行日志，快速检查当前配置健康状态。</p>
+              </div>
+              <button id="refresh-diagnostics-btn" class="ghost-button small-button" type="button">刷新诊断</button>
+            </div>
+
+            <div id="diagnostic-counters" class="diagnostic-counters"></div>
+            <div id="diagnostic-status-summary" class="status-summary-card"></div>
+            <div id="diagnostic-warning-list" class="diagnostic-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head simple-head">
+              <div>
+                <div class="card-title">
+                  <span class="section-badge" data-icon-name="terminal"></span>
+                  <h2>运行日志</h2>
+                </div>
+                <p class="panel-subtitle">显示最近 200 行运行日志；可刷新、复制，或仅清空当前前端显示。</p>
+              </div>
+            </div>
+
+            <div class="inline-toolbar">
+              <button id="refresh-logs-btn" class="ghost-button small-button" type="button">刷新日志</button>
+              <button id="copy-logs-btn" class="secondary-button small-button" type="button">复制日志</button>
+              <button id="clear-logs-display-btn" class="ghost-button small-button" type="button">清空显示</button>
+            </div>
+
+            <pre id="logs-output" class="diagnostic-logs-output">正在加载 /api/logs?tail=200 ...</pre>
+          </section>
+        </div>
+      </section>
+
+      <dialog id="node-dialog" class="modal-dialog narrow-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head">
+            <div>
+              <h3>编辑节点</h3>
+              <p id="node-dialog-meta" class="meta-text"></p>
+            </div>
+            <button id="close-node-dialog-btn" class="icon-button" type="button">×</button>
+          </div>
+
+          <input id="edit-node-id" type="hidden" />
+
+          <div class="dialog-tab-panels">
+            <section class="dialog-tab-panel active">
+              <div class="dialog-grid two-col">
+                <div class="field">
+                  <label for="edit-node-name">节点名称</label>
+                  <input id="edit-node-name" type="text" />
+                </div>
+                <div class="field">
+                  <label for="edit-node-type">协议类型</label>
+                  <input id="edit-node-type" type="text" readonly />
+                </div>
+                <div class="field">
+                  <label for="edit-node-source">来源</label>
+                  <input id="edit-node-source" type="text" readonly />
+                </div>
+                <div class="field">
+                  <label for="edit-node-stable-short">稳定 ID</label>
+                  <input id="edit-node-stable-short" type="text" readonly />
+                </div>
+              </div>
+              <p class="field-help">删除节点会将远程节点标记为本地删除，手动节点则直接移除。</p>
+            </section>
+          </div>
+
+          <div class="modal-actions">
+            <button id="save-node-btn" class="primary-button" type="button">保存名称</button>
+            <button id="delete-node-btn" class="secondary-button" type="button">删除节点</button>
+            <button class="ghost-button" type="button" data-close-dialog="node-dialog">取消</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="batch-import-dialog" class="modal-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head">
+            <div>
+              <h3>批量导入订阅源</h3>
+              <p class="meta-text">支持每行一个 URL、名称|URL、名称,URL，或用 | 分隔的旧格式。</p>
+            </div>
+            <button class="icon-button" type="button" data-close-dialog="batch-import-dialog">×</button>
+          </div>
+          <div class="field">
+            <label for="batch-import-textarea">导入内容</label>
+            <textarea id="batch-import-textarea" rows="12" class="code-textarea" placeholder="主力机场|https://a.com/sub&#10;备用订阅|https://b.com/sub&#10;https://c.com/sub"></textarea>
+          </div>
+          <div class="modal-actions">
+            <button id="apply-batch-import-btn" class="primary-button" type="button">导入订阅源</button>
+            <button class="ghost-button" type="button" data-close-dialog="batch-import-dialog">取消</button>
+          </div>
+        </form>
+      </dialog>
+
+
+      <div id="toast" class="toast hidden"></div>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

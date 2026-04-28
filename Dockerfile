@@ -5,7 +5,7 @@ WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY static ./static

@@ -30,6 +30,7 @@ func parseVMess(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	node.Transport.Network = stringField(payload, "net")
 	node.Transport.Host = stringField(payload, "host")
 	node.Transport.Path = stringField(payload, "path")
+	node.Transport.H2Hosts = parseCSV(stringField(payload, "host"))
 	node.TLS.SNI = stringField(payload, "sni")
 	node.TLS.ALPN = parseCSV(stringField(payload, "alpn"))
 	node.TLS.ClientFingerprint = stringField(payload, "fp")

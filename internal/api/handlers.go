@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"subconv-next/internal/config"
@@ -24,6 +26,12 @@ type statusResponse struct {
 	Running                  bool     `json:"running"`
 	LastRefreshAt            string   `json:"last_refresh_at"`
 	LastSuccessAt            string   `json:"last_success_at"`
+	NextRefreshAt            string   `json:"next_refresh_at"`
+	RefreshInterval          int      `json:"refresh_interval"`
+	Refreshing               bool     `json:"refreshing"`
+	YAMLExists               bool     `json:"yaml_exists"`
+	YAMLUpdatedAt            string   `json:"yaml_updated_at"`
+	UpstreamSourceCount      int      `json:"upstream_source_count"`
 	NodeCount                int      `json:"node_count"`
 	NodeNames                []string `json:"node_names,omitempty"`
 	EnabledSubscriptionCount int      `json:"enabled_subscription_count"`
@@ -56,24 +64,6 @@ type generateResponse struct {
 type configResponse struct {
 	OK     bool         `json:"ok"`
 	Config model.Config `json:"config"`
-}
-
-type nodeSummary struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Type       string   `json:"type"`
-	Server     string   `json:"server,omitempty"`
-	Port       int      `json:"port,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	SourceName string   `json:"source_name,omitempty"`
-	SourceKind string   `json:"source_kind,omitempty"`
-}
-
-type nodesResponse struct {
-	OK       bool                `json:"ok"`
-	Nodes    []nodeSummary       `json:"nodes"`
-	Warnings []string            `json:"warnings,omitempty"`
-	Errors   []parser.ParseError `json:"errors,omitempty"`
 }
 
 type refreshResponse struct {
@@ -111,11 +101,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Running:                  status.Running,
 		LastRefreshAt:            formatTime(status.LastRefreshAt),
 		LastSuccessAt:            formatTime(status.LastSuccessAt),
+		NextRefreshAt:            formatTime(status.NextRefreshAt),
+		RefreshInterval:          status.RefreshInterval,
+		Refreshing:               status.Refreshing,
+		YAMLExists:               status.YAMLExists,
+		YAMLUpdatedAt:            formatTime(status.YAMLUpdatedAt),
+		UpstreamSourceCount:      status.UpstreamSourceCount,
 		NodeCount:                status.NodeCount,
 		NodeNames:                status.NodeNames,
 		EnabledSubscriptionCount: status.EnabledSubscriptionCount,
 		OutputPath:               status.OutputPath,
-		LastError:                status.LastError,
+		LastError:                maskSensitiveText(status.LastError),
 	})
 }
 
@@ -185,6 +181,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
+		req = config.Normalize(req)
 		if err := config.Validate(req); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
 			return
@@ -211,72 +208,29 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
-		return
-	}
-
-	collected := pipeline.CollectPreviewNodes(s.snapshotConfig())
-	nodes := make([]nodeSummary, 0, len(collected.Nodes))
-	for _, node := range collected.Nodes {
-		nodes = append(nodes, nodeSummary{
-			ID:         node.ID,
-			Name:       node.Name,
-			Type:       string(node.Type),
-			Server:     node.Server,
-			Port:       node.Port,
-			Tags:       append([]string(nil), node.Tags...),
-			SourceName: node.Source.Name,
-			SourceKind: node.Source.Kind,
-		})
-	}
-
-	writeJSON(w, http.StatusOK, nodesResponse{
-		OK:       true,
-		Nodes:    nodes,
-		Warnings: collected.Warnings,
-		Errors:   collected.Errors,
-	})
-}
-
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
 	}
 
-	result, err := pipeline.RenderConfig(s.snapshotConfig())
-	now := time.Now().UTC()
+	outcome, err := s.startRefresh("manual refresh")
+	if errors.Is(err, ErrRefreshInProgress) {
+		writeAPIError(w, http.StatusConflict, "REFRESH_IN_PROGRESS", "refresh is already running")
+		return
+	}
 	if err != nil {
 		message := err.Error()
 		if errors.Is(err, pipeline.ErrNoNodes) {
 			message = "no nodes available for rendering"
 		}
-		s.setRefreshFailure(message, now)
-		s.appendLog("refresh failed: " + message)
 		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", message)
 		return
 	}
-	if err := pipeline.WriteRendered(result.OutputPath, result.YAML); err != nil {
-		s.setRefreshFailure(err.Error(), now)
-		s.appendLog("refresh write failed: " + err.Error())
-		writeAPIError(w, http.StatusInternalServerError, "WRITE_FAILED", err.Error())
-		return
-	}
-
-	s.setRefreshSuccess(result.NodeCount, nodeNames(result.Nodes), result.OutputPath, now)
-	for _, warning := range result.Warnings {
-		s.appendLog("refresh warning: " + warning)
-	}
-	for _, parseErr := range result.Errors {
-		s.appendLog("refresh parse error [" + parseErr.Kind + "]: " + parseErr.Message)
-	}
-	s.appendLog("refresh succeeded: wrote " + result.OutputPath)
 	writeJSON(w, http.StatusOK, refreshResponse{
 		OK:         true,
-		NodeCount:  result.NodeCount,
-		OutputPath: result.OutputPath,
+		NodeCount:  outcome.Result.NodeCount,
+		OutputPath: outcome.Result.OutputPath,
 	})
 }
 
@@ -287,50 +241,124 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 	}
 
 	cfg := s.snapshotConfig()
-	if existing, err := os.ReadFile(cfg.Service.OutputPath); err == nil && len(existing) > 0 {
-		writeSubscriptionYAML(w, r, existing)
+	if !subscriptionTokenAllowed(cfg, r) {
+		writeAPIError(w, http.StatusForbidden, "INVALID_SUBSCRIPTION_TOKEN", "invalid subscription token")
+		return
+	}
+	if rawURL := strings.TrimSpace(r.URL.Query().Get("url")); rawURL != "" {
+		overrideCfg := cfg
+		overrideCfg.Subscriptions = []model.SubscriptionConfig{
+			{
+				Name:      "quick-import",
+				Enabled:   true,
+				URL:       rawURL,
+				UserAgent: model.DefaultUserAgent,
+			},
+		}
+		overrideCfg.Inline = []model.InlineConfig{}
+
+		result, err := pipeline.RenderConfig(overrideCfg)
+		if err != nil {
+			message := err.Error()
+			if errors.Is(err, pipeline.ErrNoNodes) {
+				message = "no nodes available for rendering"
+			}
+			writeAPIError(w, http.StatusBadRequest, "SUBSCRIPTION_UNAVAILABLE", message)
+			return
+		}
+
+		writeSubscriptionYAML(w, r, overrideCfg, result.YAML, "fresh", "", result.NodeCount, time.Now().UTC())
 		return
 	}
 
-	result, err := pipeline.RenderConfig(cfg)
-	now := time.Now().UTC()
+	status := s.snapshotStatus()
+	existing, readErr := os.ReadFile(cfg.Service.OutputPath)
+	hasExisting := readErr == nil && len(existing) > 0
+	expired := cacheExpired(cfg.Service.OutputPath, effectiveRefreshInterval(cfg))
+
+	if hasExisting && (!cfg.Service.RefreshOnRequest || !expired) {
+		writeSubscriptionYAML(w, r, cfg, existing, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
+		return
+	}
+
+	outcome, err := s.startRefresh("subscription refresh")
+	if errors.Is(err, ErrRefreshInProgress) {
+		if hasExisting {
+			writeSubscriptionYAML(w, r, cfg, existing, "cached", "", status.NodeCount, status.YAMLUpdatedAt)
+			return
+		}
+		if s.waitForRefresh(time.Duration(cfg.Service.FetchTimeoutSeconds) * time.Second) {
+			latest, latestErr := os.ReadFile(cfg.Service.OutputPath)
+			if latestErr == nil && len(latest) > 0 {
+				latestStatus := s.snapshotStatus()
+				writeSubscriptionYAML(w, r, cfg, latest, "fresh", "", latestStatus.NodeCount, latestStatus.YAMLUpdatedAt)
+				return
+			}
+		}
+		writeAPIError(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", "refresh is already running")
+		return
+	}
 	if err != nil {
 		message := err.Error()
 		if errors.Is(err, pipeline.ErrNoNodes) {
 			message = "no nodes available for rendering"
 		}
-		s.setRefreshFailure(message, now)
-		s.appendLog("subscription render failed: " + message)
-		writeAPIError(w, http.StatusNotFound, "SUBSCRIPTION_UNAVAILABLE", message)
-		return
-	}
-	if err := pipeline.WriteRendered(result.OutputPath, result.YAML); err != nil {
-		s.setRefreshFailure(err.Error(), now)
-		s.appendLog("subscription write failed: " + err.Error())
-		writeAPIError(w, http.StatusInternalServerError, "WRITE_FAILED", err.Error())
+		if cfg.Service.StaleIfError && hasExisting {
+			writeSubscriptionYAML(w, r, cfg, existing, "stale", "upstream refresh failed, served stale config", status.NodeCount, status.YAMLUpdatedAt)
+			return
+		}
+		writeAPIError(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", message)
 		return
 	}
 
-	s.setRefreshSuccess(result.NodeCount, nodeNames(result.Nodes), result.OutputPath, now)
-	for _, warning := range result.Warnings {
-		s.appendLog("subscription warning: " + warning)
-	}
-	for _, parseErr := range result.Errors {
-		s.appendLog("subscription parse error [" + parseErr.Kind + "]: " + parseErr.Message)
-	}
-	s.appendLog("subscription served: " + result.OutputPath)
-	writeSubscriptionYAML(w, r, result.YAML)
+	writeSubscriptionYAML(w, r, cfg, outcome.Result.YAML, "fresh", "", outcome.Result.NodeCount, outcome.At)
 }
 
-func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, data []byte) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+func subscriptionTokenAllowed(cfg model.Config, r *http.Request) bool {
+	token := strings.TrimSpace(cfg.Service.SubscriptionToken)
+	if token == "" {
+		return true
+	}
+	return r.URL.Query().Get("token") == token
+}
+
+func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Config, data []byte, refreshStatus, warning string, nodeCount int, generatedAt time.Time) {
+	filename := sanitizeOutputFilename(cfg.Render.OutputFilename)
+	if filename == "" {
+		filename = "mihomo.yaml"
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if !generatedAt.IsZero() {
+		w.Header().Set("X-SubConv-Generated-At", generatedAt.UTC().Format(time.RFC3339))
+	}
+	if nodeCount > 0 {
+		w.Header().Set("X-SubConv-Node-Count", strconv.Itoa(nodeCount))
+	}
+	if refreshStatus != "" {
+		w.Header().Set("X-SubConv-Refresh-Status", refreshStatus)
+	}
+	if warning != "" {
+		w.Header().Set("X-SubConv-Warning", warning)
+	}
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	} else {
-		w.Header().Set("Content-Disposition", `inline; filename="mihomo.yaml"`)
+		w.Header().Set("Content-Disposition", `inline; filename="`+filename+`"`)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func sanitizeOutputFilename(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.Base(value)
+	value = strings.ReplaceAll(value, `"`, "")
+	value = strings.ReplaceAll(value, `'`, "")
+	return value
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

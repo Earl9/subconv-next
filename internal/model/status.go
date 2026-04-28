@@ -7,6 +7,12 @@ type RuntimeStatus struct {
 	Running                  bool
 	LastRefreshAt            time.Time
 	LastSuccessAt            time.Time
+	NextRefreshAt            time.Time
+	RefreshInterval          int
+	Refreshing               bool
+	YAMLExists               bool
+	YAMLUpdatedAt            time.Time
+	UpstreamSourceCount      int
 	NodeCount                int
 	NodeNames                []string
 	EnabledSubscriptionCount int

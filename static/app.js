@@ -1,6 +1,9 @@
 const state = {
   config: null,
   status: null,
+  uiMode: loadSavedMode(),
+  basicSourceInput: "",
+  basicGeneratedSource: "",
   collectedNodes: null,
   collectedNodeWarnings: [],
   collectedNodeErrors: [],
@@ -66,7 +69,17 @@ function bindButtons() {
   document.getElementById("refresh-btn").addEventListener("click", refreshNow);
   document.getElementById("save-btn").addEventListener("click", saveConfig);
   document.getElementById("config-save-btn").addEventListener("click", saveConfig);
+  document.getElementById("mode-basic-btn").addEventListener("click", () => setUIMode("basic"));
+  document.getElementById("mode-advanced-btn").addEventListener("click", () => setUIMode("advanced"));
   document.getElementById("copy-sub-url-btn").addEventListener("click", copySubscriptionURL);
+  document.getElementById("basic-generate-btn").addEventListener("click", generateBasicSubscription);
+  document.getElementById("basic-clear-btn").addEventListener("click", clearBasicSubscription);
+  document.getElementById("basic-open-btn").addEventListener("click", openCurrentSubscriptionURL);
+  document.getElementById("basic-subscription-input").addEventListener("input", (event) => {
+    state.basicSourceInput = event.target.value;
+    state.basicGeneratedSource = "";
+    renderSubscriptionURL();
+  });
   document.getElementById("preview-reload-btn").addEventListener("click", loadPreview);
   document.getElementById("copy-yaml-btn").addEventListener("click", copyPreviewYAML);
   document.getElementById("add-subscription-btn").addEventListener("click", addSubscription);
@@ -101,6 +114,9 @@ async function loadConfig() {
   }
 
   state.config = response.config;
+  if (!state.basicSourceInput) {
+    state.basicSourceInput = defaultBasicSourceInput(response.config);
+  }
   invalidateCollectedNodes();
   renderConfig();
 }
@@ -108,7 +124,12 @@ async function loadConfig() {
 async function loadPreview() {
   const output = document.getElementById("preview-output");
   try {
-    const url = new URL("/sub/mihomo.yaml", window.location.href);
+    const sourceURL = subscriptionURL();
+    if (!sourceURL) {
+      output.textContent = "默认模式请输入订阅链接并点击生成。";
+      return;
+    }
+    const url = new URL(sourceURL);
     url.searchParams.set("_ts", String(Date.now()));
     const response = await fetch(url);
     if (!response.ok) {
@@ -123,6 +144,12 @@ async function loadPreview() {
 }
 
 async function refreshNow() {
+  if (state.uiMode === "basic") {
+    await loadPreview();
+    showToast("预览已刷新。");
+    return;
+  }
+
   const response = await refreshRenderedOutput();
   if (!response || !response.ok) {
     showToast(readAPIError(response) || "刷新失败。", true);
@@ -175,17 +202,41 @@ function renderSubscriptionURL() {
   const url = subscriptionURL();
   const input = document.getElementById("sub-link-output");
   const open = document.getElementById("open-sub-url-btn");
+  const download = document.getElementById("download-yaml-btn");
+  const basicOpen = document.getElementById("basic-open-btn");
+
+  if (!url) {
+    input.value = "请先在默认模式输入订阅链接并点击生成。";
+    open.href = "#";
+    download.href = "#";
+    basicOpen.disabled = true;
+    return;
+  }
+
   input.value = url;
   open.href = url;
+  download.href = downloadURL(url);
+  basicOpen.disabled = false;
 }
 
 function subscriptionURL() {
-  return new URL("/sub/mihomo.yaml", window.location.href).toString();
+  if (state.uiMode === "basic") {
+    if (!state.basicGeneratedSource) {
+      return "";
+    }
+    return quickSubscriptionURL(state.basicGeneratedSource);
+  }
+  return staticSubscriptionURL();
 }
 
 async function copySubscriptionURL() {
+  const url = subscriptionURL();
+  if (!url) {
+    showToast("请先生成转换订阅链接。", true);
+    return;
+  }
   try {
-    await copyText(subscriptionURL());
+    await copyText(url);
     showToast("订阅链接已复制。");
   } catch (error) {
     console.error(error);
@@ -194,6 +245,7 @@ async function copySubscriptionURL() {
 }
 
 function renderConfig() {
+  renderMode();
   renderRulesetCatalog();
   renderAdditionalRules();
   renderRuleProviders();
@@ -206,6 +258,100 @@ async function refreshRenderedOutput() {
   return fetchJSON("/api/refresh", {
     method: "POST",
   });
+}
+
+function renderMode() {
+  const basicButton = document.getElementById("mode-basic-btn");
+  const advancedButton = document.getElementById("mode-advanced-btn");
+  const basicPanel = document.getElementById("basic-mode-panel");
+  const advancedPanel = document.getElementById("advanced-mode-panel");
+  const summary = document.getElementById("compact-summary");
+  const saveButton = document.getElementById("save-btn");
+  const refreshButton = document.getElementById("refresh-btn");
+  const configSaveButton = document.getElementById("config-save-btn");
+  const title = document.getElementById("builder-title");
+  const basicInput = document.getElementById("basic-subscription-input");
+  const subscriptionEyebrow = document.getElementById("subscription-panel-eyebrow");
+  const subscriptionTitle = document.getElementById("subscription-panel-title");
+  const subscriptionLabel = document.getElementById("sub-link-label");
+
+  basicButton.classList.toggle("active", state.uiMode === "basic");
+  advancedButton.classList.toggle("active", state.uiMode === "advanced");
+  basicPanel.classList.toggle("hidden", state.uiMode !== "basic");
+  advancedPanel.classList.toggle("hidden", state.uiMode !== "advanced");
+  summary.classList.toggle("hidden", state.uiMode !== "advanced");
+  saveButton.classList.toggle("hidden", state.uiMode !== "advanced");
+  refreshButton.classList.toggle("hidden", state.uiMode !== "advanced");
+  configSaveButton.classList.toggle("hidden", state.uiMode !== "advanced");
+  title.textContent = state.uiMode === "basic" ? "快速转换" : "导入与规则";
+  subscriptionEyebrow.textContent = state.uiMode === "basic" ? "转换结果" : "订阅链接";
+  subscriptionTitle.textContent = state.uiMode === "basic" ? "转换后订阅地址" : "当前订阅地址";
+  subscriptionLabel.textContent = state.uiMode === "basic" ? "转换订阅 URL" : "Mihomo 订阅 URL";
+  basicInput.value = state.basicSourceInput || "";
+  renderSubscriptionURL();
+}
+
+function setUIMode(mode) {
+  state.uiMode = mode === "advanced" ? "advanced" : "basic";
+  window.localStorage.setItem("subconv-next-ui-mode", state.uiMode);
+  renderMode();
+  loadPreview();
+}
+
+function loadSavedMode() {
+  return window.localStorage.getItem("subconv-next-ui-mode") === "advanced" ? "advanced" : "basic";
+}
+
+function defaultBasicSourceInput(cfg) {
+  const subscriptions = cfg?.subscriptions || [];
+  const firstEnabled = subscriptions.find((item) => item.enabled && item.url);
+  const first = firstEnabled || subscriptions.find((item) => item.url);
+  return first?.url || "";
+}
+
+function staticSubscriptionURL() {
+  return new URL("/sub/mihomo.yaml", window.location.href).toString();
+}
+
+function quickSubscriptionURL(rawSource) {
+  const target = new URL("/sub/mihomo.yaml", window.location.href);
+  target.searchParams.set("url", rawSource.trim());
+  return target.toString();
+}
+
+function downloadURL(rawURL) {
+  const target = new URL(rawURL);
+  target.searchParams.set("download", "1");
+  return target.toString();
+}
+
+async function generateBasicSubscription() {
+  const source = state.basicSourceInput.trim();
+  if (!source) {
+    showToast("请先输入订阅链接。", true);
+    return;
+  }
+
+  state.basicGeneratedSource = source;
+  renderSubscriptionURL();
+  await loadPreview();
+  showToast("转换订阅链接已生成。");
+}
+
+function clearBasicSubscription() {
+  state.basicSourceInput = "";
+  state.basicGeneratedSource = "";
+  renderMode();
+  loadPreview();
+}
+
+function openCurrentSubscriptionURL() {
+  const url = subscriptionURL();
+  if (!url) {
+    showToast("请先生成转换订阅链接。", true);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function renderRulesetCatalog() {

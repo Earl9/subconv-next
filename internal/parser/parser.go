@@ -59,7 +59,7 @@ func parseByKind(kind InputKind, content []byte, source model.SourceInfo, depth 
 				Errors: []ParseError{{Kind: "UNKNOWN_INPUT", Message: "unsupported subscription content"}},
 			}
 		}
-		return ParseResult{Nodes: model.NormalizeNodes([]model.NodeIR{node})}
+		return ParseResult{Nodes: model.NormalizeNodesNoDedupe([]model.NodeIR{node})}
 	}
 }
 
@@ -97,7 +97,7 @@ func parseURIList(content []byte, source model.SourceInfo) ParseResult {
 		})
 	}
 
-	result.Nodes = model.NormalizeNodes(result.Nodes)
+	result.Nodes = model.NormalizeNodesNoDedupe(result.Nodes)
 	return result
 }
 
@@ -216,6 +216,27 @@ func firstQuery(values url.Values, keys ...string) string {
 			if strings.EqualFold(existing, key) && len(existingValues) > 0 {
 				return existingValues[0]
 			}
+		}
+	}
+	return ""
+}
+
+func hasQuery(values url.Values, keys ...string) bool {
+	for _, key := range keys {
+		for existing := range values {
+			if strings.EqualFold(existing, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
 		}
 	}
 	return ""

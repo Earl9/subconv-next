@@ -9,33 +9,45 @@
     "cache_dir": "/data/cache",
     "state_path": "/data/state.json",
     "refresh_interval": 3600,
+    "refresh_on_request": true,
+    "stale_if_error": true,
     "max_subscription_bytes": 5242880,
     "fetch_timeout_seconds": 15,
     "allow_lan": false
   },
   "subscriptions": [
     {
-      "name": "example-remote",
+      "id": "source-1",
+      "name": "source-1",
       "enabled": false,
-      "url": "https://example.com/subscription",
-      "user_agent": "SubConvNext/0.1",
+      "url": "https://example.com/sub",
+      "user_agent": "SubConvNext/0.1 Docker",
       "insecure_skip_verify": false
     }
   ],
-  "inline": [
-    {
-      "name": "sample-inline",
-      "enabled": true,
-      "content": "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#sample-ss"
-    }
-  ],
+  "inline": [],
   "render": {
-    "mixed_port": 7890,
-    "allow_lan": false,
+    "mixed_port": 7897,
+    "allow_lan": true,
     "mode": "rule",
     "log_level": "info",
     "ipv6": false,
-    "dns_enabled": true,
-    "enhanced_mode": "fake-ip"
+    "emoji": true,
+    "show_node_type": true,
+    "include_info_node": true,
+    "udp": true,
+    "filter_illegal": true,
+    "group_proxy_mode": "compact",
+    "source_prefix": true,
+    "source_prefix_format": "[{source}] {name}",
+    "source_prefix_separator": " ",
+    "dedupe_scope": "global",
+    "source_mode": "rules",
+    "template_rule_mode": "rules",
+    "external_config": {
+      "template_key": "none",
+      "template_label": "跟随当前服务模板"
+    },
+    "rule_mode": "balanced"
   }
 }

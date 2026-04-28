@@ -36,6 +36,10 @@ func parseAnyTLS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	node.TLS.ALPN = parseCSV(firstQuery(q, "alpn"))
 	node.TLS.Insecure = parseBoolString(firstQuery(q, "insecure", "skip-cert-verify", "allowInsecure"))
 	node.TLS.ClientFingerprint = firstQuery(q, "client-fingerprint", "fp")
+	setRaw(&node, "clientFingerprint", node.TLS.ClientFingerprint)
+	if node.TLS.Insecure {
+		setRaw(&node, "skipCertVerify", true)
+	}
 
 	if echConfig := firstQuery(q, "ech", "ech-config"); echConfig != "" {
 		node.TLS.ECH = &model.ECHOptions{

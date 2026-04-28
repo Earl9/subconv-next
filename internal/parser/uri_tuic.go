@@ -30,6 +30,9 @@ func parseTUIC(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	node.TLS.SNI = firstQuery(q, "sni", "servername")
 	node.TLS.ALPN = parseCSV(firstQuery(q, "alpn"))
 	node.TLS.Insecure = parseBoolString(firstQuery(q, "allow_insecure", "allow-insecure", "insecure"))
+	if node.TLS.Insecure {
+		setRaw(&node, "skipCertVerify", true)
+	}
 	setRaw(&node, "congestionController", firstQuery(q, "congestion_control", "congestion-controller"))
 	setRaw(&node, "udpRelayMode", firstQuery(q, "udp_relay_mode", "udp-relay-mode"))
 	if reduceRTT := firstQuery(q, "reduce_rtt", "reduce-rtt"); reduceRTT != "" {

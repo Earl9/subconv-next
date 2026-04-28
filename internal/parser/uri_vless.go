@@ -33,7 +33,7 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 		"pbk", "publicKey", "public-key", "sid", "shortId", "short-id",
 		"spx", "spiderX", "spider-x", "type", "network", "path", "host",
 		"serviceName", "service-name", "flow", "packetEncoding", "packet-encoding",
-		"alpn",
+		"alpn", "encryption", "mode", "no-grpc-header", "noGrpcHeader",
 	}
 
 	security := strings.ToLower(firstQuery(q, "security"))
@@ -63,9 +63,18 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	node.Transport.Path = firstQuery(q, "path")
 	node.Transport.Host = firstQuery(q, "host")
 	node.Transport.ServiceName = firstQuery(q, "serviceName", "service-name")
+	node.Transport.Mode = firstQuery(q, "mode")
+	node.Transport.H2Hosts = parseCSV(firstQuery(q, "host"))
+	if hasQuery(q, "no-grpc-header", "noGrpcHeader") {
+		value := parseBoolString(firstQuery(q, "no-grpc-header", "noGrpcHeader"))
+		node.Transport.NoGRPCHeader = model.Bool(value)
+		setRaw(&node, "noGrpcHeader", value)
+	}
 
 	setRaw(&node, "flow", firstQuery(q, "flow"))
+	setRaw(&node, "encryption", firstNonEmpty(firstQuery(q, "encryption"), "none"))
 	setRaw(&node, "packetEncoding", firstQuery(q, "packetEncoding", "packet-encoding"))
+	setRaw(&node, "mode", firstQuery(q, "mode"))
 
 	if raw := unknownQueryParams(q, handled...); raw != nil {
 		for key, value := range raw {

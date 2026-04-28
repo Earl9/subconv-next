@@ -1,40 +1,77 @@
-mixed-port: 7890
-allow-lan: false
+mixed-port: 7897
+
+allow-lan: true
+
 mode: rule
+
 log-level: info
+
 ipv6: false
+
+unified-delay: true
+
+tcp-concurrent: true
+
+find-process-mode: strict
+
+global-client-fingerprint: chrome
+
 dns:
-    enable: true
-    ipv6: false
-    enhanced-mode: fake-ip
-    nameserver:
-        - https://1.1.1.1/dns-query
-        - https://8.8.8.8/dns-query
+  enable: true
+  listen: 127.0.0.1:5335
+  use-system-hosts: false
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: [180.76.76.76, 182.254.118.118, 8.8.8.8, 180.184.2.2]
+  nameserver: [180.76.76.76, 119.29.29.29, 180.184.1.1, 223.5.5.5, 8.8.8.8, 'https://223.6.6.6/dns-query#h3=true', 'https://dns.alidns.com/dns-query', 'https://cloudflare-dns.com/dns-query', 'https://doh.pub/dns-query']
+  fallback: ['https://000000.dns.nextdns.io/dns-query#h3=true', 'https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query', 'https://public.dns.iij.jp/dns-query', 'https://101.101.101.101/dns-query', 'https://208.67.220.220/dns-query', 'tls://8.8.4.4', 'tls://1.0.0.1:853', 'https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']
+  fallback-filter: {geoip: true, ipcidr: [240.0.0.0/4, 0.0.0.0/32, 127.0.0.1/32], domain: [+.google.com, +.facebook.com, +.twitter.com, +.youtube.com, +.xn--ngstr-lra8j.com, +.google.cn, +.googleapis.cn, +.googleapis.com, +.gvt1.com]}
+  fake-ip-filter: ['*.lan', stun.*.*.*, stun.*.*, time.windows.com, time.nist.gov, time.apple.com, time.asia.apple.com, '*.ntp.org.cn', '*.openwrt.pool.ntp.org', time1.cloud.tencent.com, time.ustc.edu.cn, pool.ntp.org, ntp.ubuntu.com, ntp.aliyun.com, ntp1.aliyun.com, ntp2.aliyun.com, ntp3.aliyun.com, ntp4.aliyun.com, ntp5.aliyun.com, ntp6.aliyun.com, ntp7.aliyun.com, time1.aliyun.com, time2.aliyun.com, time3.aliyun.com, time4.aliyun.com, time5.aliyun.com, time6.aliyun.com, time7.aliyun.com, '*.time.edu.cn', time1.apple.com, time2.apple.com, time3.apple.com, time4.apple.com, time5.apple.com, time6.apple.com, time7.apple.com, time1.google.com, time2.google.com, time3.google.com, time4.google.com, music.163.com, '*.music.163.com', '*.126.net', musicapi.taihe.com, music.taihe.com, songsearch.kugou.com, trackercdn.kugou.com, '*.kuwo.cn', api-jooxtt.sanook.com, api.joox.com, joox.com, y.qq.com, '*.y.qq.com', streamoc.music.tc.qq.com, mobileoc.music.tc.qq.com, isure.stream.qqmusic.qq.com, dl.stream.qqmusic.qq.com, aqqmusic.tc.qq.com, amobile.music.tc.qq.com, '*.xiami.com', '*.music.migu.cn', music.migu.cn, '*.msftconnecttest.com', '*.msftncsi.com', localhost.ptlogin2.qq.com, '*.*.*.srv.nintendo.net', '*.*.stun.playstation.net', xbox.*.*.microsoft.com, '*.ipv6.microsoft.com', '*.*.xboxlive.com', speedtest.cros.wr.pvp.net]
+
+profile:
+  store-selected: true
+  store-fake-ip: false
+
+sniffer:
+  enable: true
+  parse-pure-ip: true
+  sniff:
+    HTTP:
+      ports:
+        - 80
+        - 8080-8880
+      override-destination: true
+    QUIC:
+      ports:
+        - 443
+        - 8443
+    TLS:
+      ports:
+        - 443
+        - 8443
+
+geodata-mode: true
+
+geo-auto-update: true
+
+geodata-loader: standard
+
+geo-update-interval: 24
+
+geox-url:
+  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb
+  asn: https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
+
 proxies:
-    - name: ss-node
-      type: ss
-      server: example.com
-      port: 443
-      cipher: aes-256-gcm
-      password: pass
-      udp: true
+  - {name: ss-node, type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: pass, udp: true}
+
 proxy-groups:
-    - name: 自动选择
-      type: url-test
-      proxies:
-        - ss-node
-      url: https://www.gstatic.com/generate_204
-      interval: 300
-    - name: 节点选择
-      type: select
-      proxies:
-        - 自动选择
-        - DIRECT
-        - REJECT
-        - ss-node
+  - {name: "🚀 节点选择", type: select, proxies: [⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: ⚡ 自动选择, type: url-test, proxies: [ss-node], url: 'https://www.gstatic.com/generate_204', interval: 300, lazy: false}
+  - {name: "🐟 漏网之鱼", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
+
 rules:
-    - GEOSITE,private,DIRECT
-    - GEOIP,private,DIRECT,no-resolve
-    - GEOSITE,cn,DIRECT
-    - GEOIP,CN,DIRECT
-    - MATCH,节点选择
+  - "MATCH,🐟 漏网之鱼"

@@ -23,17 +23,17 @@ proxies:
       sni: two.example.com
       skip-cert-verify: false
 proxy-groups:
-    - name: 自动选择
+    - name: ⚡ 自动选择
       type: url-test
       proxies:
         - dup
         - dup 2
       url: https://www.gstatic.com/generate_204
       interval: 300
-    - name: 节点选择
+    - name: 🚀 节点选择
       type: select
       proxies:
-        - 自动选择
+        - ⚡ 自动选择
         - DIRECT
         - REJECT
         - dup
@@ -43,4 +43,4 @@ rules:
     - GEOIP,private,DIRECT,no-resolve
     - GEOSITE,cn,DIRECT
     - GEOIP,CN,DIRECT
-    - MATCH,节点选择
+    - MATCH,🚀 节点选择

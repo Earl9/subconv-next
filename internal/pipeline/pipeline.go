@@ -2,8 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"subconv-next/internal/fetcher"
@@ -47,6 +51,7 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 		}
 
 		parsed := parser.ParseContent([]byte(inline.Content), model.SourceInfo{
+			ID:   inline.ID,
 			Name: inline.Name,
 			Kind: "inline",
 		})
@@ -61,6 +66,7 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 			enabledSubscriptions++
 		}
 	}
+
 	if enabledSubscriptions > 0 {
 		remoteFetcher := fetcher.New(fetcher.OptionsFromConfig(cfg))
 		for _, sub := range cfg.Subscriptions {
@@ -85,8 +91,10 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 			}
 
 			parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
-				Name: sub.Name,
-				Kind: "subscription",
+				ID:      sub.ID,
+				Name:    sub.Name,
+				Kind:    "subscription",
+				URLHash: sourceURLHash(sub.URL),
 			})
 			if applyFilters {
 				filteredNodes, filteredCount := filterSubscriptionNodes(parsed.Nodes, sub)
@@ -102,12 +110,18 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 		}
 	}
 
-	result.Nodes = model.NormalizeNodes(result.Nodes)
+	result.Nodes = model.NormalizeNodesWithScope(result.Nodes, cfg.Render.DedupeScope)
 	return result
 }
 
 func RenderConfig(cfg model.Config) (RenderResult, error) {
-	collected := CollectNodes(cfg)
+	state, err := LoadNodeState(cfg)
+	if err != nil {
+		return RenderResult{}, err
+	}
+
+	collected := CollectNodesWithState(cfg, state, true, true)
+	collected.Nodes = applyRenderPreferences(collected.Nodes, cfg.Render)
 	if len(collected.Nodes) == 0 {
 		return RenderResult{
 			Warnings: collected.Warnings,
@@ -200,6 +214,180 @@ func matchesSubscriptionFilters(node model.NodeIR, include, exclude, manualExclu
 	return true
 }
 
+func applyRenderPreferences(nodes []model.NodeIR, render model.RenderConfig) []model.NodeIR {
+	if len(nodes) == 0 {
+		return nodes
+	}
+
+	includeMatcher := newNameMatcher(render.IncludeKeywords)
+	excludeMatcher := newNameMatcher(render.ExcludeKeywords)
+
+	out := make([]model.NodeIR, 0, len(nodes))
+	for _, node := range nodes {
+		if render.FilterIllegal && !isRenderableNode(node) {
+			continue
+		}
+		if !render.IncludeInfoNode && looksLikeInfoNode(node.Name) {
+			continue
+		}
+		if includeMatcher != nil && !includeMatcher(node.Name) {
+			continue
+		}
+		if excludeMatcher != nil && excludeMatcher(node.Name) {
+			continue
+		}
+		if render.SkipTLSVerify {
+			node.TLS.Insecure = true
+		}
+		if render.UDP {
+			node.UDP = model.Bool(true)
+		}
+		node = ApplySourcePrefix(node, render)
+		if render.ShowNodeType {
+			node.Name = withNodeTypePrefix(node)
+		}
+		if render.Emoji {
+			node.Name = withEmojiPrefix(node)
+		}
+		out = append(out, model.NormalizeNode(node))
+	}
+
+	if render.SortNodes {
+		sort.SliceStable(out, func(i, j int) bool {
+			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		})
+	}
+
+	return model.NormalizeNodesWithScope(out, render.DedupeScope)
+}
+
+func ApplySourcePrefix(node model.NodeIR, render model.RenderConfig) model.NodeIR {
+	if !render.SourcePrefix {
+		return node
+	}
+
+	sourceName := strings.TrimSpace(node.Source.Name)
+	name := strings.TrimSpace(node.Name)
+	if sourceName == "" || name == "" {
+		return node
+	}
+	forced := rawBool(node.Raw, "_sourcePrefixForced")
+	if strings.HasPrefix(name, "["+sourceName+"]") && !forced {
+		return node
+	}
+	if rawBool(node.Raw, "_overrideName") && !forced {
+		return node
+	}
+
+	format := strings.TrimSpace(render.SourcePrefixFormat)
+	if format == "" {
+		format = "[{source}] {name}"
+	}
+	replacer := strings.NewReplacer(
+		"{source}", sourceName,
+		"{name}", name,
+		"{type}", strings.ToLower(string(node.Type)),
+		"{region}", model.NodeRegionCode(node),
+	)
+	node.Name = strings.TrimSpace(replacer.Replace(format))
+	return node
+}
+
+func newNameMatcher(pattern string) func(string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil
+	}
+	if re, err := regexp.Compile(pattern); err == nil {
+		return re.MatchString
+	}
+	lower := strings.ToLower(pattern)
+	return func(value string) bool {
+		return strings.Contains(strings.ToLower(value), lower)
+	}
+}
+
+func isRenderableNode(node model.NodeIR) bool {
+	if node.Type == model.ProtocolWireGuard && node.WireGuard != nil && len(node.WireGuard.Peers) > 0 {
+		return true
+	}
+	return strings.TrimSpace(node.Server) != "" && node.Port > 0
+}
+
+func looksLikeInfoNode(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	patterns := []string{
+		"剩余流量",
+		"流量",
+		"到期",
+		"官网",
+		"套餐",
+		"订阅",
+		"expire",
+		"traffic",
+		"subscription",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func withNodeTypePrefix(node model.NodeIR) string {
+	name := strings.TrimSpace(node.Name)
+	prefix := "[" + strings.ToLower(string(node.Type)) + "]"
+	lowerName := strings.ToLower(name)
+	if strings.HasPrefix(lowerName, prefix+" ") || lowerName == prefix {
+		return name
+	}
+	if strings.HasPrefix(name, "[") {
+		if end := strings.Index(name, "]"); end > 0 {
+			head := strings.TrimSpace(name[:end+1])
+			tail := strings.TrimSpace(name[end+1:])
+			if strings.HasPrefix(strings.ToLower(tail), prefix+" ") || strings.ToLower(tail) == prefix {
+				return name
+			}
+			return strings.TrimSpace(head + " " + prefix + " " + tail)
+		}
+	}
+	return strings.TrimSpace(prefix + " " + name)
+}
+
+func withEmojiPrefix(node model.NodeIR) string {
+	name := strings.TrimSpace(node.Name)
+	if strings.HasPrefix(name, "🇭🇰") || strings.HasPrefix(name, "🇯🇵") || strings.HasPrefix(name, "🇺🇸") || strings.HasPrefix(name, "🇸🇬") ||
+		strings.HasPrefix(name, "🇹🇼") || strings.HasPrefix(name, "🇰🇷") || strings.HasPrefix(name, "🇩🇪") || strings.HasPrefix(name, "🇬🇧") ||
+		strings.HasPrefix(name, "🇳🇱") || strings.HasPrefix(name, "🇷🇺") ||
+		strings.HasPrefix(name, "🇫🇷") || strings.HasPrefix(name, "🇨🇦") || strings.HasPrefix(name, "🇦🇺") || strings.HasPrefix(name, "🇨🇳") {
+		return name
+	}
+
+	emojiByTag := map[string]string{
+		"HK": "🇭🇰",
+		"JP": "🇯🇵",
+		"US": "🇺🇸",
+		"SG": "🇸🇬",
+		"TW": "🇹🇼",
+		"KR": "🇰🇷",
+		"DE": "🇩🇪",
+		"GB": "🇬🇧",
+		"NL": "🇳🇱",
+		"RU": "🇷🇺",
+		"FR": "🇫🇷",
+		"CA": "🇨🇦",
+		"AU": "🇦🇺",
+		"CN": "🇨🇳",
+	}
+	for _, tag := range node.Tags {
+		if emoji := emojiByTag[tag]; emoji != "" {
+			return emoji + " " + name
+		}
+	}
+	return name
+}
+
 func normalizeKeywords(values []string) []string {
 	if len(values) == 0 {
 		return nil
@@ -244,4 +432,31 @@ func normalizeExactValues(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func sourceURLHash(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func rawBool(raw map[string]interface{}, key string) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	value, ok := raw[key]
+	if !ok {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") || typed == "1"
+	default:
+		return false
+	}
 }
