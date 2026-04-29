@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -167,6 +168,8 @@ func (s *Server) handleNodeSubroutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "bulk-rename":
 		s.handleBulkRename(w, r)
+	case path == "delete":
+		s.handleDeleteNodes(w, r)
 	case path == "disable":
 		s.handleToggleNodes(w, r, false)
 	case path == "enable":
@@ -194,18 +197,20 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
 
 	filtered := filterNodeList(collected.Nodes, state, disabled, r)
-	page, pageSize := parsePage(r)
-	paged := paginateNodes(filtered, page, pageSize)
+	paged := filtered
+	if !wantsAllNodes(r) {
+		page, pageSize := parsePage(r)
+		paged = paginateNodes(filtered, page, pageSize)
+	}
 
 	writeJSON(w, http.StatusOK, nodeListResponse{
 		OK:       true,
@@ -214,6 +219,16 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		Warnings: collected.Warnings,
 		Errors:   collected.Errors,
 	})
+	_ = ref
+}
+
+func wantsAllNodes(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("all"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request, nodeID string) {
@@ -222,9 +237,9 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request, nodeID
 		return
 	}
 
-	node, state, err := s.lookupNode(nodeID)
+	node, state, cfg, ref, err := s.lookupNode(r, nodeID)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "NODE_NOT_FOUND", err.Error())
+		handleWorkspaceOrNodeError(w, err)
 		return
 	}
 
@@ -233,6 +248,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request, nodeID
 		OK:   true,
 		Node: detail,
 	})
+	_, _ = cfg, ref
 }
 
 func (s *Server) handleSaveNodeOverride(w http.ResponseWriter, r *http.Request, nodeID string) {
@@ -241,9 +257,9 @@ func (s *Server) handleSaveNodeOverride(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	node, state, err := s.lookupNode(nodeID)
+	node, state, cfg, ref, err := s.lookupNode(r, nodeID)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "NODE_NOT_FOUND", err.Error())
+		handleWorkspaceOrNodeError(w, err)
 		return
 	}
 
@@ -313,13 +329,12 @@ func (s *Server) handleSaveNodeOverride(w http.ResponseWriter, r *http.Request, 
 		state.DisabledNodes = addIDs(state.DisabledNodes, []string{nodeID})
 	}
 
-	cfg := s.snapshotConfig()
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 		return
 	}
 
-	s.appendLog("node override updated: " + shortNodeID(nodeID))
+	s.appendWorkspaceLog(ref.Hash, "node override updated: "+shortNodeID(nodeID))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -329,10 +344,9 @@ func (s *Server) handleResetNodeOverride(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 	delete(state.NodeOverrides, nodeID)
@@ -343,7 +357,7 @@ func (s *Server) handleResetNodeOverride(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	s.appendLog("node override reset: " + shortNodeID(nodeID))
+	s.appendWorkspaceLog(ref.Hash, "node override reset: "+shortNodeID(nodeID))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -359,15 +373,15 @@ func (s *Server) handleToggleNodes(w http.ResponseWriter, r *http.Request, enabl
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 
 	if enabled {
 		state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
+		state.DeletedNodes = removeIDs(state.DeletedNodes, req.IDs)
 	} else {
 		state.DisabledNodes = addIDs(state.DisabledNodes, req.IDs)
 	}
@@ -378,10 +392,39 @@ func (s *Server) handleToggleNodes(w http.ResponseWriter, r *http.Request, enabl
 	}
 
 	if enabled {
-		s.appendLog(fmt.Sprintf("nodes enabled: %d", len(req.IDs)))
+		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes enabled: %d", len(req.IDs)))
 	} else {
-		s.appendLog(fmt.Sprintf("nodes disabled: %d", len(req.IDs)))
+		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes disabled: %d", len(req.IDs)))
 	}
+	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	var req toggleNodesRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
+	if err != nil {
+		handleWorkspaceOrStateError(w, err)
+		return
+	}
+	state.DeletedNodes = addIDs(state.DeletedNodes, req.IDs)
+	state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
+
+	if err := pipeline.SaveNodeState(cfg, state); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+		return
+	}
+
+	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes deleted: %d", len(req.IDs)))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -397,10 +440,9 @@ func (s *Server) handleBulkRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
@@ -469,7 +511,7 @@ func (s *Server) handleBulkRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.appendLog(fmt.Sprintf("bulk rename applied: changed=%d", changed))
+	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("bulk rename applied: changed=%d", changed))
 	writeJSON(w, http.StatusOK, bulkRenameResponse{
 		OK:      true,
 		Changed: changed,
@@ -489,10 +531,9 @@ func (s *Server) handleCustomNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 
@@ -523,7 +564,7 @@ func (s *Server) handleCustomNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.appendLog(fmt.Sprintf("custom nodes added: %d", len(newNodes)))
+	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("custom nodes added: %d", len(newNodes)))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -533,10 +574,9 @@ func (s *Server) handleDeleteCustomNode(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 
@@ -550,13 +590,14 @@ func (s *Server) handleDeleteCustomNode(w http.ResponseWriter, r *http.Request, 
 	state.CustomNodes = filtered
 	delete(state.NodeOverrides, nodeID)
 	state.DisabledNodes = removeIDs(state.DisabledNodes, []string{nodeID})
+	state.DeletedNodes = removeIDs(state.DeletedNodes, []string{nodeID})
 
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 		return
 	}
 
-	s.appendLog("custom node deleted: " + shortNodeID(nodeID))
+	s.appendWorkspaceLog(ref.Hash, "custom node deleted: "+shortNodeID(nodeID))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -566,10 +607,9 @@ func (s *Server) handleValidateNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, _, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
@@ -585,36 +625,69 @@ func (s *Server) handleClearOverrides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		handleWorkspaceOrStateError(w, err)
 		return
 	}
 	state.NodeOverrides = map[string]model.NodeOverride{}
 	state.DisabledNodes = []string{}
+	state.DeletedNodes = []string{}
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 		return
 	}
 
-	s.appendLog("node overrides cleared")
+	s.appendWorkspaceLog(ref.Hash, "node overrides cleared")
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
-func (s *Server) lookupNode(nodeID string) (model.NodeIR, model.NodeState, error) {
-	cfg := s.snapshotConfig()
-	state, err := pipeline.LoadNodeState(cfg)
+func (s *Server) lookupNode(r *http.Request, nodeID string) (model.NodeIR, model.NodeState, model.Config, workspaceRef, error) {
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
-		return model.NodeIR{}, model.NodeState{}, err
+		return model.NodeIR{}, model.NodeState{}, model.Config{}, workspaceRef{}, err
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	for _, node := range collected.Nodes {
 		if node.ID == nodeID {
-			return node, state, nil
+			return node, state, cfg, ref, nil
 		}
 	}
-	return model.NodeIR{}, state, fmt.Errorf("node %s not found", shortNodeID(nodeID))
+	return model.NodeIR{}, state, cfg, ref, fmt.Errorf("node %s not found", shortNodeID(nodeID))
+}
+
+func (s *Server) workspaceConfigAndState(r *http.Request) (model.Config, model.NodeState, workspaceRef, error) {
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		return model.Config{}, model.NodeState{}, workspaceRef{}, err
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		return model.Config{}, model.NodeState{}, workspaceRef{}, err
+	}
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		return model.Config{}, model.NodeState{}, workspaceRef{}, err
+	}
+	return cfg, state, ref, nil
+}
+
+func handleWorkspaceOrStateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errWorkspaceRequired), errors.Is(err, errWorkspaceNotFound):
+		handleWorkspaceError(w, err)
+	default:
+		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+	}
+}
+
+func handleWorkspaceOrNodeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errWorkspaceRequired), errors.Is(err, errWorkspaceNotFound):
+		handleWorkspaceError(w, err)
+	default:
+		writeAPIError(w, http.StatusNotFound, "NODE_NOT_FOUND", err.Error())
+	}
 }
 
 func filterNodeList(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}, r *http.Request) []model.NodeIR {
@@ -755,8 +828,8 @@ func buildNodeDetail(node model.NodeIR, state model.NodeState) nodeDetail {
 		UDP:          node.UDP,
 		TLS:          node.TLS,
 		Auth:         maskAuthSecrets(node.Auth),
-		Transport:    node.Transport,
-		WireGuard:    node.WireGuard,
+		Transport:    maskTransportSecrets(node.Transport),
+		WireGuard:    maskWireGuardSecrets(node.WireGuard),
 		Raw:          maskSensitiveMap(node.Raw),
 		Warnings:     append([]string(nil), node.Warnings...),
 		Sources:      buildSourcePayloads(node),
@@ -1012,7 +1085,7 @@ func buildRenamedNodeName(node model.NodeIR, req bulkRenameRequest) (string, err
 
 func isSensitiveField(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	for _, token := range []string{"password", "uuid", "private", "pre_shared", "preshared", "token", "secret"} {
+	for _, token := range []string{"password", "uuid", "private", "private-key", "pre_shared", "pre-shared", "preshared", "token", "secret", "authorization", "cookie"} {
 		if strings.Contains(key, token) {
 			return true
 		}

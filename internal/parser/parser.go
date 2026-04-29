@@ -49,9 +49,7 @@ func parseByKind(kind InputKind, content []byte, source model.SourceInfo, depth 
 		result.Warnings = append([]string{"base64 decoded input"}, result.Warnings...)
 		return result
 	case InputKindYAML:
-		return ParseResult{
-			Errors: []ParseError{{Kind: "UNSUPPORTED_YAML", Message: "YAML proxy parsing is not implemented yet"}},
-		}
+		return parseMihomoYAML(content, source)
 	default:
 		node, err := ParseWireGuardConfig(content, source)
 		if err != nil {
@@ -110,6 +108,8 @@ func parseURI(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	switch strings.ToLower(raw[:schemeEnd]) {
 	case string(model.ProtocolSS):
 		return parseSS(raw, source)
+	case string(model.ProtocolSSR):
+		return parseSSR(raw, source)
 	case string(model.ProtocolVMess):
 		return parseVMess(raw, source)
 	case string(model.ProtocolVLESS):

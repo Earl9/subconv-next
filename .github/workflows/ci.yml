@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l $(find . -path './.git' -prune -o -path './.tmpinspect' -prune -o -path './vendor' -prune -o -name '*.go' -print))"
+      - run: go test ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: GOOS=linux GOARCH=amd64 go build -o /tmp/subconv-next-amd64 ./cmd/subconv-next
+      - run: GOOS=linux GOARCH=arm64 go build -o /tmp/subconv-next-arm64 ./cmd/subconv-next
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - run: docker buildx build --platform linux/amd64,linux/arm64 --file Dockerfile --output type=cacheonly .

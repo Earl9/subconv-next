@@ -2,6 +2,10 @@ package parser
 
 import (
 	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"subconv-next/internal/model"
@@ -114,6 +118,142 @@ func TestParseContentVLESSXHTTP(t *testing.T) {
 	}
 	if got, _ := node.Raw["encryption"].(string); got != "none" {
 		t.Fatalf("raw encryption = %#v, want none", node.Raw["encryption"])
+	}
+}
+
+func TestParseContentVMessCipher(t *testing.T) {
+	content := []byte("vmess://eyJ2IjoiMiIsInBzIjoidm1lc3Mtbm9kZSIsImFkZCI6ImV4YW1wbGUuY29tIiwicG9ydCI6IjQ0MyIsImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwIiwiYWlkIjoiMCIsInNjeSI6ImF1dG8iLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImNkbi5leGFtcGxlLmNvbSIsInBhdGgiOiIvd3MiLCJ0bHMiOiJ0bHMiLCJzbmkiOiJleGFtcGxlLmNvbSIsImZwIjoiY2hyb21lIn0=")
+	result := ParseContent(content, model.SourceInfo{Name: "vmess"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(result.Nodes))
+	}
+	if got := fmt.Sprint(result.Nodes[0].Raw["cipher"]); got != "auto" {
+		t.Fatalf("raw cipher = %q, want %q", got, "auto")
+	}
+}
+
+func TestParseContentSSR(t *testing.T) {
+	content := []byte("ssr://ZXhhbXBsZS5jb206NDQzOmF1dGhfc2hhMV92NDphZXMtMjU2LWNmYjp0bHMxLjJfdGlja2V0X2F1dGg6Y0dGemN3Lz9yZW1hcmtzPWMzTnlMVzV2WkdVJm9iZnNwYXJhbT1ZMlJ1TG1WNFlXMXdiR1V1WTI5dCZwcm90b3BhcmFtPQ==")
+	result := ParseContent(content, model.SourceInfo{Name: "ssr"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(result.Nodes))
+	}
+	node := result.Nodes[0]
+	if node.Type != model.ProtocolSSR {
+		t.Fatalf("Type = %q, want %q", node.Type, model.ProtocolSSR)
+	}
+	if node.Auth.Password != "pass" {
+		t.Fatalf("Password = %q, want pass", node.Auth.Password)
+	}
+	if got := fmt.Sprint(node.Raw["protocol"]); got != "auth_sha1_v4" {
+		t.Fatalf("protocol = %q, want auth_sha1_v4", got)
+	}
+	if got := fmt.Sprint(node.Raw["obfs"]); got != "tls1.2_ticket_auth" {
+		t.Fatalf("obfs = %q, want tls1.2_ticket_auth", got)
+	}
+}
+
+func TestParseProtocolCompatibilityFixture(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "testdata", "subscriptions", "protocols.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(protocols.txt) error = %v", err)
+	}
+	expectedBytes, err := os.ReadFile(filepath.Join("..", "..", "testdata", "expected", "protocols.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(expected protocols) error = %v", err)
+	}
+
+	result := ParseContent(content, model.SourceInfo{Name: "protocols", Kind: "fixture"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+
+	expected := strings.Fields(string(expectedBytes))
+	if len(result.Nodes) != len(expected) {
+		t.Fatalf("len(Nodes) = %d, want %d", len(result.Nodes), len(expected))
+	}
+	for index, want := range expected {
+		node := result.Nodes[index]
+		parts := strings.Split(want, ":")
+		if string(node.Type) != parts[0] {
+			t.Fatalf("node[%d].Type = %q, want %q", index, node.Type, parts[0])
+		}
+		if len(parts) > 1 && node.Transport.Network != parts[1] {
+			t.Fatalf("node[%d].Transport.Network = %q, want %q", index, node.Transport.Network, parts[1])
+		}
+		if len(parts) > 2 && parts[2] == "reality" && node.TLS.Reality == nil {
+			t.Fatalf("node[%d].TLS.Reality = nil, want reality", index)
+		}
+	}
+}
+
+func TestParseContentMihomoYAML(t *testing.T) {
+	content := []byte(`
+proxies:
+  - name: "[anytls]US LAS Buyvm"
+    type: anytls
+    server: buyvm-las-01.telecom.moe
+    port: 8444
+    password: secret-pass
+    udp: true
+    sni: buyvm-las-01.telecom.moe
+    client-fingerprint: chrome
+    skip-cert-verify: false
+  - name: "[vless]JP Osaka Oracle"
+    type: vless
+    server: oracle-osa-01.telecom.moe
+    port: 5444
+    uuid: uuid-1
+    network: xhttp
+    tls: true
+    servername: cas-bridge.xethub.hf.co
+    client-fingerprint: chrome
+    encryption: none
+    reality-opts:
+      public-key: pub-key
+      short-id: short-id
+      spider-x: /
+    xhttp-opts:
+      path: /NevernessToEverness
+      mode: auto
+`)
+	result := ParseContent(content, model.SourceInfo{Name: "yaml", Kind: "file"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 2 {
+		t.Fatalf("len(Nodes) = %d, want 2", len(result.Nodes))
+	}
+
+	anytls := result.Nodes[0]
+	if anytls.Type != model.ProtocolAnyTLS {
+		t.Fatalf("first Type = %q, want %q", anytls.Type, model.ProtocolAnyTLS)
+	}
+	if anytls.Auth.Password != "secret-pass" {
+		t.Fatalf("anytls password = %q, want secret-pass", anytls.Auth.Password)
+	}
+	if anytls.TLS.ClientFingerprint != "chrome" {
+		t.Fatalf("anytls client fingerprint = %q, want chrome", anytls.TLS.ClientFingerprint)
+	}
+
+	vless := result.Nodes[1]
+	if vless.Type != model.ProtocolVLESS {
+		t.Fatalf("second Type = %q, want %q", vless.Type, model.ProtocolVLESS)
+	}
+	if vless.Transport.Network != "xhttp" || vless.Transport.Path != "/NevernessToEverness" || vless.Transport.Mode != "auto" {
+		t.Fatalf("vless transport = %#v, want xhttp path/mode", vless.Transport)
+	}
+	if vless.TLS.Reality == nil || vless.TLS.Reality.PublicKey != "pub-key" {
+		t.Fatalf("vless reality = %#v, want parsed reality", vless.TLS.Reality)
+	}
+	if got := fmt.Sprint(vless.Raw["encryption"]); got != "none" {
+		t.Fatalf("vless raw encryption = %q, want none", got)
 	}
 }
 

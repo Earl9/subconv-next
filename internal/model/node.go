@@ -14,6 +14,7 @@ type Protocol string
 
 const (
 	ProtocolSS        Protocol = "ss"
+	ProtocolSSR       Protocol = "ssr"
 	ProtocolVMess     Protocol = "vmess"
 	ProtocolVLESS     Protocol = "vless"
 	ProtocolTrojan    Protocol = "trojan"

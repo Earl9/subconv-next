@@ -189,12 +189,35 @@ const OUTPUT_OPTIONS = [
   { key: "show_node_type", id: "opt-show-type", title: "显示节点类型", desc: "在节点名中显示协议类型", default: true, icon: "tag" },
   { key: "source_prefix", id: "opt-source-prefix", title: "显示订阅源名称", desc: "在节点名称中添加来源前缀，方便区分订阅源", default: true, icon: "link" },
   { key: "include_info_node", id: "opt-info-node", title: "包含信息节点", desc: "保留订阅中的信息节点", default: true, icon: "info" },
-  { key: "skip_tls_verify", id: "opt-skip-tls", title: "跳过 TLS 验证", desc: "忽略证书校验，不推荐", default: false, icon: "shield" },
+  { key: "skip_tls_verify", id: "opt-skip-tls", title: "跳过 TLS 验证", desc: "忽略证书校验，仅在特殊情况下使用", default: false, icon: "shield", badge: "不推荐", badgeClass: "badge-red" },
   { key: "udp", id: "opt-udp", title: "启用 UDP", desc: "启用 UDP 转发支持", default: true, icon: "zap" },
-  { key: "node_list", id: "opt-node-list", title: "Node List", desc: "在配置末尾附加节点列表", default: false, icon: "list" },
+  { key: "node_list", id: "opt-node-list", title: "节点列表", desc: "在配置末尾附加节点列表", default: false, icon: "list" },
   { key: "sort_nodes", id: "opt-sort-nodes", title: "节点二次排序", desc: "对节点顺序进行优化", default: false, icon: "sort" },
-  { key: "filter_illegal", id: "opt-filter-illegal", title: "过滤非法节点", desc: "自动跳过不可用节点", default: true, icon: "filter" },
-  { key: "insert_url", id: "opt-insert-url", title: "插入 insert_url", desc: "在配置中保留来源信息", default: false, icon: "code" },
+  { key: "filter_illegal", id: "opt-filter-illegal", title: "过滤非法节点", desc: "自动跳过不可用节点", default: true, icon: "filter", badge: "推荐", badgeClass: "badge-green" },
+  { key: "insert_url", id: "opt-insert-url", title: "插入源链接", desc: "在配置中保留源地址信息", default: false, icon: "code" },
+];
+
+const OUTPUT_OPTION_GROUPS = [
+  {
+    title: "名称显示",
+    desc: "控制节点名称的展示风格与可读性。",
+    items: ["emoji", "show_node_type", "source_prefix"],
+  },
+  {
+    title: "连接与兼容",
+    desc: "影响兼容性与连接行为的开关项。",
+    items: ["udp", "skip_tls_verify"],
+  },
+  {
+    title: "输出内容",
+    desc: "决定最终导出的配置中包含哪些附加信息。",
+    items: ["include_info_node", "node_list", "insert_url"],
+  },
+  {
+    title: "节点处理",
+    desc: "在生成前对节点进行过滤与排序。",
+    items: ["sort_nodes", "filter_illegal"],
+  },
 ];
 
 const svgIcon = (body) =>
@@ -269,7 +292,7 @@ function icon(name, className = "") {
 
 const DEFAULT_SERVICE = {
   enabled: true,
-  listen_addr: "0.0.0.0",
+  listen_addr: "127.0.0.1",
   listen_port: 9876,
   log_level: "info",
   template: "standard",
@@ -279,6 +302,7 @@ const DEFAULT_SERVICE = {
   refresh_interval: 3600,
   refresh_on_request: true,
   stale_if_error: true,
+  access_token: "",
   subscription_token: "",
   max_subscription_bytes: 5242880,
   fetch_timeout_seconds: 15,
@@ -330,6 +354,8 @@ const DEFAULT_RENDER = {
 
 const MASKED_SECRET = "********";
 const YAML_PREVIEW_LINE_LIMIT = 500;
+const DEFAULT_SOURCE_USER_AGENT = "SubConvNext/1.0";
+const LOCAL_DRAFT_STORAGE_KEY = "SUBCONV_LOCAL_DRAFT";
 
 const state = {
   config: null,
@@ -340,8 +366,16 @@ const state = {
   customRules: [],
   externalConfig: { ...DEFAULT_RENDER.external_config },
   generatedUrl: "",
+  workspaceId: "",
+  workspaceExpiresAt: "",
+  draftMode: "privacy",
+  hasLocalDraft: false,
+  localDraftMeta: null,
+  localDraftPayload: null,
   generateStatus: "idle",
   refreshStatus: "idle",
+  refreshStage: "",
+  generateProgressTimer: null,
   lastError: "",
   resultNodeCount: 0,
   resultRuleCount: 0,
@@ -351,6 +385,8 @@ const state = {
   lastGeneratedAt: "",
   backendOnline: true,
   statusPayload: null,
+  auditPayload: null,
+  published: null,
   logsText: "",
   logsDisplay: "",
   subscriptionMeta: {
@@ -361,6 +397,8 @@ const state = {
   siteLogoRequests: {},
   subscriptions: [],
   inlineEntries: [],
+  allNodes: [],
+  filteredNodes: [],
   nodes: [],
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
   nodeSourceOptions: [],
@@ -415,12 +453,13 @@ function decorateButtons() {
     ["open-node-editor-btn", "nodes"],
     ["generate-btn", "link"],
     ["import-btn", "import"],
-    ["save-config-btn", "save"],
     ["preview-btn", "code"],
     ["summary-refresh-btn", "refresh"],
     ["copy-generated-url-btn", "copy"],
     ["open-generated-url-btn", "external"],
     ["view-generated-link-btn", "link"],
+    ["rotate-token-btn", "refresh"],
+    ["delete-published-btn", "trash"],
     ["refresh-nodes-btn", "refresh"],
     ["refresh-yaml-btn", "refresh"],
     ["download-yaml-btn", "file"],
@@ -461,11 +500,7 @@ async function init() {
   renderResult(false);
   renderYamlViewer();
   renderDiagnostics();
-
-  await Promise.all([loadConfig(), loadStatus(), loadLogs()]);
-  await Promise.all([loadNodes(), loadYamlPreview(), validateNodes(), loadSubscriptionMeta()]);
-  updateSummary();
-  renderDiagnostics();
+  await initializeWorkspaceSession();
 }
 
 function bindEvents() {
@@ -475,12 +510,13 @@ function bindEvents() {
 
   document.getElementById("generate-btn").addEventListener("click", generateSubscription);
   document.getElementById("import-btn").addEventListener("click", importClash);
-  document.getElementById("save-config-btn").addEventListener("click", saveCurrentConfigOnly);
   document.getElementById("preview-btn").addEventListener("click", previewYAMLWorkspace);
   document.getElementById("summary-refresh-btn").addEventListener("click", generateSubscription);
   document.getElementById("copy-generated-url-btn").addEventListener("click", copyGeneratedUrl);
   document.getElementById("open-generated-url-btn").addEventListener("click", () => openUrl(state.generatedUrl));
   document.getElementById("view-generated-link-btn").addEventListener("click", focusGeneratedLink);
+  document.getElementById("rotate-token-btn").addEventListener("click", rotatePublishedToken);
+  document.getElementById("delete-published-btn").addEventListener("click", deletePublishedLink);
 
   document.getElementById("add-subscription-btn").addEventListener("click", () => {
     state.subscriptions.push(createSubscriptionEntry());
@@ -610,7 +646,7 @@ function handleLiveFieldUpdates(event) {
   const target = event.target;
   if (!target) return;
 
-  if (target.id === "backend-origin" || target.id === "subscription-token") {
+  if (target.id === "backend-origin") {
     if (state.generateStatus === "success") {
       state.generatedUrl = buildSubscriptionURL();
       renderResult();
@@ -622,7 +658,7 @@ function handleLiveFieldUpdates(event) {
     handleLiveFieldUpdates.nodeSearchTimer = window.setTimeout(() => {
       state.nodeFilters.q = getValue("node-search").trim();
       state.nodePagination.page = 1;
-      loadNodes();
+      applyNodeFiltersAndPagination();
     }, 220);
   }
   if (target.id === "manual-node-type") {
@@ -643,7 +679,7 @@ function switchWorkspace(workspace) {
   if (workspace === "yaml") {
     loadYamlPreview();
   } else if (workspace === "nodes") {
-    loadNodes();
+    if (!state.allNodes.length) loadNodes();
   } else if (workspace === "diagnostics") {
     refreshDiagnostics();
   }
@@ -657,7 +693,6 @@ function applyDefaultState() {
   setValue("template-select", DEFAULT_RENDER.external_config.template_key);
   setValue("custom-template-url", "");
   setValue("batch-import-textarea", "");
-  setValue("subscription-token", "");
   setChecked("yaml-wrap-toggle", true);
   setValue("yaml-search", "");
   setValue("node-type-filter", "all");
@@ -672,18 +707,27 @@ function applyDefaultState() {
   state.customRules = [];
   state.externalConfig = { ...DEFAULT_RENDER.external_config };
   state.generatedUrl = "";
+  state.workspaceId = "";
+  state.workspaceExpiresAt = "";
+  state.draftMode = "privacy";
+  state.hasLocalDraft = false;
+  state.localDraftMeta = null;
+  state.localDraftPayload = null;
   state.generateStatus = "idle";
   state.refreshStatus = "idle";
   state.lastError = "";
   state.lastGeneratedAt = "";
   state.resultNodeCount = 0;
   state.resultRuleCount = 0;
+  state.published = null;
   state.ruleChipsExpanded = false;
   state.activeRuleSubtab = "builtin";
-  state.subscriptions = [createSubscriptionEntry({ name: "source-1", enabled: true, user_agent: "SubConvNext/0.1 Docker" })];
+  state.subscriptions = [createSubscriptionEntry({ name: "source-1", enabled: true, user_agent: DEFAULT_SOURCE_USER_AGENT })];
   state.siteLogos = {};
   state.siteLogoRequests = {};
   state.inlineEntries = [];
+  state.allNodes = [];
+  state.filteredNodes = [];
   state.subscriptionMeta = { aggregate: null, sources: [] };
   state.nodeFilters = { q: "", type: "all", region: "ALL", status: "all", source: "" };
   state.nodePagination = { page: 1, pageSize: 25, total: 0 };
@@ -702,14 +746,322 @@ function applyDefaultState() {
   renderNodeEditor();
   renderConfigNodeSummary();
   renderDiagnostics();
+  renderSessionBanner();
   switchWorkspace("config");
+}
+
+async function initializeWorkspaceSession() {
+  await createNewWorkspace({ preserveDraftState: false });
+  const storedDraft = loadLocalDraft();
+  if (storedDraft) {
+    applyDraftState("draft_detected", storedDraft);
+  } else {
+    applyDraftState("privacy", null);
+  }
+  renderSessionBanner();
+  await reloadWorkspaceData();
+}
+
+async function createNewWorkspace(options = {}) {
+  const { preserveDraftState = true } = options;
+  const draftSnapshot = preserveDraftState ? snapshotDraftState() : null;
+  const response = await fetchJSON("/api/workspaces", { method: "POST" });
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "创建隐私会话失败。", true);
+    applyDefaultState();
+    return false;
+  }
+  applyDefaultState();
+  state.workspaceId = response.workspace_id || "";
+  state.workspaceExpiresAt = response.expires_at || "";
+  if (draftSnapshot) {
+    restoreDraftState(draftSnapshot);
+  }
+  renderSessionBanner();
+  return true;
+}
+
+function renderSessionBanner() {
+  const banner = document.getElementById("session-banner");
+  if (!banner) return;
+
+  const mode = state.draftMode || "privacy";
+  const meta = state.localDraftMeta;
+  let title = "当前模式：隐私会话";
+  let description = "刷新页面后不会自动保留配置。";
+  let metaLine = "默认不会自动保存或自动恢复配置。";
+  let buttons = `
+    <button id="save-local-draft-btn" class="ghost-button small-button" type="button">保存为本机草稿</button>
+    <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
+  `;
+
+  if (mode === "draft_detected") {
+    title = "发现本机草稿";
+    description = "这是之前手动保存到本机浏览器的配置，是否恢复？";
+    metaLine = formatDraftMetaLine(meta);
+    buttons = `
+      <button id="restore-draft-btn" class="secondary-button small-button" type="button">恢复草稿</button>
+      <button id="discard-draft-btn" class="ghost-button small-button" type="button">丢弃草稿</button>
+    `;
+  } else if (mode === "local_draft") {
+    title = "当前模式：本机草稿";
+    description = "此配置已保存在当前浏览器中，请勿在公共设备上使用。";
+    metaLine = formatDraftMetaLine(meta);
+    buttons = `
+      <button id="update-local-draft-btn" class="secondary-button small-button" type="button">更新本机草稿</button>
+      <button id="exit-draft-mode-btn" class="ghost-button small-button" type="button">退出草稿模式</button>
+      <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
+    `;
+  }
+
+  banner.className = `panel side-card session-banner mode-${mode.replace(/_/g, "-")}`;
+  banner.innerHTML = `
+    <div class="session-banner-main">
+      <strong class="session-banner-title">${escapeHtml(title)}</strong>
+      <span class="session-banner-text">${escapeHtml(description)}</span>
+      <span class="session-banner-meta">${escapeHtml(metaLine)}</span>
+    </div>
+    <div class="session-banner-actions">
+      ${buttons}
+    </div>
+  `;
+
+  document.getElementById("save-local-draft-btn")?.addEventListener("click", saveLocalDraft);
+  document.getElementById("update-local-draft-btn")?.addEventListener("click", updateLocalDraft);
+  document.getElementById("clear-session-btn")?.addEventListener("click", clearCurrentSession);
+  document.getElementById("restore-draft-btn")?.addEventListener("click", restoreLocalDraft);
+  document.getElementById("discard-draft-btn")?.addEventListener("click", discardLocalDraft);
+  document.getElementById("exit-draft-mode-btn")?.addEventListener("click", exitDraftMode);
+}
+
+function formatDraftMetaLine(meta) {
+  if (!meta) {
+    return "本机草稿会保存订阅地址，请仅在私人设备上使用。";
+  }
+  const savedAt = formatDraftDateTime(meta.saved_at);
+  const updatedAt = formatDraftDateTime(meta.updated_at);
+  const sourceCount = Number.parseInt(meta.source_count, 10) || 0;
+  if (savedAt && updatedAt && savedAt !== updatedAt) {
+    return `首次保存 ${savedAt} · 最近更新 ${updatedAt} · 来源 ${sourceCount} 个`;
+  }
+  if (updatedAt) {
+    return `最近更新 ${updatedAt} · 来源 ${sourceCount} 个`;
+  }
+  return `本机草稿会保存订阅地址，请仅在私人设备上使用。`;
+}
+
+function formatDraftDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function snapshotDraftState() {
+  return {
+    draftMode: state.draftMode,
+    hasLocalDraft: state.hasLocalDraft,
+    localDraftMeta: state.localDraftMeta ? deepClone(state.localDraftMeta) : null,
+    localDraftPayload: state.localDraftPayload ? deepClone(state.localDraftPayload) : null,
+  };
+}
+
+function restoreDraftState(snapshot) {
+  if (!snapshot) return;
+  state.draftMode = snapshot.draftMode || "privacy";
+  state.hasLocalDraft = Boolean(snapshot.hasLocalDraft);
+  state.localDraftMeta = snapshot.localDraftMeta ? deepClone(snapshot.localDraftMeta) : null;
+  state.localDraftPayload = snapshot.localDraftPayload ? deepClone(snapshot.localDraftPayload) : null;
+}
+
+function applyDraftState(mode, payload) {
+  state.draftMode = mode;
+  if (payload) {
+    state.hasLocalDraft = true;
+    state.localDraftPayload = deepClone(payload);
+    state.localDraftMeta = {
+      saved_at: payload.saved_at || "",
+      updated_at: payload.updated_at || payload.saved_at || "",
+      source_count: Number(payload.source_count || countDraftSources(payload.config) || 0),
+    };
+    return;
+  }
+  state.hasLocalDraft = false;
+  state.localDraftPayload = null;
+  state.localDraftMeta = null;
+}
+
+async function restoreLocalDraft() {
+  const draft = loadLocalDraft();
+  if (!draft?.config) {
+    applyDraftState("privacy", null);
+    renderSessionBanner();
+    showToast("未找到可恢复的本机草稿。", true);
+    return;
+  }
+  await deleteCurrentWorkspace();
+  const created = await createNewWorkspace({ preserveDraftState: false });
+  if (!created) return;
+  const restoredConfig = sanitizeLocalDraftConfig(draft.config);
+  const saveResult = await saveConfig(restoredConfig);
+  if (!saveResult) return;
+  state.config = restoredConfig;
+  fillFormFromConfig(restoredConfig);
+  applyDraftState("local_draft", draft);
+  renderSessionBanner();
+  await Promise.all([loadStatus(), loadSubscriptionMeta(), loadAudit(), loadPublishedStatus()]);
+  updateSummary();
+  renderDiagnostics();
+  showToast("已恢复本机草稿。");
+}
+
+async function discardLocalDraft() {
+  clearLocalDraft();
+  await deleteCurrentWorkspace();
+  const created = await createNewWorkspace({ preserveDraftState: false });
+  if (!created) return;
+  applyDraftState("privacy", null);
+  renderSessionBanner();
+  await reloadWorkspaceData();
+  showToast("已丢弃本机草稿。");
+}
+
+function saveLocalDraft() {
+  persistLocalDraft(false);
+}
+
+function updateLocalDraft() {
+  persistLocalDraft(true);
+}
+
+function persistLocalDraft(isUpdate) {
+  if (!state.workspaceId) {
+    showToast("当前没有可保存的会话。", true);
+    return;
+  }
+  const existing = loadLocalDraft();
+  const now = new Date().toISOString();
+  const config = sanitizeLocalDraftConfig(buildConfigFromForm());
+  const payload = {
+    version: 1,
+    saved_at: existing?.saved_at || now,
+    updated_at: now,
+    source_count: countDraftSources(config),
+    config,
+  };
+  localStorage.setItem(LOCAL_DRAFT_STORAGE_KEY, JSON.stringify(payload));
+  applyDraftState("local_draft", payload);
+  renderSessionBanner();
+  showToast(isUpdate ? "本机草稿已更新。" : "已保存为本机草稿。请勿在公共设备上使用此功能。");
+}
+
+async function exitDraftMode() {
+  let keepDraft = true;
+  if (state.hasLocalDraft) {
+    const shouldDeleteDraft = window.confirm("是否删除本机草稿？\n选择“确定”将删除，选择“取消”则保留。");
+    if (shouldDeleteDraft) {
+      clearLocalDraft();
+      keepDraft = false;
+    }
+  }
+  if (keepDraft) {
+    const payload = loadLocalDraft();
+    applyDraftState("privacy", payload);
+  } else {
+    applyDraftState("privacy", null);
+  }
+  renderSessionBanner();
+  showToast(keepDraft ? "已退出草稿模式，本机草稿已保留。" : "已退出草稿模式，并删除本机草稿。");
+}
+
+async function clearCurrentSession() {
+  const currentMode = state.draftMode;
+  let nextMode = currentMode === "draft_detected" ? "draft_detected" : "privacy";
+  let nextDraftPayload = loadLocalDraft();
+  if (currentMode === "local_draft" && state.hasLocalDraft) {
+    const shouldDeleteDraft = window.confirm("是否同时删除本机草稿？\n选择“确定”将删除草稿，选择“取消”则仅清空当前会话。");
+    if (shouldDeleteDraft) {
+      clearLocalDraft();
+      nextDraftPayload = null;
+      nextMode = "privacy";
+    } else {
+      nextMode = nextDraftPayload ? "draft_detected" : "privacy";
+    }
+  }
+  await deleteCurrentWorkspace();
+  sessionStorage.clear();
+  const created = await createNewWorkspace({ preserveDraftState: false });
+  if (!created) return;
+  applyDraftState(nextMode, nextDraftPayload);
+  renderSessionBanner();
+  await reloadWorkspaceData();
+  showToast("当前会话已清空。");
+}
+
+async function deleteCurrentWorkspace() {
+  if (!state.workspaceId) return;
+  await fetchJSON(`/api/workspaces/${encodeURIComponent(state.workspaceId)}`, { method: "DELETE" });
+}
+
+async function reloadWorkspaceData() {
+  await Promise.all([loadConfig(), loadStatus(), loadSubscriptionMeta(), loadAudit(), loadPublishedStatus()]);
+  updateSummary();
+  renderDiagnostics();
+}
+
+function loadLocalDraft() {
+  const raw = localStorage.getItem(LOCAL_DRAFT_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.config || typeof parsed.config !== "object") {
+      throw new Error("invalid local draft");
+    }
+    return parsed;
+  } catch (error) {
+    localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+    return null;
+  }
+}
+
+function clearLocalDraft() {
+  localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+}
+
+function sanitizeLocalDraftConfig(config) {
+  const draftConfig = deepClone(config || {});
+  draftConfig.service = {
+    ...(draftConfig.service || {}),
+    access_token: "",
+    subscription_token: "",
+  };
+  return draftConfig;
+}
+
+function countDraftSources(config) {
+  const subscriptions = Array.isArray(config?.subscriptions) ? config.subscriptions.filter((item) => String(item?.url || "").trim()) : [];
+  const inlineEntries = Array.isArray(config?.inline) ? config.inline.filter((item) => String(item?.content || "").trim()) : [];
+  return subscriptions.length + inlineEntries.length;
 }
 
 async function loadConfig() {
   const response = await fetchJSON("/api/config");
   if (!response?.ok) {
     showToast(readAPIError(response) || "加载配置失败。", true);
+    const draftSnapshot = snapshotDraftState();
+    const workspaceId = state.workspaceId;
+    const workspaceExpiresAt = state.workspaceExpiresAt;
     applyDefaultState();
+    state.workspaceId = workspaceId;
+    state.workspaceExpiresAt = workspaceExpiresAt;
+    restoreDraftState(draftSnapshot);
+    renderSessionBanner();
     return;
   }
 
@@ -722,7 +1074,6 @@ function fillFormFromConfig(config) {
   setValue("client-type", "mihomo");
   setValue("backend-origin", window.location.origin);
   setValue("output-filename", render.output_filename || DEFAULT_RENDER.output_filename);
-  setValue("subscription-token", config?.service?.subscription_token || "");
   setValue("include-keywords", render.include_keywords || "");
   setValue("exclude-keywords", render.exclude_keywords || "");
 
@@ -741,7 +1092,7 @@ function fillFormFromConfig(config) {
   state.subscriptions = normalizeSubscriptionEntries(config?.subscriptions || []);
   state.inlineEntries = normalizeInlineEntries(config?.inline || []);
   if (!state.subscriptions.length) {
-    state.subscriptions = [createSubscriptionEntry({ name: "source-1", enabled: true, user_agent: "SubConvNext/0.1 Docker" })];
+    state.subscriptions = [createSubscriptionEntry({ name: "source-1", enabled: true, user_agent: DEFAULT_SOURCE_USER_AGENT })];
   }
 
   setValue("template-select", state.externalConfig.template_key || DEFAULT_RENDER.external_config.template_key);
@@ -763,22 +1114,40 @@ function renderOutputTiles() {
   const grid = document.getElementById("options-grid");
   grid.innerHTML = "";
 
-  OUTPUT_OPTIONS.forEach((item) => {
-    const tile = document.createElement("label");
-    tile.className = "option-tile";
-    tile.title = item.desc;
-    tile.innerHTML = `
-      <div class="setting-icon">${icon(item.icon)}</div>
-      <div class="setting-body">
-        <div class="option-title">${escapeHtml(item.title)}</div>
-        <div class="option-desc">${escapeHtml(item.desc)}</div>
+  const optionMap = Object.fromEntries(OUTPUT_OPTIONS.map((item) => [item.key, item]));
+
+  OUTPUT_OPTION_GROUPS.forEach((group) => {
+    const card = document.createElement("section");
+    card.className = "option-group-card";
+    card.innerHTML = `
+      <div class="option-group-head">
+        <div class="option-group-title">${escapeHtml(group.title)}</div>
+        <div class="option-group-desc">${escapeHtml(group.desc)}</div>
       </div>
-      <span class="switch">
-        <input id="${item.id}" type="checkbox" ${item.default ? "checked" : ""} />
-        <span class="switch-track"></span>
-      </span>
+      <div class="option-group-list">
+        ${group.items
+          .map((key) => optionMap[key])
+          .filter(Boolean)
+          .map((item) => `
+            <label class="option-item" title="${escapeHtml(item.desc)}">
+              <div class="option-icon">${icon(item.icon)}</div>
+              <div class="setting-body">
+                <div class="option-title-row">
+                  <div class="option-title">${escapeHtml(item.title)}</div>
+                  ${item.badge ? `<span class="badge ${item.badgeClass || ""}">${escapeHtml(item.badge)}</span>` : ""}
+                </div>
+                <div class="option-desc">${escapeHtml(item.desc)}</div>
+              </div>
+              <span class="switch">
+                <input id="${item.id}" type="checkbox" ${item.default ? "checked" : ""} />
+                <span class="switch-track"></span>
+              </span>
+            </label>
+          `)
+          .join("")}
+      </div>
     `;
-    grid.appendChild(tile);
+    grid.appendChild(card);
   });
 }
 
@@ -1313,7 +1682,7 @@ function createSubscriptionEntry(values = {}) {
     source_logo: values.source_logo || "",
     enabled: values.enabled !== false,
     url: values.url || "",
-    user_agent: values.user_agent || "SubConvNext/0.1 Docker",
+    user_agent: values.user_agent || DEFAULT_SOURCE_USER_AGENT,
   };
 }
 
@@ -1335,7 +1704,7 @@ function normalizeSubscriptionEntries(items) {
       source_logo: item.source_logo || "",
       enabled: item.enabled !== false,
       url: item.url || "",
-      user_agent: item.user_agent || "SubConvNext/0.1 Docker",
+      user_agent: item.user_agent || DEFAULT_SOURCE_USER_AGENT,
     }),
   );
 }
@@ -1378,7 +1747,7 @@ function renderSubscriptionManager() {
           </div>
           <details class="source-advanced inline-advanced">
             <summary>User-Agent</summary>
-            <input type="text" data-sub-field="user_agent" data-sub-index="${index}" value="${escapeHtml(item.user_agent || "SubConvNext/0.1 Docker")}" />
+            <input type="text" data-sub-field="user_agent" data-sub-index="${index}" value="${escapeHtml(item.user_agent || DEFAULT_SOURCE_USER_AGENT)}" />
           </details>
         </div>
         <div class="source-actions">
@@ -1484,7 +1853,7 @@ function applyBatchImport() {
         name: item.name || `source-${nextEntries.length + 1 + index}`,
         url: item.url,
         enabled: true,
-        user_agent: "SubConvNext/0.1 Docker",
+        user_agent: DEFAULT_SOURCE_USER_AGENT,
       }),
     );
   });
@@ -1575,7 +1944,7 @@ function updateSummary() {
     ],
     ["已启用选项数", `${enabledOptionCount} / ${OUTPUT_OPTIONS.length}`],
     ["后端地址", backend || "-"],
-    ["订阅 Token", getValue("subscription-token").trim() ? "已启用" : "未启用"],
+    ["发布链接", state.published?.publish_id ? "已生成随机私密链接" : "未生成"],
     ["后端状态", state.backendOnline ? "在线" : "离线"],
   ];
 
@@ -1593,12 +1962,13 @@ function updateSummary() {
 
 function renderConfigNodeSummary() {
   const sources = new Set(state.nodeSourceOptions);
+  const hasNodeCache = state.allNodes.length > 0;
   const items = [
-    ["总节点数", state.nodeSummary.total || 0],
-    ["已启用", state.nodeSummary.enabled || 0],
-    ["已禁用", state.nodeSummary.disabled || 0],
-    ["已修改", state.nodeSummary.modified || 0],
-    ["有警告", state.nodeSummary.warnings || 0],
+    ["总节点数", hasNodeCache ? state.nodeSummary.total || 0 : state.statusPayload?.node_count || 0],
+    ["已启用", hasNodeCache ? state.nodeSummary.enabled || 0 : "-"],
+    ["已禁用", hasNodeCache ? state.nodeSummary.disabled || 0 : "-"],
+    ["已修改", hasNodeCache ? state.nodeSummary.modified || 0 : "-"],
+    ["有警告", hasNodeCache ? state.nodeSummary.warnings || 0 : "-"],
     ["来源数量", sources.size],
     ["上次刷新", state.statusPayload?.last_success_at || "-"],
     ["下次刷新", state.statusPayload?.next_refresh_at || "-"],
@@ -1793,9 +2163,10 @@ function buildConfigFromForm() {
   base.service = {
     ...DEFAULT_SERVICE,
     ...(base.service || {}),
-    listen_addr: "0.0.0.0",
+    listen_addr: "127.0.0.1",
     listen_port: 9876,
-    subscription_token: getValue("subscription-token").trim(),
+    access_token: "",
+    subscription_token: "",
   };
 
   base.render = {
@@ -1834,7 +2205,7 @@ function buildConfigFromForm() {
       source_logo: item.source_logo?.trim() || "",
       enabled: item.enabled !== false,
       url: item.url.trim(),
-      user_agent: item.user_agent?.trim() || "SubConvNext/0.1 Docker",
+      user_agent: item.user_agent?.trim() || DEFAULT_SOURCE_USER_AGENT,
       insecure_skip_verify: getChecked("opt-skip-tls"),
     }));
 
@@ -1850,14 +2221,6 @@ function buildConfigFromForm() {
   return base;
 }
 
-async function saveCurrentConfigOnly() {
-  const config = buildConfigFromForm();
-  const saveResult = await saveConfig(config);
-  if (!saveResult) return;
-  state.config = config;
-  showToast("配置已保存。");
-}
-
 async function generateSubscription() {
   try {
     const hasSubscription = state.subscriptions.some((item) => item.url.trim());
@@ -1869,13 +2232,15 @@ async function generateSubscription() {
 
     state.generateStatus = "generating";
     state.lastError = "";
+    startGenerateProgressPolling();
     renderResult();
 
     const config = buildConfigFromForm();
     const saveResult = await saveConfig(config);
     if (!saveResult) {
       state.generateStatus = "error";
-      state.lastError = "保存配置失败";
+      state.lastError = "当前会话写入失败";
+      stopGenerateProgressPolling();
       renderResult();
       return;
     }
@@ -1883,22 +2248,26 @@ async function generateSubscription() {
     const refreshResult = await refreshNow();
     if (!refreshResult) {
       state.generateStatus = "error";
+      stopGenerateProgressPolling();
       renderResult();
       return;
     }
 
     state.config = config;
-    state.generatedUrl = buildSubscriptionURL();
+    state.generatedUrl = refreshResult.subscription_url || buildSubscriptionURL();
     state.lastGeneratedAt = new Date().toLocaleString();
+    state.resultNodeCount = Number.parseInt(refreshResult.node_count, 10) || state.resultNodeCount;
+    state.refreshStatus = "fresh";
     state.generateStatus = "success";
+    stopGenerateProgressPolling();
     renderResult();
     updateSummary();
-    await Promise.all([loadYamlPreview(), loadStatus(), loadLogs(), refreshNodesAfterGenerate(), loadSubscriptionMeta()]);
-    renderResult();
     showToast("订阅链接已生成。");
+    void postGenerateRefresh();
   } catch (error) {
     state.generateStatus = "error";
     state.lastError = error?.message || String(error) || "未知错误";
+    stopGenerateProgressPolling();
     renderResult();
     showToast(`生成失败：${state.lastError}`, true);
   }
@@ -1911,7 +2280,7 @@ async function saveConfig(config) {
     body: JSON.stringify(config),
   });
   if (!response?.ok) {
-    showToast(readAPIError(response) || "保存配置失败。", true);
+    showToast(readAPIError(response) || "写入当前会话失败。", true);
     return false;
   }
   return true;
@@ -1924,10 +2293,38 @@ async function refreshNow() {
   if (!response?.ok) {
     state.lastError = readAPIError(response) || "刷新失败";
     showToast(state.lastError, true);
-    return false;
+    return null;
   }
   state.lastError = "";
-  return true;
+  return response;
+}
+
+async function postGenerateRefresh() {
+  const tasks = [loadStatus(), loadLogs(), loadSubscriptionMeta(), loadAudit(), loadPublishedStatus()];
+  if (state.activeWorkspace === "yaml") {
+    tasks.push(loadYamlPreview());
+  }
+  if (state.activeWorkspace === "nodes") {
+    tasks.push(refreshNodesAfterGenerate());
+  } else if (state.activeWorkspace === "diagnostics") {
+    tasks.push(validateNodes());
+  }
+  await Promise.all(tasks);
+  renderResult();
+}
+
+function startGenerateProgressPolling() {
+  stopGenerateProgressPolling();
+  state.generateProgressTimer = window.setInterval(() => {
+    void loadStatus();
+  }, 350);
+}
+
+function stopGenerateProgressPolling() {
+  if (state.generateProgressTimer) {
+    window.clearInterval(state.generateProgressTimer);
+    state.generateProgressTimer = null;
+  }
 }
 
 function renderResult() {
@@ -1939,8 +2336,11 @@ function renderResult() {
   const copyButton = document.getElementById("copy-generated-url-btn");
   const openButton = document.getElementById("open-generated-url-btn");
   const viewButton = document.getElementById("view-generated-link-btn");
+  const rotateButton = document.getElementById("rotate-token-btn");
+  const deleteButton = document.getElementById("delete-published-btn");
   const generateButton = document.getElementById("generate-btn");
   const hasResult = Boolean(state.generatedUrl);
+  const published = state.published;
 
   let statusLabel = "未生成";
   let statusText = "尚未生成订阅链接";
@@ -1950,9 +2350,10 @@ function renderResult() {
 
   if (state.generateStatus === "generating") {
     statusLabel = "生成中";
-    statusText = "正在生成订阅链接";
+    statusText = refreshStageLabel(state.refreshStage);
     statusClass = "result-warning";
     statusDotClass = "warning";
+    refreshStatusText = refreshStageLabel(state.refreshStage);
   } else if (state.generateStatus === "success" && hasResult) {
     statusLabel = "已生成";
     statusText = "订阅链接已生成";
@@ -2000,17 +2401,27 @@ function renderResult() {
     if (state.generateStatus === "generating") {
       setButtonIconText(generateButton, "生成中...");
     } else if (state.generateStatus === "success") {
-      setButtonIconText(generateButton, "重新生成");
+      setButtonIconText(generateButton, "重新生成配置");
     } else {
       setButtonIconText(generateButton, "生成订阅链接");
     }
+  }
+  if (rotateButton) {
+    rotateButton.disabled = !published?.publish_id || state.generateStatus === "generating";
+  }
+  if (deleteButton) {
+    deleteButton.disabled = !published?.publish_id || state.generateStatus === "generating";
   }
 
   const items = [
     ["状态", statusLabel],
     ["生成时间", state.lastGeneratedAt || "-"],
+    ["发布 ID", published?.publish_id || "-"],
+    ["Token 摘要", published?.token_hint || "-"],
     ["节点数量", hasResult ? (state.resultNodeCount ? String(state.resultNodeCount) : "-") : "-"],
     ["规则数量", hasResult ? (state.resultRuleCount ? String(state.resultRuleCount) : "-") : "-"],
+    ["上次访问", published?.last_access_at || "-"],
+    ["访问次数", published ? String(Number.parseInt(published.access_count, 10) || 0) : "-"],
     ["刷新状态", hasResult ? refreshStatusText : "-"],
   ];
 
@@ -2026,6 +2437,19 @@ function renderResult() {
   }
 }
 
+function refreshStageLabel(stage) {
+  switch (String(stage || "").toLowerCase()) {
+    case "fetching":
+      return "正在抓取订阅";
+    case "rendering":
+      return "正在渲染配置";
+    case "writing":
+      return "正在写入输出";
+    default:
+      return "正在生成订阅链接";
+  }
+}
+
 async function importClash() {
   if (!state.generatedUrl.trim()) {
     await generateSubscription();
@@ -2033,6 +2457,76 @@ async function importClash() {
   const url = state.generatedUrl.trim();
   if (!url) return;
   openUrl(`clash://install-config?url=${encodeURIComponent(url)}`);
+}
+
+async function loadPublishedStatus() {
+  const response = await fetchJSON("/api/published");
+  if (!response?.ok || !response.publish_id) {
+    state.published = null;
+    if (!state.statusPayload?.yaml_exists) {
+      state.generatedUrl = "";
+    }
+    renderResult();
+    return;
+  }
+  state.published = response;
+  if (response.url) {
+    state.generatedUrl = response.url;
+    if (state.generateStatus !== "error") {
+      state.generateStatus = "success";
+    }
+  }
+  if (response.updated_at) {
+    const date = new Date(response.updated_at);
+    state.lastGeneratedAt = Number.isNaN(date.getTime()) ? response.updated_at : date.toLocaleString();
+  }
+  renderResult();
+}
+
+async function rotatePublishedToken() {
+  const publishID = state.published?.publish_id;
+  if (!publishID) {
+    showToast("当前还没有可轮换的私密链接。", true);
+    return;
+  }
+  const response = await fetchJSON(`/api/published/${encodeURIComponent(publishID)}/rotate-token`, {
+    method: "POST",
+  });
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "重新生成私密链接失败。", true);
+    return;
+  }
+  state.published = response;
+  state.generatedUrl = response.url || "";
+  state.generateStatus = state.generatedUrl ? "success" : state.generateStatus;
+  if (response.updated_at) {
+    const date = new Date(response.updated_at);
+    state.lastGeneratedAt = Number.isNaN(date.getTime()) ? response.updated_at : date.toLocaleString();
+  } else {
+    state.lastGeneratedAt = new Date().toLocaleString();
+  }
+  renderResult();
+  showToast("私密链接已轮换，旧链接立即失效。");
+}
+
+async function deletePublishedLink() {
+  const publishID = state.published?.publish_id;
+  if (!publishID) {
+    showToast("当前没有可删除的发布链接。", true);
+    return;
+  }
+  const response = await fetchJSON(`/api/published/${encodeURIComponent(publishID)}`, {
+    method: "DELETE",
+  });
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "删除发布失败。", true);
+    return;
+  }
+  state.published = null;
+  state.generatedUrl = "";
+  state.generateStatus = "idle";
+  renderResult();
+  showToast("当前发布已删除，订阅链接已失效。");
 }
 
 async function copyGeneratedUrl() {
@@ -2067,34 +2561,75 @@ function previewYAMLWorkspace() {
 }
 
 async function loadNodes() {
-  const params = new URLSearchParams();
-  if (state.nodeFilters.q) params.set("q", state.nodeFilters.q);
-  if (state.nodeFilters.type !== "all") params.set("type", state.nodeFilters.type);
-  if (state.nodeFilters.region !== "ALL") params.set("region", state.nodeFilters.region);
-  if (state.nodeFilters.status !== "all") params.set("status", state.nodeFilters.status);
-  if (state.nodeFilters.source) params.set("source", state.nodeFilters.source);
-  params.set("page", String(state.nodePagination.page));
-  params.set("page_size", String(state.nodePagination.pageSize));
-
-  const response = await fetchJSON(`/api/nodes?${params.toString()}`);
+  const response = await fetchJSON("/api/nodes?all=1");
   if (!response?.ok) {
     document.getElementById("node-table-body").innerHTML = `<tr><td colspan="7" class="table-empty">${escapeHtml(readAPIError(response) || "加载节点失败。")}</td></tr>`;
     showToast(readAPIError(response) || "加载节点失败。", true);
     return;
   }
 
-  state.nodes = Array.isArray(response.nodes) ? response.nodes : [];
-  state.nodeSummary = response.summary || { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 };
-  state.nodePagination.total = state.nodeSummary.total || 0;
-  const totalPages = Math.max(1, Math.ceil((state.nodePagination.total || 0) / state.nodePagination.pageSize));
-  if (!state.nodes.length && state.nodePagination.total > 0 && state.nodePagination.page > totalPages) {
-    state.nodePagination.page = totalPages;
-    return loadNodes();
-  }
-  state.nodeSourceOptions = uniqueOrdered(state.nodes.map((node) => node.source?.name).filter(Boolean));
+  state.allNodes = Array.isArray(response.nodes) ? response.nodes : [];
+  state.nodeSourceOptions = uniqueOrdered(state.allNodes.map((node) => node.source?.name).filter(Boolean));
   syncSourceFilterOptions();
+  applyNodeFiltersAndPagination();
+}
+
+function applyNodeFiltersAndPagination() {
+  const q = String(state.nodeFilters.q || "").trim().toLowerCase();
+  const typeFilter = String(state.nodeFilters.type || "all").toLowerCase();
+  const regionFilter = String(state.nodeFilters.region || "ALL").toUpperCase();
+  const statusFilter = String(state.nodeFilters.status || "all").toLowerCase();
+  const sourceFilter = String(state.nodeFilters.source || "").trim().toLowerCase();
+
+  state.filteredNodes = state.allNodes.filter((node) => {
+    if (q) {
+      const haystack = [
+        node.name,
+        node.server,
+        node.type,
+        regionLabel(node.region),
+        node.region,
+        ...(Array.isArray(node.tags) ? node.tags : []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    if (typeFilter !== "all" && String(node.type || "").toLowerCase() !== typeFilter) return false;
+    if (regionFilter !== "ALL" && String(node.region || "").toUpperCase() !== regionFilter) return false;
+    if (sourceFilter && !String(node.source?.name || "").toLowerCase().includes(sourceFilter)) return false;
+    if (statusFilter === "enabled" && !node.enabled) return false;
+    if (statusFilter === "disabled" && node.enabled) return false;
+    if (statusFilter === "modified" && !node.modified) return false;
+    if (statusFilter === "warning" && !(node.warnings && node.warnings.length)) return false;
+    return true;
+  });
+
+  state.nodeSummary = summarizeNodeItems(state.filteredNodes);
+  state.nodePagination.total = state.filteredNodes.length;
+
+  const totalPages = Math.max(1, Math.ceil((state.nodePagination.total || 0) / state.nodePagination.pageSize));
+  if (state.nodePagination.page > totalPages) {
+    state.nodePagination.page = totalPages;
+  }
+
+  const start = (state.nodePagination.page - 1) * state.nodePagination.pageSize;
+  const end = start + state.nodePagination.pageSize;
+  state.nodes = state.filteredNodes.slice(start, end);
+
   renderNodeEditor();
   renderConfigNodeSummary();
+}
+
+function summarizeNodeItems(nodes) {
+  const summary = { total: nodes.length, enabled: 0, disabled: 0, modified: 0, warnings: 0 };
+  nodes.forEach((node) => {
+    if (node.enabled) summary.enabled += 1;
+    else summary.disabled += 1;
+    if (node.modified) summary.modified += 1;
+    if (node.warnings?.length) summary.warnings += 1;
+  });
+  return summary;
 }
 
 function renderNodeEditor() {
@@ -2292,13 +2827,13 @@ function handleNodeFilterChange() {
   state.nodeFilters.status = getValue("node-status-filter");
   state.nodeFilters.source = getValue("node-source-filter");
   state.nodePagination.page = 1;
-  loadNodes();
+  applyNodeFiltersAndPagination();
 }
 
 function handleNodePageSizeChange() {
   state.nodePagination.pageSize = Number.parseInt(getValue("node-page-size"), 10) || 25;
   state.nodePagination.page = 1;
-  loadNodes();
+  applyNodeFiltersAndPagination();
 }
 
 function changeNodePage(direction) {
@@ -2306,14 +2841,14 @@ function changeNodePage(direction) {
   const next = state.nodePagination.page + direction;
   if (next < 1 || next > totalPages) return;
   state.nodePagination.page = next;
-  loadNodes();
+  applyNodeFiltersAndPagination();
 }
 
 async function openNodeDialog(nodeId) {
   state.activeNodeDeletePopoverId = "";
   renderNodeTable();
   const dialog = document.getElementById("node-dialog");
-  const localNode = state.nodes.find((node) => node.id === nodeId);
+  const localNode = state.nodes.find((node) => node.id === nodeId) || state.allNodes.find((node) => node.id === nodeId);
   if (localNode) {
     state.editingNode = localNode;
     fillNodeDialog(localNode);
@@ -2521,7 +3056,7 @@ async function performDeleteNode(nodeId) {
   if (node.source?.kind === "custom") {
     return performDeleteCustomNode(nodeId);
   }
-  const response = await fetchJSON("/api/nodes/disable", {
+  const response = await fetchJSON("/api/nodes/delete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [nodeId] }),
@@ -2747,8 +3282,8 @@ function resetAddNodeForm() {
 
 async function loadYamlPreview() {
   try {
-    const subscriptionUrl = buildSubscriptionURL();
-    const response = await fetch(`${subscriptionUrl}${subscriptionUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`);
+    const previewUrl = state.generatedUrl ? `${state.generatedUrl}${state.generatedUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}` : withWorkspace(`/api/preview-yaml?_ts=${Date.now()}`);
+    const response = await fetch(previewUrl);
     if (!response.ok) {
       state.yamlPreview = `加载失败：HTTP ${response.status}`;
       state.generateStatus = state.generateStatus === "generating" ? "error" : state.generateStatus;
@@ -2812,8 +3347,11 @@ function renderYamlViewer() {
 }
 
 function downloadYAML() {
-  const url = buildSubscriptionURL();
-  openUrl(`${url}${url.includes("?") ? "&" : "?"}download=1`);
+  if (state.generatedUrl) {
+    openUrl(`${state.generatedUrl}${state.generatedUrl.includes("?") ? "&" : "?"}download=1`);
+    return;
+  }
+  openUrl(withWorkspace("/api/preview-yaml"));
 }
 
 async function copyYAML() {
@@ -2830,6 +3368,7 @@ async function loadStatus() {
   const response = await fetchJSON("/api/status");
   state.backendOnline = Boolean(response && !response.error);
   state.statusPayload = response || {};
+  state.refreshStage = state.statusPayload?.refresh_stage || "";
   if (state.statusPayload?.last_error && state.generateStatus !== "success") {
     state.lastError = state.statusPayload.last_error;
   }
@@ -2837,8 +3376,7 @@ async function loadStatus() {
     state.resultNodeCount = state.statusPayload.node_count;
   }
   if (state.statusPayload?.yaml_exists && !state.generatedUrl) {
-    state.generatedUrl = buildSubscriptionURL();
-    state.generateStatus = "success";
+    if (state.generatedUrl) state.generateStatus = "success";
     if (state.statusPayload?.yaml_updated_at) {
       const date = new Date(state.statusPayload.yaml_updated_at);
       state.lastGeneratedAt = Number.isNaN(date.getTime()) ? state.statusPayload.yaml_updated_at : date.toLocaleString();
@@ -2860,6 +3398,12 @@ async function loadLogs() {
   renderDiagnostics();
 }
 
+async function loadAudit() {
+  const response = await fetchJSON("/api/audit");
+  state.auditPayload = response?.ok ? response : null;
+  renderDiagnostics();
+}
+
 function renderLogsDisplay() {
   document.getElementById("logs-output").textContent = state.logsDisplay || "日志显示已清空。";
 }
@@ -2872,17 +3416,24 @@ async function validateNodes() {
 }
 
 async function refreshDiagnostics() {
-  await Promise.all([loadStatus(), loadLogs(), validateNodes()]);
+  await Promise.all([loadStatus(), loadLogs(), validateNodes(), loadAudit()]);
 }
 
 function renderDiagnostics() {
   const logDiagnostics = extractLogDiagnostics(state.logsText);
   const missingFieldCount = state.nodeValidationWarnings.filter((item) => String(item.message || "").includes("缺少")).length;
+  const excludedNodes = state.auditPayload?.excluded_nodes || [];
+  const reasonCount = (reason) => excludedNodes.filter((item) => item.reason === reason).length;
+  const leakWarnings = (state.auditPayload?.warnings || []).filter((item) => String(item.code || "").includes("leak") || String(item.message || "").includes("leak"));
   const counters = [
-    ["重复组名", logDiagnostics.duplicateGroups],
-    ["缺失规则", logDiagnostics.missingRuleProviders],
-    ["缺失字段", missingFieldCount],
-    ["总警告", state.nodeValidationWarnings.length],
+    ["原始节点", state.auditPayload?.raw_count ?? "-"],
+    ["最终节点", state.auditPayload?.final_count ?? "-"],
+    ["过滤节点", state.auditPayload?.excluded_count ?? "-"],
+    ["信息节点", reasonCount("info_node")],
+    ["禁用节点", reasonCount("disabled_node")],
+    ["删除节点", reasonCount("deleted_node")],
+    ["关键词过滤", reasonCount("exclude_keyword_matched") + reasonCount("include_keyword_not_matched")],
+    ["重复节点", reasonCount("duplicate")],
   ];
 
   document.getElementById("diagnostic-counters").innerHTML = counters
@@ -2893,10 +3444,19 @@ function renderDiagnostics() {
     <div class="summary-item"><span class="summary-key">运行状态</span><span class="summary-value">${escapeHtml(state.backendOnline ? "在线" : "离线")}</span></div>
     <div class="summary-item"><span class="summary-key">上次刷新</span><span class="summary-value">${escapeHtml(state.statusPayload?.last_refresh_at || "-")}</span></div>
     <div class="summary-item"><span class="summary-key">输出文件</span><span class="summary-value">${escapeHtml(state.statusPayload?.output_path || "-")}</span></div>
-    <div class="summary-item"><span class="summary-key">最近错误</span><span class="summary-value">${escapeHtml(state.statusPayload?.last_error || "-")}</span></div>
+    <div class="summary-item"><span class="summary-key">泄露检测</span><span class="summary-value">${escapeHtml(leakWarnings.length ? "发现问题" : "未发现节点泄露")}</span></div>
   `;
 
   const diagnosticItems = [];
+  leakWarnings.forEach((warning) => {
+    diagnosticItems.push({ title: "完整性检查", detail: warning.message || "发现节点泄露风险" });
+  });
+  excludedNodes.slice(0, 20).forEach((item) => {
+    diagnosticItems.push({
+      title: `${item.name || "-"} · ${item.reason || "-"}`,
+      detail: `${item.source?.name || "-"} · ${item.source?.kind || "-"}`,
+    });
+  });
   state.nodeValidationWarnings.slice(0, 40).forEach((warning) => {
     diagnosticItems.push({
       title: warning.node_id ? `节点 ${shortNodeID(warning.node_id)}` : "节点校验",
@@ -2980,12 +3540,7 @@ function countRulesInYAML(text) {
 }
 
 function buildSubscriptionURL() {
-  const backend = normalizeBackendOrigin(getValue("backend-origin") || window.location.origin);
-  const token = getValue("subscription-token").trim();
-  if (!token) {
-    return `${backend}/sub/mihomo.yaml`;
-  }
-  return `${backend}/sub/mihomo.yaml?token=${encodeURIComponent(token)}`;
+  return state.published?.url || state.generatedUrl || "";
 }
 
 function openUrl(url) {
@@ -3188,11 +3743,20 @@ function renderHighlightedToken(text, className, query) {
 
 async function fetchJSON(url, options) {
   try {
-    const response = await fetch(url, options);
+    const response = await fetch(withWorkspace(url), options);
     return await response.json();
   } catch (error) {
     return { ok: false, error: { message: error.message || "request failed" } };
   }
+}
+
+function withWorkspace(rawUrl) {
+  const url = String(rawUrl || "");
+  if (!state.workspaceId) return url;
+  if (!url.startsWith("/api/")) return url;
+  if (url.startsWith("/api/workspaces") || url.startsWith("/api/site-logo") || url.startsWith("/api/parse")) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}workspace=${encodeURIComponent(state.workspaceId)}`;
 }
 
 function setValue(id, value) {

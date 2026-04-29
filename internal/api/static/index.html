@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main class="app-shell">
+    <main class="app-shell page-shell">
       <header class="app-header">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">
@@ -36,17 +36,19 @@
         </div>
       </header>
 
-      <nav class="workspace-tabs" aria-label="主工作区">
+      <nav class="workspace-tabs app-tabs" aria-label="主工作区">
         <button id="workspace-tab-config" class="workspace-tab active" type="button" data-workspace="config" data-button-icon="settings">配置生成</button>
         <button id="workspace-tab-nodes" class="workspace-tab" type="button" data-workspace="nodes" data-button-icon="nodes">节点编辑</button>
         <button id="workspace-tab-yaml" class="workspace-tab" type="button" data-workspace="yaml" data-button-icon="code">YAML 预览</button>
         <button id="workspace-tab-diagnostics" class="workspace-tab" type="button" data-workspace="diagnostics" data-button-icon="terminal">诊断日志</button>
       </nav>
 
+      <section id="session-banner" class="panel side-card session-banner"></section>
+
       <section id="workspace-config" class="workspace-panel active">
-        <div class="config-grid content-grid">
-          <div class="config-main">
-            <section class="panel">
+        <div class="config-grid page-grid content-grid">
+          <div class="config-main main-column">
+            <section class="panel card">
               <div class="panel-head">
                 <span class="section-badge" data-icon-name="settings"></span>
                 <div>
@@ -55,8 +57,8 @@
                 </div>
               </div>
 
-              <div class="basic-layout">
-                <div class="basic-sources">
+              <div class="basic-layout base-settings-grid">
+                <div class="basic-sources source-section">
                   <div class="sub-section-head">
                     <div class="sub-section-copy">
                       <div class="sub-section-title">
@@ -81,7 +83,7 @@
                     <span class="section-badge" data-icon-name="target"></span>
                     <span>转换参数</span>
                   </div>
-                  <p class="field-help">客户端目标、订阅地址输出和访问保护配置。</p>
+                  <p class="field-help">客户端目标和发布文件名。订阅访问使用发布时自动生成的随机私密链接。</p>
 
                   <div class="field">
                     <label class="required" for="client-type">客户端类型</label>
@@ -102,14 +104,9 @@
                     <input id="output-filename" type="text" placeholder="例如：mihomo.yaml" />
                   </div>
 
-                  <div class="field">
-                    <label for="subscription-token">订阅访问 Token</label>
-                    <input id="subscription-token" type="text" placeholder="留空表示不启用 Token" />
-                    <p class="field-help">配置后访问 /sub/mihomo.yaml 时需要附带 ?token=...</p>
-                  </div>
                 </div>
 
-                <div class="filter-panel">
+                <div class="filter-panel filter-section">
                   <div class="sub-section-title">
                     <span class="section-badge" data-icon-name="filter"></span>
                     <span>筛选条件</span>
@@ -146,7 +143,7 @@
               </div>
             </section>
 
-            <section class="panel">
+            <section class="panel card">
               <div class="panel-head">
                 <span class="section-badge" data-icon-name="sliders"></span>
                 <div>
@@ -154,10 +151,10 @@
                   <p class="panel-subtitle">影响最终 YAML 展示与默认行为的输出开关。</p>
                 </div>
               </div>
-              <div id="options-grid" class="options-grid compact-options-grid"></div>
+              <div id="options-grid" class="options-grid option-list"></div>
             </section>
 
-            <section class="panel">
+            <section class="panel card">
               <div class="panel-head">
                 <span class="section-badge" data-icon-name="rule"></span>
                 <div>
@@ -324,31 +321,33 @@
             </section>
           </div>
 
-          <aside class="config-side">
-            <section class="panel summary-panel">
+          <aside class="config-side side-column">
+            <section class="panel side-card summary-panel">
               <div class="panel-head simple-head">
                 <div class="card-title">
                   <span class="section-badge" data-icon-name="database"></span>
                   <h2>当前配置摘要</h2>
                 </div>
               </div>
-              <div id="summary-list" class="summary-list"></div>
+              <div id="summary-list" class="summary-list side-summary-list"></div>
             </section>
 
-            <section id="result-panel" class="panel result-panel">
+            <section id="result-panel" class="panel side-card result-panel">
               <div class="panel-head simple-head">
                 <div class="card-title">
                   <span class="section-badge" data-icon-name="check"></span>
                   <h2>生成状态</h2>
                 </div>
               </div>
-              <div id="result-summary-list" class="summary-list"></div>
+              <div id="result-summary-list" class="summary-list side-summary-list"></div>
               <div class="panel-actions">
                 <button id="view-generated-link-btn" class="secondary-button small-button" type="button">查看链接</button>
+                <button id="rotate-token-btn" class="ghost-button small-button" type="button">重新生成私密链接</button>
+                <button id="delete-published-btn" class="danger-ghost-button small-button" type="button">删除发布</button>
               </div>
             </section>
 
-            <section class="panel subscription-meta-panel">
+            <section class="panel side-card subscription-meta-panel">
               <div class="panel-head simple-head">
                 <div class="card-title">
                   <span class="section-badge" data-icon-name="server"></span>
@@ -359,14 +358,14 @@
               <div id="subscription-meta-list" class="subscription-meta-list"></div>
             </section>
 
-            <section class="panel node-summary-panel">
+            <section class="panel side-card node-summary-panel">
               <div class="panel-head simple-head">
                 <div class="card-title">
                   <span class="section-badge" data-icon-name="nodes"></span>
                   <h2>节点摘要</h2>
                 </div>
               </div>
-              <div id="config-node-summary-list" class="summary-list"></div>
+              <div id="config-node-summary-list" class="summary-list side-summary-list"></div>
               <div class="panel-actions">
                 <button id="summary-refresh-btn" class="ghost-button small-button" type="button">立即刷新</button>
                 <button id="open-node-editor-btn" class="secondary-button" type="button">进入节点编辑</button>
@@ -375,9 +374,9 @@
           </aside>
         </div>
 
-        <div class="sticky-action-wrap">
-          <div class="sticky-action-inner">
-            <div id="sticky-action-bar" class="sticky-action-bar">
+        <div class="sticky-action-wrap result-dock-wrap">
+          <div class="sticky-action-inner result-dock-inner">
+            <div id="sticky-action-bar" class="sticky-action-bar result-dock">
               <div class="action-result-row">
                 <div id="action-result-status" class="result-status result-empty">
                   <span class="status-dot"></span>
@@ -392,10 +391,11 @@
                 </div>
               </div>
 
-              <div class="action-buttons-row">
+              <div class="result-divider"></div>
+
+              <div class="action-buttons-row result-actions">
                 <button id="generate-btn" class="primary-button" type="button">生成订阅链接</button>
                 <button id="import-btn" class="secondary-button" type="button">一键导入 Clash</button>
-                <button id="save-config-btn" class="ghost-button" type="button">保存配置</button>
                 <button id="preview-btn" class="ghost-button" type="button">预览 YAML</button>
               </div>
             </div>

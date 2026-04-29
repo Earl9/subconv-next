@@ -10,6 +10,7 @@ type RuntimeStatus struct {
 	NextRefreshAt            time.Time
 	RefreshInterval          int
 	Refreshing               bool
+	RefreshStage             string
 	YAMLExists               bool
 	YAMLUpdatedAt            time.Time
 	UpstreamSourceCount      int

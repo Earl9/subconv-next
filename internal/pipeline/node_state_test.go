@@ -201,3 +201,23 @@ func TestRenderConfigSkipsDisabledAndIncludesCustomNodes(t *testing.T) {
 		t.Fatalf("rendered YAML = %q, custom node should be included", string(result.YAML))
 	}
 }
+
+func TestApplyRenderPreferencesFiltersInvalidSSNode(t *testing.T) {
+	nodes := []model.NodeIR{
+		model.NormalizeNode(model.NodeIR{
+			Name:   "invalid-ss",
+			Type:   model.ProtocolSS,
+			Server: "example.com",
+			Port:   443,
+			Auth:   model.Auth{Password: "secret"},
+		}),
+	}
+
+	got := applyRenderPreferences(nodes, model.RenderConfig{
+		FilterIllegal: true,
+		UDP:           true,
+	})
+	if len(got) != 0 {
+		t.Fatalf("applyRenderPreferences() = %#v, want invalid ss node filtered", got)
+	}
+}

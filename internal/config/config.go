@@ -26,7 +26,17 @@ func Load(path string) (model.Config, error) {
 }
 
 func normalizeConfig(cfg model.Config) model.Config {
+	cfg.Service.AccessToken = strings.TrimSpace(cfg.Service.AccessToken)
 	cfg.Service.SubscriptionToken = strings.TrimSpace(cfg.Service.SubscriptionToken)
+	if cfg.Service.AccessToken == "" && cfg.Service.SubscriptionToken != "" {
+		cfg.Service.AccessToken = cfg.Service.SubscriptionToken
+	}
+	if cfg.Service.WorkspaceCleanupIntervalSeconds == 0 && cfg.Service.WorkspaceCleanupInterval > 0 {
+		cfg.Service.WorkspaceCleanupIntervalSeconds = cfg.Service.WorkspaceCleanupInterval
+	}
+	if cfg.Service.WorkspaceCleanupInterval == 0 && cfg.Service.WorkspaceCleanupIntervalSeconds > 0 {
+		cfg.Service.WorkspaceCleanupInterval = cfg.Service.WorkspaceCleanupIntervalSeconds
+	}
 	if cfg.Subscriptions == nil {
 		cfg.Subscriptions = []model.SubscriptionConfig{}
 	}
@@ -76,6 +86,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 		cfg.Render.CustomProxyGroups = []model.CustomProxyGroupConfig{}
 	}
 	cfg.Render.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(cfg.Render.SubscriptionInfo)
+	cfg.Render.ShowInfoNodes = cfg.Render.ShowInfoNodes && cfg.Render.IncludeInfoNode
 	if !cfg.Render.SourcePrefix {
 		// keep explicit false as-is
 	} else {
@@ -100,9 +111,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 		rule.Icon = strings.TrimSpace(rule.Icon)
 		if !rule.Enabled {
 			// preserve explicit false only when source was set later; default to true for legacy empty rules
-			if rule.Key != "" || rule.Label != "" || rule.SourceType != "" {
-				rule.Enabled = rule.Enabled
-			} else {
+			if rule.Key == "" && rule.Label == "" && rule.SourceType == "" {
 				rule.Enabled = true
 			}
 		} else {
@@ -147,7 +156,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 			sub.ID = stableConfigID("sub", sub.Name, sub.URL, i)
 		}
 		if strings.TrimSpace(sub.UserAgent) == "" {
-			sub.UserAgent = model.DefaultUserAgent + " Docker"
+			sub.UserAgent = model.DefaultUserAgent
 		}
 	}
 
@@ -178,6 +187,15 @@ func Validate(cfg model.Config) error {
 	}
 	if cfg.Service.RefreshInterval < 0 {
 		return fmt.Errorf("service.refresh_interval must be >= 0")
+	}
+	if cfg.Service.WorkspaceTTLSeconds < 0 {
+		return fmt.Errorf("service.workspace_ttl_seconds must be >= 0")
+	}
+	if cfg.Service.WorkspaceCleanupIntervalSeconds < 0 {
+		return fmt.Errorf("service.workspace_cleanup_interval_seconds must be >= 0")
+	}
+	if cfg.Service.PublishedDeleteIfNotAccessedDays < 0 {
+		return fmt.Errorf("service.published_delete_if_not_accessed_days must be >= 0")
 	}
 	if cfg.Service.MaxSubscriptionBytes < 1 {
 		return fmt.Errorf("service.max_subscription_bytes must be >= 1")

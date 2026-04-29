@@ -12,6 +12,7 @@ type RenderOptions struct {
 	Emoji                   bool                     `json:"emoji"`
 	ShowNodeType            bool                     `json:"show_node_type"`
 	IncludeInfoNode         bool                     `json:"include_info_node"`
+	ShowInfoNodes           bool                     `json:"show_info_nodes,omitempty"`
 	SkipTLSVerify           bool                     `json:"skip_tls_verify"`
 	UDP                     bool                     `json:"udp"`
 	NodeList                bool                     `json:"node_list"`
@@ -62,7 +63,8 @@ func DefaultRenderOptions() RenderOptions {
 		EnhancedMode:            DefaultEnhancedMode,
 		Emoji:                   true,
 		ShowNodeType:            true,
-		IncludeInfoNode:         true,
+		IncludeInfoNode:         false,
+		ShowInfoNodes:           false,
 		UDP:                     true,
 		FilterIllegal:           true,
 		GroupProxyMode:          "compact",

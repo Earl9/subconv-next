@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"subconv-next/internal/fetcher"
 	"subconv-next/internal/model"
@@ -36,6 +37,7 @@ type RenderResult struct {
 	State            model.NodeState
 	SubscriptionMeta map[string]model.SubscriptionMeta
 	AggregateMeta    model.AggregatedSubscriptionMeta
+	Audit            model.AuditReport
 }
 
 func CollectNodes(cfg model.Config) CollectResult {
@@ -75,54 +77,76 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 
 	if enabledSubscriptions > 0 {
 		remoteFetcher := fetcher.New(fetcher.OptionsFromConfig(cfg))
-		for _, sub := range cfg.Subscriptions {
+		type subscriptionCollectResult struct {
+			nodes    []model.NodeIR
+			warnings []string
+			errors   []parser.ParseError
+			meta     *model.SubscriptionMeta
+		}
+		collectedByIndex := make([]subscriptionCollectResult, len(cfg.Subscriptions))
+		var wg sync.WaitGroup
+		for index, sub := range cfg.Subscriptions {
 			if !sub.Enabled {
 				continue
 			}
+			wg.Add(1)
+			go func(index int, sub model.SubscriptionConfig) {
+				defer wg.Done()
 
-			fetched, warnings, err := remoteFetcher.Fetch(context.Background(), fetcher.Source{
-				Name:               sub.Name,
-				URL:                sub.URL,
-				UserAgent:          sub.UserAgent,
-				Enabled:            sub.Enabled,
-				InsecureSkipVerify: sub.InsecureSkipVerify,
-			})
-			result.Warnings = append(result.Warnings, warnings...)
-			if err != nil {
-				result.Errors = append(result.Errors, parser.ParseError{
-					Kind:    "FETCH_FAILED",
-					Message: fmt.Sprintf("%s: %v", sub.Name, err),
+				fetched, warnings, err := remoteFetcher.Fetch(context.Background(), fetcher.Source{
+					Name:               sub.Name,
+					URL:                sub.URL,
+					UserAgent:          sub.UserAgent,
+					Enabled:            sub.Enabled,
+					InsecureSkipVerify: sub.InsecureSkipVerify,
 				})
-				continue
-			}
-
-			sourceID := firstNonEmptyString(sub.ID, sourceURLHash(sub.URL), sub.Name)
-			parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
-				ID:      sourceID,
-				Name:    sub.Name,
-				Kind:    "subscription",
-				URLHash: sourceURLHash(sub.URL),
-			})
-			source := model.SourceInfo{
-				ID:      sourceID,
-				Name:    sub.Name,
-				Kind:    "subscription",
-				URLHash: sourceURLHash(sub.URL),
-			}
-			if meta, ok := buildSourceSubscriptionMeta(source, fetched, parsed.Nodes); ok {
-				result.SubscriptionMeta[source.ID] = meta
-			}
-			if applyFilters {
-				filteredNodes, filteredCount := filterSubscriptionNodes(parsed.Nodes, sub)
-				if filteredCount > 0 {
-					result.Warnings = append(result.Warnings, fmt.Sprintf("%s: 已按手动过滤条件排除 %d 个节点", sub.Name, filteredCount))
+				collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, warnings...)
+				if err != nil {
+					collectedByIndex[index].errors = append(collectedByIndex[index].errors, parser.ParseError{
+						Kind:    "FETCH_FAILED",
+						Message: fmt.Sprintf("%s: %v", sub.Name, err),
+					})
+					return
 				}
-				result.Nodes = append(result.Nodes, filteredNodes...)
-			} else {
-				result.Nodes = append(result.Nodes, parsed.Nodes...)
+
+				sourceID := firstNonEmptyString(sub.ID, sourceURLHash(sub.URL), sub.Name)
+				parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
+					ID:      sourceID,
+					Name:    sub.Name,
+					Kind:    "subscription",
+					URLHash: sourceURLHash(sub.URL),
+				})
+				source := model.SourceInfo{
+					ID:      sourceID,
+					Name:    sub.Name,
+					Kind:    "subscription",
+					URLHash: sourceURLHash(sub.URL),
+				}
+				if meta, ok := buildSourceSubscriptionMeta(source, fetched, parsed.Nodes); ok {
+					metaCopy := meta
+					collectedByIndex[index].meta = &metaCopy
+				}
+				if applyFilters {
+					filteredNodes, filteredCount := filterSubscriptionNodes(parsed.Nodes, sub)
+					if filteredCount > 0 {
+						collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, fmt.Sprintf("%s: 已按手动过滤条件排除 %d 个节点", sub.Name, filteredCount))
+					}
+					collectedByIndex[index].nodes = filteredNodes
+				} else {
+					collectedByIndex[index].nodes = parsed.Nodes
+				}
+				collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, parsed.Warnings...)
+				collectedByIndex[index].errors = append(collectedByIndex[index].errors, parsed.Errors...)
+			}(index, sub)
+		}
+		wg.Wait()
+		for _, collectedSub := range collectedByIndex {
+			result.Nodes = append(result.Nodes, collectedSub.nodes...)
+			result.Warnings = append(result.Warnings, collectedSub.warnings...)
+			result.Errors = append(result.Errors, collectedSub.errors...)
+			if collectedSub.meta != nil && strings.TrimSpace(collectedSub.meta.SourceID) != "" {
+				result.SubscriptionMeta[collectedSub.meta.SourceID] = *collectedSub.meta
 			}
-			result.Warnings = append(result.Warnings, parsed.Warnings...)
-			result.Errors = append(result.Errors, parsed.Errors...)
 		}
 	}
 
@@ -131,40 +155,84 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 }
 
 func RenderConfig(cfg model.Config) (RenderResult, error) {
+	return RenderConfigWithProgress(cfg, nil)
+}
+
+func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderResult, error) {
 	state, err := LoadNodeState(cfg)
 	if err != nil {
 		return RenderResult{}, err
 	}
 
-	collected := CollectNodesWithState(cfg, state, true, true)
-	collected.Nodes = applyRenderPreferences(collected.Nodes, cfg.Render)
+	if onStage != nil {
+		onStage("fetching")
+	}
+	collected := collectNodes(cfg, true)
+	if onStage != nil {
+		onStage("rendering")
+	}
 	state.SubscriptionMeta = cloneSubscriptionMetaMap(collected.SubscriptionMeta)
-	if len(collected.Nodes) == 0 {
+	finalSet, audit, err := BuildFinalNodes(cfg, state, collected.Nodes)
+	if err != nil {
+		return RenderResult{}, err
+	}
+	state.LastAudit = audit
+
+	finalNodes, validationWarnings := validateNodes(finalSet.Nodes)
+	for _, warning := range validationWarnings {
+		audit.Warnings = append(audit.Warnings, model.AuditWarning{
+			Code:    warning.Level,
+			Message: warning.Message,
+		})
+	}
+	state.LastAudit = audit
+
+	if len(finalNodes) == 0 {
 		return RenderResult{
 			Warnings:         collected.Warnings,
 			Errors:           collected.Errors,
 			State:            state,
 			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
 			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+			Audit:            audit,
 		}, ErrNoNodes
 	}
 
-	rendered, err := renderer.RenderMihomo(collected.Nodes, renderer.OptionsFromConfig(cfg))
+	renderOpts := renderer.OptionsFromConfig(cfg)
+	rendered, err := renderer.RenderMihomo(finalNodes, renderOpts)
 	if err != nil {
 		return RenderResult{
-			Nodes:            collected.Nodes,
-			NodeCount:        len(collected.Nodes),
+			Nodes:            finalNodes,
+			NodeCount:        len(finalNodes),
 			Warnings:         collected.Warnings,
 			Errors:           collected.Errors,
 			State:            state,
 			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
 			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+			Audit:            audit,
 		}, err
 	}
+	if err := ValidateOutputNoLeak(rendered, FinalNodeSet{Nodes: finalNodes}, audit, renderOpts); err != nil {
+		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_leak", Message: err.Error()})
+		state.LastAudit = audit
+		if cfg.Service.StrictMode {
+			return RenderResult{
+				Nodes:            finalNodes,
+				NodeCount:        len(finalNodes),
+				Warnings:         collected.Warnings,
+				Errors:           collected.Errors,
+				State:            state,
+				SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+				AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+				Audit:            audit,
+			}, err
+		}
+	}
+	state.LastAudit = audit
 
 	return RenderResult{
-		Nodes:            collected.Nodes,
-		NodeCount:        len(collected.Nodes),
+		Nodes:            finalNodes,
+		NodeCount:        len(finalNodes),
 		YAML:             appendTrailingNewline(rendered),
 		OutputPath:       cfg.Service.OutputPath,
 		Warnings:         collected.Warnings,
@@ -172,6 +240,7 @@ func RenderConfig(cfg model.Config) (RenderResult, error) {
 		State:            state,
 		SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
 		AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+		Audit:            audit,
 	}, nil
 }
 
@@ -337,28 +406,75 @@ func isRenderableNode(node model.NodeIR) bool {
 	if node.Type == model.ProtocolWireGuard && node.WireGuard != nil && len(node.WireGuard.Peers) > 0 {
 		return true
 	}
-	return strings.TrimSpace(node.Server) != "" && node.Port > 0
+	if strings.TrimSpace(node.Server) == "" || node.Port <= 0 {
+		return false
+	}
+
+	switch node.Type {
+	case model.ProtocolSS:
+		return strings.TrimSpace(rawNodeString(node.Raw, "method")) != "" && strings.TrimSpace(node.Auth.Password) != ""
+	case model.ProtocolSSR:
+		return strings.TrimSpace(rawNodeString(node.Raw, "method")) != "" && strings.TrimSpace(rawNodeString(node.Raw, "protocol")) != "" && strings.TrimSpace(rawNodeString(node.Raw, "obfs")) != "" && strings.TrimSpace(node.Auth.Password) != ""
+	case model.ProtocolVMess:
+		return strings.TrimSpace(node.Auth.UUID) != ""
+	case model.ProtocolVLESS:
+		return strings.TrimSpace(node.Auth.UUID) != ""
+	case model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolAnyTLS:
+		return strings.TrimSpace(node.Auth.Password) != ""
+	case model.ProtocolTUIC:
+		return strings.TrimSpace(node.Auth.UUID) != "" && strings.TrimSpace(node.Auth.Password) != ""
+	case model.ProtocolWireGuard:
+		return strings.TrimSpace(node.Auth.PrivateKey) != ""
+	default:
+		return true
+	}
+}
+
+func rawNodeString(raw map[string]interface{}, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func looksLikeInfoNode(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
-	patterns := []string{
-		"剩余流量",
-		"流量",
-		"到期",
-		"官网",
-		"套餐",
-		"订阅",
-		"expire",
-		"traffic",
-		"subscription",
-	}
-	for _, pattern := range patterns {
+	for _, pattern := range []string{"剩余流量", "已用流量", "总流量", "到期", "过期", "有效期", "套餐", "官网", "订阅"} {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
+	for _, word := range []string{"expire", "traffic", "used", "remaining", "total", "subscription"} {
+		if containsWord(lower, word) {
+			return true
+		}
+	}
 	return false
+}
+
+func containsWord(value, word string) bool {
+	for index := 0; ; {
+		pos := strings.Index(value[index:], word)
+		if pos == -1 {
+			return false
+		}
+		pos += index
+		beforeOK := pos == 0 || !isAlphaNum(value[pos-1])
+		afterIndex := pos + len(word)
+		afterOK := afterIndex >= len(value) || !isAlphaNum(value[afterIndex])
+		if beforeOK && afterOK {
+			return true
+		}
+		index = pos + len(word)
+	}
+}
+
+func isAlphaNum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 func withNodeTypePrefix(node model.NodeIR) string {

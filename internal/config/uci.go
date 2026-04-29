@@ -203,6 +203,7 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 	setString(section, "output_path", &dst.OutputPath)
 	setString(section, "cache_dir", &dst.CacheDir)
 	setString(section, "state_path", &dst.StatePath)
+	setString(section, "access_token", &dst.AccessToken)
 	setString(section, "subscription_token", &dst.SubscriptionToken)
 	if err := setInt(section, "refresh_interval", &dst.RefreshInterval); err != nil {
 		return fmt.Errorf("service.refresh_interval: %w", err)
@@ -212,6 +213,18 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 	}
 	if err := setBool(section, "stale_if_error", &dst.StaleIfError); err != nil {
 		return fmt.Errorf("service.stale_if_error: %w", err)
+	}
+	if err := setInt(section, "workspace_ttl_seconds", &dst.WorkspaceTTLSeconds); err != nil {
+		return fmt.Errorf("service.workspace_ttl_seconds: %w", err)
+	}
+	if err := setInt(section, "workspace_cleanup_interval_seconds", &dst.WorkspaceCleanupIntervalSeconds); err != nil {
+		return fmt.Errorf("service.workspace_cleanup_interval_seconds: %w", err)
+	}
+	if err := setInt(section, "workspace_cleanup_interval", &dst.WorkspaceCleanupInterval); err != nil {
+		return fmt.Errorf("service.workspace_cleanup_interval: %w", err)
+	}
+	if err := setInt(section, "published_delete_if_not_accessed_days", &dst.PublishedDeleteIfNotAccessedDays); err != nil {
+		return fmt.Errorf("service.published_delete_if_not_accessed_days: %w", err)
 	}
 	if err := setInt(section, "max_subscription_bytes", &dst.MaxSubscriptionBytes); err != nil {
 		return fmt.Errorf("service.max_subscription_bytes: %w", err)

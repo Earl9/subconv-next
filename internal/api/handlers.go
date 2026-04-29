@@ -29,6 +29,7 @@ type statusResponse struct {
 	NextRefreshAt            string   `json:"next_refresh_at"`
 	RefreshInterval          int      `json:"refresh_interval"`
 	Refreshing               bool     `json:"refreshing"`
+	RefreshStage             string   `json:"refresh_stage,omitempty"`
 	YAMLExists               bool     `json:"yaml_exists"`
 	YAMLUpdatedAt            string   `json:"yaml_updated_at"`
 	UpstreamSourceCount      int      `json:"upstream_source_count"`
@@ -66,6 +67,23 @@ type configResponse struct {
 	Config model.Config `json:"config"`
 }
 
+type workspaceResponse struct {
+	OK          bool   `json:"ok"`
+	WorkspaceID string `json:"workspace_id"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+type publishedStatusResponse struct {
+	OK           bool   `json:"ok"`
+	PublishID    string `json:"publish_id,omitempty"`
+	URL          string `json:"url,omitempty"`
+	TokenHint    string `json:"token_hint,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	UpdatedAt    string `json:"updated_at,omitempty"`
+	LastAccessAt string `json:"last_access_at,omitempty"`
+	AccessCount  int    `json:"access_count"`
+}
+
 type subscriptionMetaSourceResponse struct {
 	SourceID     string  `json:"source_id,omitempty"`
 	SourceName   string  `json:"source_name,omitempty"`
@@ -87,10 +105,22 @@ type subscriptionMetaResponse struct {
 	Sources   []subscriptionMetaSourceResponse `json:"sources"`
 }
 
+type auditResponse struct {
+	OK            bool                 `json:"ok"`
+	RawCount      int                  `json:"raw_count"`
+	FinalCount    int                  `json:"final_count"`
+	ExcludedCount int                  `json:"excluded_count"`
+	ExcludedNodes []model.ExcludedNode `json:"excluded_nodes,omitempty"`
+	Warnings      []model.AuditWarning `json:"warnings,omitempty"`
+}
+
 type refreshResponse struct {
-	OK         bool   `json:"ok"`
-	NodeCount  int    `json:"node_count"`
-	OutputPath string `json:"output_path"`
+	OK              bool   `json:"ok"`
+	NodeCount       int    `json:"node_count"`
+	OutputPath      string `json:"output_path"`
+	PublishID       string `json:"publish_id,omitempty"`
+	TokenHint       string `json:"token_hint,omitempty"`
+	SubscriptionURL string `json:"subscription_url,omitempty"`
 }
 
 type logsResponse struct {
@@ -117,7 +147,30 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := s.snapshotStatus()
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
+	status := s.snapshotWorkspaceStatus(ref.Hash)
+	if status.StartedAt.IsZero() {
+		status = model.RuntimeStatus{
+			StartedAt:                ref.Meta.CreatedAt,
+			Running:                  true,
+			RefreshInterval:          effectiveRefreshInterval(cfg),
+			NextRefreshAt:            nextRefreshTime(time.Now().UTC(), cfg),
+			YAMLExists:               yamlFileExists(cfg.Service.OutputPath),
+			YAMLUpdatedAt:            yamlFileUpdatedAt(cfg.Service.OutputPath),
+			UpstreamSourceCount:      enabledSubscriptionCount(cfg.Subscriptions),
+			EnabledSubscriptionCount: enabledSubscriptionCount(cfg.Subscriptions),
+			OutputPath:               cfg.Service.OutputPath,
+		}
+	}
 	writeJSON(w, http.StatusOK, statusResponse{
 		Running:                  status.Running,
 		LastRefreshAt:            formatTime(status.LastRefreshAt),
@@ -125,6 +178,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		NextRefreshAt:            formatTime(status.NextRefreshAt),
 		RefreshInterval:          status.RefreshInterval,
 		Refreshing:               status.Refreshing,
+		RefreshStage:             status.RefreshStage,
 		YAMLExists:               status.YAMLExists,
 		YAMLUpdatedAt:            formatTime(status.YAMLUpdatedAt),
 		UpstreamSourceCount:      status.UpstreamSourceCount,
@@ -142,7 +196,16 @@ func (s *Server) handleSubscriptionMeta(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cfg := s.snapshotConfig()
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
 	state, err := pipeline.LoadNodeState(cfg)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
@@ -176,6 +239,105 @@ func (s *Server) handleSubscriptionMeta(w http.ResponseWriter, r *http.Request) 
 		Aggregate: pipeline.AggregateSubscriptionMetaForConfig(cfg, sourceMap),
 		Sources:   responseSources,
 	})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, auditResponse{
+		OK:            true,
+		RawCount:      state.LastAudit.RawCount,
+		FinalCount:    state.LastAudit.FinalCount,
+		ExcludedCount: state.LastAudit.ExcludedCount,
+		ExcludedNodes: state.LastAudit.ExcludedNodes,
+		Warnings:      state.LastAudit.Warnings,
+	})
+}
+
+func (s *Server) handleValidateOutput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "STATE_LOAD_FAILED", err.Error())
+		return
+	}
+	collected := pipeline.CollectNodes(cfg)
+	finalSet, audit, err := pipeline.BuildFinalNodes(cfg, state, collected.Nodes)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "BUILD_FINAL_NODES_FAILED", err.Error())
+		return
+	}
+	data, err := os.ReadFile(cfg.Service.OutputPath)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "YAML_READ_FAILED", err.Error())
+		return
+	}
+	if err := pipeline.ValidateOutputNoLeak(data, finalSet, audit, renderer.OptionsFromConfig(cfg)); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "OUTPUT_LEAK_DETECTED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handlePreviewYAML(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
+	data, err := os.ReadFile(cfg.Service.OutputPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(""))
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "YAML_READ_FAILED", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleParse(w http.ResponseWriter, r *http.Request) {
@@ -234,40 +396,176 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		ref, err := s.requireWorkspace(r)
+		if err != nil {
+			handleWorkspaceError(w, err)
+			return
+		}
+		cfg, err := s.loadWorkspaceConfig(ref)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, configResponse{
 			OK:     true,
-			Config: s.snapshotConfig(),
+			Config: RedactConfig(cfg),
 		})
 	case http.MethodPut:
+		ref, err := s.requireWorkspace(r)
+		if err != nil {
+			handleWorkspaceError(w, err)
+			return
+		}
 		var req model.Config
 		if err := decodeJSONBody(r, &req); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
 		req = config.Normalize(req)
+		req.Service.OutputPath = ref.OutputPath
+		req.Service.StatePath = ref.StatePath
+		req.Service.CacheDir = ref.CacheDir
 		if err := config.Validate(req); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
 			return
 		}
-
-		path := s.configFilePath()
-		if path == "" {
-			writeAPIError(w, http.StatusInternalServerError, "CONFIG_PATH_UNSET", "config path is not set")
-			return
-		}
-		if err := config.WriteJSON(path, req); err != nil {
+		if err := config.WriteJSON(ref.ConfigPath, req); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 			return
 		}
-
-		s.updateConfig(req)
-		s.appendLog("config updated: " + path)
+		s.appendLog("workspace config updated: " + ref.Hash)
 		writeJSON(w, http.StatusOK, configResponse{
 			OK:     true,
-			Config: req,
+			Config: RedactConfig(req),
 		})
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
+	}
+}
+
+func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	ref, err := s.createWorkspace()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "WORKSPACE_CREATE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, workspaceResponse{
+		OK:          true,
+		WorkspaceID: ref.ID,
+		ExpiresAt:   formatTime(s.workspaceExpiresAt(ref.Meta)),
+	})
+}
+
+func (s *Server) handleWorkspaceSubroutes(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/workspaces/")
+	id = strings.Trim(id, "/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w, http.MethodDelete)
+		return
+	}
+	if err := s.deleteWorkspace(id); err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	if strings.TrimSpace(ref.Meta.PublishID) == "" {
+		writeJSON(w, http.StatusOK, publishedStatusResponse{OK: true})
+		return
+	}
+	published, err := s.loadPublishedByID(ref.Meta.PublishID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, publishedStatusResponse{OK: true})
+		return
+	}
+	writeJSON(w, http.StatusOK, publishedStatusResponse{
+		OK:           true,
+		PublishID:    published.ID,
+		URL:          publishedURL(normalizePublicOrigin(r), published.Meta.Token),
+		TokenHint:    published.Meta.TokenHint,
+		CreatedAt:    formatTime(published.Meta.CreatedAt),
+		UpdatedAt:    formatTime(published.Meta.UpdatedAt),
+		LastAccessAt: formatTime(published.Meta.LastAccessAt),
+		AccessCount:  published.Meta.AccessCount,
+	})
+}
+
+func (s *Server) handlePublishedSubroutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/published/"), "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch {
+	case strings.HasSuffix(path, "/rotate-token"):
+		publishID := strings.TrimSuffix(path, "/rotate-token")
+		s.handleRotatePublishedToken(w, r, strings.Trim(publishID, "/"))
+	default:
+		s.handleDeletePublished(w, r, path)
+	}
+}
+
+func (s *Server) handleRotatePublishedToken(w http.ResponseWriter, r *http.Request, publishID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	published, err := s.rotatePublishedToken(publishID)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, publishedStatusResponse{
+		OK:           true,
+		PublishID:    published.ID,
+		URL:          publishedURL(normalizePublicOrigin(r), published.Meta.Token),
+		TokenHint:    published.Meta.TokenHint,
+		CreatedAt:    formatTime(published.Meta.CreatedAt),
+		UpdatedAt:    formatTime(published.Meta.UpdatedAt),
+		LastAccessAt: formatTime(published.Meta.LastAccessAt),
+		AccessCount:  published.Meta.AccessCount,
+	})
+}
+
+func (s *Server) handleDeletePublished(w http.ResponseWriter, r *http.Request, publishID string) {
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w, http.MethodDelete)
+		return
+	}
+	if err := s.deletePublished(publishID); err != nil {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func handleWorkspaceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errWorkspaceRequired):
+		writeAPIError(w, http.StatusBadRequest, "WORKSPACE_REQUIRED", "workspace is required")
+	case errors.Is(err, errWorkspaceNotFound):
+		writeAPIError(w, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "workspace not found or expired")
+	default:
+		writeAPIError(w, http.StatusInternalServerError, "WORKSPACE_ERROR", err.Error())
 	}
 }
 
@@ -277,12 +575,29 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outcome, err := s.startRefresh("manual refresh")
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	published, created, err := s.ensureWorkspacePublishedRef(&ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "PUBLISH_PREPARE_FAILED", err.Error())
+		return
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+		return
+	}
+	cfg.Service.OutputPath = published.CurrentPath
+	outcome, err := s.startRefreshForConfig(cfg, ref.Hash, "manual refresh")
 	if errors.Is(err, ErrRefreshInProgress) {
 		writeAPIError(w, http.StatusConflict, "REFRESH_IN_PROGRESS", "refresh is already running")
 		return
 	}
 	if err != nil {
+		s.releaseWorkspacePublishedRef(&ref, published, created)
 		message := err.Error()
 		if errors.Is(err, pipeline.ErrNoNodes) {
 			message = "no nodes available for rendering"
@@ -290,11 +605,54 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", message)
 		return
 	}
+	if err := s.finalizePublishedRefresh(&ref, &published); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "PUBLISH_FAILED", err.Error())
+		return
+	}
+	subscriptionURL := publishedURL(normalizePublicOrigin(r), published.Meta.Token)
 	writeJSON(w, http.StatusOK, refreshResponse{
-		OK:         true,
-		NodeCount:  outcome.Result.NodeCount,
-		OutputPath: outcome.Result.OutputPath,
+		OK:              true,
+		NodeCount:       outcome.Result.NodeCount,
+		OutputPath:      published.CurrentPath,
+		PublishID:       published.ID,
+		TokenHint:       published.Meta.TokenHint,
+		SubscriptionURL: subscriptionURL,
 	})
+}
+
+func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "mihomo.yaml" {
+		http.NotFound(w, r)
+		return
+	}
+	data, _, err := s.loadPublishedYAML(parts[0])
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "SUBSCRIPTION_NOT_FOUND", "subscription not found")
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleDeprecatedSubscriptionYAML(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	writeAPIError(w, http.StatusNotFound, "SUBSCRIPTION_NOT_FOUND", "fixed subscription path is disabled; use /s/{token}/mihomo.yaml")
 }
 
 func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +663,7 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 
 	cfg := s.snapshotConfig()
 	if !subscriptionTokenAllowed(cfg, r) {
-		writeAPIError(w, http.StatusForbidden, "INVALID_SUBSCRIPTION_TOKEN", "invalid subscription token")
+		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid subscription token")
 		return
 	}
 	if rawURL := strings.TrimSpace(r.URL.Query().Get("url")); rawURL != "" {
@@ -379,7 +737,10 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 }
 
 func subscriptionTokenAllowed(cfg model.Config, r *http.Request) bool {
-	token := strings.TrimSpace(cfg.Service.SubscriptionToken)
+	token := strings.TrimSpace(cfg.Service.AccessToken)
+	if token == "" {
+		token = strings.TrimSpace(cfg.Service.SubscriptionToken)
+	}
 	if token == "" {
 		return true
 	}
@@ -401,6 +762,8 @@ func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Con
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if userinfo := pipeline.BuildSubscriptionMetaHeader(cfg, aggregate); userinfo != "" {
 		w.Header().Set("Subscription-Userinfo", userinfo)
 	}
@@ -436,9 +799,29 @@ func sanitizeOutputFilename(value string) string {
 	return value
 }
 
+func normalizePublicOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = proto
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1:9876"
+	}
+	return scheme + "://" + host
+}
+
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	ref, err := s.requireWorkspace(r)
+	if err != nil {
+		handleWorkspaceError(w, err)
 		return
 	}
 
@@ -457,7 +840,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, logsResponse{
 		OK:    true,
-		Lines: s.snapshotLogs(tail),
+		Lines: s.snapshotWorkspaceLogs(ref.Hash, tail),
 	})
 }
 

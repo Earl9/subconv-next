@@ -161,6 +161,16 @@ func validateNodes(nodes []model.NodeIR) ([]model.NodeIR, []NodeValidationWarnin
 			nodeWarnings = append(nodeWarnings, message)
 			warnings = append(warnings, NodeValidationWarning{NodeID: node.ID, Level: "warning", Message: message})
 		}
+		if node.Type == model.ProtocolSS && strings.TrimSpace(rawNodeString(node.Raw, "method")) == "" {
+			message := "ss 缺少 cipher/method"
+			nodeWarnings = append(nodeWarnings, message)
+			warnings = append(warnings, NodeValidationWarning{NodeID: node.ID, Level: "warning", Message: message})
+		}
+		if node.Type == model.ProtocolVMess && strings.TrimSpace(node.Auth.UUID) == "" {
+			message := "vmess 缺少 uuid"
+			nodeWarnings = append(nodeWarnings, message)
+			warnings = append(warnings, NodeValidationWarning{NodeID: node.ID, Level: "warning", Message: message})
+		}
 		if strings.TrimSpace(node.Server) == "" || node.Port <= 0 {
 			message := fmt.Sprintf("%s 缺少有效 server/port", node.Type)
 			nodeWarnings = append(nodeWarnings, message)

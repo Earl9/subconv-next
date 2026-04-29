@@ -9,8 +9,10 @@ import (
 type NodeState struct {
 	NodeOverrides    map[string]NodeOverride     `json:"node_overrides,omitempty"`
 	DisabledNodes    []string                    `json:"disabled_nodes,omitempty"`
+	DeletedNodes     []string                    `json:"deleted_nodes,omitempty"`
 	CustomNodes      []NodeIR                    `json:"custom_nodes,omitempty"`
 	SubscriptionMeta map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
+	LastAudit        AuditReport                 `json:"last_audit,omitempty"`
 }
 
 type NodeOverride struct {
@@ -37,6 +39,7 @@ func DefaultNodeState() NodeState {
 	return NodeState{
 		NodeOverrides:    map[string]NodeOverride{},
 		DisabledNodes:    []string{},
+		DeletedNodes:     []string{},
 		CustomNodes:      []NodeIR{},
 		SubscriptionMeta: map[string]SubscriptionMeta{},
 	}
@@ -49,6 +52,9 @@ func NormalizeNodeState(state NodeState) NodeState {
 	if state.DisabledNodes == nil {
 		state.DisabledNodes = []string{}
 	}
+	if state.DeletedNodes == nil {
+		state.DeletedNodes = []string{}
+	}
 	if state.CustomNodes == nil {
 		state.CustomNodes = []NodeIR{}
 	}
@@ -57,6 +63,7 @@ func NormalizeNodeState(state NodeState) NodeState {
 	}
 
 	state.DisabledNodes = cleanStringSlice(state.DisabledNodes)
+	state.DeletedNodes = cleanStringSlice(state.DeletedNodes)
 
 	for id, override := range state.NodeOverrides {
 		cleanID := sanitizeText(id)

@@ -42,6 +42,7 @@ func parseVMess(raw string, source model.SourceInfo) (model.NodeIR, error) {
 
 	setRaw(&node, "alterId", stringField(payload, "aid"))
 	setRaw(&node, "headerType", stringField(payload, "type"))
+	setRaw(&node, "cipher", firstNonEmpty(stringField(payload, "scy"), stringField(payload, "cipher")))
 	return node, nil
 }
 

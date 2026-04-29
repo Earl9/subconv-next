@@ -6,6 +6,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,11 +21,14 @@ import (
 type Server struct {
 	version string
 
-	mu         sync.RWMutex
-	config     model.Config
-	configPath string
-	status     model.RuntimeStatus
-	logLines   []string
+	mu              sync.RWMutex
+	config          model.Config
+	configPath      string
+	status          model.RuntimeStatus
+	logLines        []string
+	workspaceStatus map[string]model.RuntimeStatus
+	workspaceLogs   map[string][]string
+	logWriteMu      sync.Mutex
 
 	refreshMu      sync.Mutex
 	refreshRunning bool
@@ -52,7 +58,9 @@ func NewServer(version string, cfg model.Config) *Server {
 			YAMLExists:               yamlFileExists(cfg.Service.OutputPath),
 			YAMLUpdatedAt:            yamlFileUpdatedAt(cfg.Service.OutputPath),
 		},
-		siteLogoCache: map[string]siteLogoCacheEntry{},
+		siteLogoCache:   map[string]siteLogoCacheEntry{},
+		workspaceStatus: map[string]model.RuntimeStatus{},
+		workspaceLogs:   map[string][]string{},
 	}
 }
 
@@ -60,16 +68,24 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/workspaces", s.handleWorkspaces)
+	mux.HandleFunc("/api/workspaces/", s.handleWorkspaceSubroutes)
+	mux.HandleFunc("/api/published", s.handlePublished)
+	mux.HandleFunc("/api/published/", s.handlePublishedSubroutes)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/site-logo", s.handleSiteLogo)
 	mux.HandleFunc("/api/subscription-meta", s.handleSubscriptionMeta)
+	mux.HandleFunc("/api/audit", s.handleAudit)
+	mux.HandleFunc("/api/preview-yaml", s.handlePreviewYAML)
+	mux.HandleFunc("/api/validate-output", s.handleValidateOutput)
 	mux.HandleFunc("/api/nodes", s.handleNodes)
 	mux.HandleFunc("/api/nodes/", s.handleNodeSubroutes)
 	mux.HandleFunc("/api/parse", s.handleParse)
 	mux.HandleFunc("/api/generate", s.handleGenerate)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/logs", s.handleLogs)
-	mux.HandleFunc("/sub/mihomo.yaml", s.handleSubscriptionYAML)
+	mux.HandleFunc("/s/", s.handlePublishedSubscriptionYAML)
+	mux.HandleFunc("/sub/mihomo.yaml", s.handleDeprecatedSubscriptionYAML)
 	mux.HandleFunc("/favicon.svg", serveEmbeddedAsset("favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -130,15 +146,14 @@ func (s *Server) appendLog(message string) {
 	if message == "" {
 		return
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339), maskSensitiveText(message))
+	s.mu.Lock()
 	s.logLines = append(s.logLines, line)
 	if len(s.logLines) > 500 {
 		s.logLines = append([]string(nil), s.logLines[len(s.logLines)-500:]...)
 	}
+	s.mu.Unlock()
+	s.writeLogLine(line)
 }
 
 func (s *Server) snapshotLogs(tail int) []string {
@@ -149,6 +164,46 @@ func (s *Server) snapshotLogs(tail int) []string {
 		return maskLogLines(s.logLines)
 	}
 	return maskLogLines(s.logLines[len(s.logLines)-tail:])
+}
+
+func (s *Server) snapshotWorkspaceLogs(workspaceHash string, tail int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lines := s.workspaceLogs[workspaceHash]
+	if tail <= 0 || tail >= len(lines) {
+		return maskLogLines(lines)
+	}
+	return maskLogLines(lines[len(lines)-tail:])
+}
+
+func (s *Server) appendWorkspaceLog(workspaceHash, message string) {
+	if strings.TrimSpace(workspaceHash) == "" || message == "" {
+		return
+	}
+	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339), maskSensitiveText(message))
+	s.mu.Lock()
+	lines := append(s.workspaceLogs[workspaceHash], line)
+	if len(lines) > 500 {
+		lines = append([]string(nil), lines[len(lines)-500:]...)
+	}
+	s.workspaceLogs[workspaceHash] = lines
+	s.mu.Unlock()
+	s.writeLogLine("workspace=" + shortNodeID(workspaceHash) + " " + line)
+}
+
+func (s *Server) snapshotWorkspaceStatus(workspaceHash string) model.RuntimeStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.workspaceStatus[workspaceHash]
+}
+
+func (s *Server) setWorkspaceStatus(workspaceHash string, status model.RuntimeStatus) {
+	if strings.TrimSpace(workspaceHash) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workspaceStatus[workspaceHash] = status
 }
 
 func (s *Server) setRefreshSuccess(nodeCount int, nodeNames []string, outputPath string, at time.Time) {
@@ -165,6 +220,7 @@ func (s *Server) setRefreshSuccess(nodeCount int, nodeNames []string, outputPath
 	s.status.YAMLExists = true
 	s.status.YAMLUpdatedAt = at
 	s.status.LastError = ""
+	s.status.RefreshStage = ""
 }
 
 func (s *Server) setRefreshFailure(message string, at time.Time) {
@@ -177,12 +233,22 @@ func (s *Server) setRefreshFailure(message string, at time.Time) {
 	s.status.YAMLExists = yamlFileExists(s.config.Service.OutputPath)
 	s.status.YAMLUpdatedAt = yamlFileUpdatedAt(s.config.Service.OutputPath)
 	s.status.LastError = message
+	s.status.RefreshStage = ""
 }
 
 func (s *Server) setRefreshing(refreshing bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status.Refreshing = refreshing
+	if !refreshing {
+		s.status.RefreshStage = ""
+	}
+}
+
+func (s *Server) setRefreshStage(stage string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.RefreshStage = strings.TrimSpace(stage)
 }
 
 func (s *Server) uptimeSeconds() int64 {
@@ -196,6 +262,57 @@ func (s *Server) uptimeSeconds() int64 {
 		return 0
 	}
 	return uptime
+}
+
+const (
+	maxAppLogBytes = 5 * 1024 * 1024
+	maxAppLogFiles = 3
+)
+
+func (s *Server) writeLogLine(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	s.logWriteMu.Lock()
+	defer s.logWriteMu.Unlock()
+
+	dir := s.logsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "app.log")
+	if err := rotateLogFile(path, int64(len(line)+1)); err != nil {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_, _ = file.WriteString(line + "\n")
+}
+
+func rotateLogFile(path string, incomingBytes int64) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Size()+incomingBytes <= maxAppLogBytes {
+		return nil
+	}
+	oldest := fmt.Sprintf("%s.%d", path, maxAppLogFiles)
+	_ = os.Remove(oldest)
+	for index := maxAppLogFiles - 1; index >= 1; index-- {
+		current := fmt.Sprintf("%s.%d", path, index)
+		next := fmt.Sprintf("%s.%d", path, index+1)
+		if _, err := os.Stat(current); err == nil {
+			_ = os.Rename(current, next)
+		}
+	}
+	return os.Rename(path, path+".1")
 }
 
 func enabledSubscriptionCount(subscriptions []model.SubscriptionConfig) int {
@@ -293,13 +410,35 @@ func maskLogLines(lines []string) []string {
 	return out
 }
 
+var (
+	publishedPathPattern = regexp.MustCompile(`/s/[^/\s]+/mihomo\.yaml`)
+	schemeSecretPattern  = regexp.MustCompile(`(?i)\b(ss|trojan|anytls|tuic|vless|vmess|wireguard|socks5|http)://([^@/\s]+)@`)
+	uuidPattern          = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	secretPairPattern    = regexp.MustCompile(`(?i)\b(password|uuid|token|private[-_ ]?key|pre[-_ ]?shared[-_ ]?key|authorization|cookie)\s*[:=]\s*[^,\s"']+`)
+)
+
 func maskSensitiveText(value string) string {
-	keys := []string{"token", "sig", "key", "auth", "password", "uuid", "private-key", "private_key", "pre-shared-key", "presharedkey"}
+	keys := []string{"token", "sig", "key", "auth", "password", "uuid", "private-key", "private_key", "pre-shared-key", "presharedkey", "access_token", "authorization", "cookie"}
 	masked := value
 	for _, key := range keys {
 		masked = maskQueryValue(masked, key)
 	}
+	masked = publishedPathPattern.ReplaceAllString(masked, "/s/<redacted>/mihomo.yaml")
+	masked = schemeSecretPattern.ReplaceAllString(masked, `$1://***@`)
+	masked = uuidPattern.ReplaceAllString(masked, "***")
+	masked = secretPairPattern.ReplaceAllStringFunc(masked, maskSecretPair)
+	masked = maskHeaderValue(masked, "authorization")
+	masked = maskHeaderValue(masked, "cookie")
 	return masked
+}
+
+func maskSecretPair(input string) string {
+	for index, r := range input {
+		if r == ':' || r == '=' {
+			return input[:index+1] + "***"
+		}
+	}
+	return input
 }
 
 func maskQueryValue(input, key string) string {
@@ -326,4 +465,24 @@ func maskQueryValue(input, key string) string {
 		lower = strings.ToLower(input)
 		searchFrom = start + 3
 	}
+}
+
+func maskHeaderValue(input, key string) string {
+	lower := strings.ToLower(input)
+	pattern := strings.ToLower(key) + ":"
+	index := strings.Index(lower, pattern)
+	if index == -1 {
+		return input
+	}
+	start := index + len(pattern)
+	end := start
+	for end < len(input) {
+		switch input[end] {
+		case '\n', '\r':
+			goto done
+		}
+		end++
+	}
+done:
+	return input[:start] + " ***" + input[end:]
 }

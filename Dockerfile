@@ -1,7 +1,8 @@
-FROM golang:1.22 AS build
+FROM --platform=$BUILDPLATFORM golang:1.22 AS build
 
 WORKDIR /src
 
+ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
@@ -14,13 +15,16 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 
 FROM alpine:3.20
 
-RUN mkdir -p /config /data
-
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /out/subconv-next /usr/local/bin/subconv-next
 
 WORKDIR /app
 
 EXPOSE 9876
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+	CMD wget -qO- http://127.0.0.1:9876/healthz >/dev/null || exit 1
 
 ENTRYPOINT ["subconv-next"]
 CMD ["serve", "--config", "/config/config.json"]

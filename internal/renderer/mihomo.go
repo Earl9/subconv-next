@@ -117,6 +117,8 @@ type mihomoProxy struct {
 	Encryption               string                 `yaml:"encryption,omitempty"`
 	Cipher                   string                 `yaml:"cipher,omitempty"`
 	Password                 string                 `yaml:"password,omitempty"`
+	Protocol                 string                 `yaml:"protocol,omitempty"`
+	ProtocolParam            string                 `yaml:"protocol-param,omitempty"`
 	Username                 string                 `yaml:"username,omitempty"`
 	UUID                     string                 `yaml:"uuid,omitempty"`
 	AlterID                  interface{}            `yaml:"alterId,omitempty"`
@@ -136,6 +138,7 @@ type mihomoProxy struct {
 	H2Opts                   *mihomoH2Opts          `yaml:"h2-opts,omitempty"`
 	XHTTPOpts                *mihomoXHTTPOpts       `yaml:"xhttp-opts,omitempty"`
 	Obfs                     string                 `yaml:"obfs,omitempty"`
+	ObfsParam                string                 `yaml:"obfs-param,omitempty"`
 	ObfsPassword             string                 `yaml:"obfs-password,omitempty"`
 	CongestionController     string                 `yaml:"congestion-controller,omitempty"`
 	UDPRelayMode             string                 `yaml:"udp-relay-mode,omitempty"`
@@ -264,7 +267,7 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.UnifiedDelay = cfg.Render.UnifiedDelay
 	opts.TCPConcurrent = cfg.Render.TCPConcurrent
 	opts.FindProcessMode = cfg.Render.FindProcessMode
-	opts.GlobalClientFingerprint = cfg.Render.GlobalClientFingerprint
+	opts.GlobalClientFingerprint = strings.TrimSpace(cfg.Render.GlobalClientFingerprint)
 	opts.DNS = cfg.Render.DNS
 	opts.Profile = cfg.Render.Profile
 	opts.Sniffer = cfg.Render.Sniffer
@@ -502,8 +505,16 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 	case model.ProtocolSS:
 		proxy.Cipher = rawString(node.Raw, "method")
 		proxy.Password = node.Auth.Password
+	case model.ProtocolSSR:
+		proxy.Cipher = rawString(node.Raw, "method")
+		proxy.Password = node.Auth.Password
+		proxy.Protocol = rawString(node.Raw, "protocol")
+		proxy.ProtocolParam = rawString(node.Raw, "protocolParam")
+		proxy.Obfs = rawString(node.Raw, "obfs")
+		proxy.ObfsParam = rawString(node.Raw, "obfsParam")
 	case model.ProtocolVMess:
 		proxy.UUID = node.Auth.UUID
+		proxy.Cipher = firstNonEmptyString(rawString(node.Raw, "cipher"), rawString(node.Raw, "scy"), "auto")
 		proxy.Network = node.Transport.Network
 		proxy.TLS = node.TLS.Enabled
 		proxy.ServerName = node.TLS.SNI
@@ -655,6 +666,7 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 		groupProxyMode = "compact"
 	}
 	allNames := nodeNames(nodes)
+	regularNames := nodeNames(filterOutInfoNodes(nodes))
 	if len(allNames) == 0 {
 		return []mihomoProxyGroup{
 			{
@@ -701,7 +713,7 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	if err := addGroup(mihomoProxyGroup{
 		Name:     groupAutoSelect,
 		Type:     "url-test",
-		Proxies:  allNames,
+		Proxies:  regularNames,
 		URL:      probeURL,
 		Interval: 300,
 		Lazy:     model.Bool(false),
@@ -770,6 +782,56 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	}
 
 	return groups, nil
+}
+
+func filterOutInfoNodes(nodes []model.NodeIR) []model.NodeIR {
+	out := make([]model.NodeIR, 0, len(nodes))
+	for _, node := range nodes {
+		if rendererInfoNode(node) {
+			continue
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+func rendererInfoNode(node model.NodeIR) bool {
+	if value, ok := node.Raw["_infoNode"].(bool); ok && value {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(node.Name))
+	for _, pattern := range []string{"剩余流量", "已用流量", "总流量", "到期", "过期", "有效期", "套餐", "官网"} {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	for _, word := range []string{"expire", "traffic", "used", "remaining", "total"} {
+		if containsWord(lower, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWord(value, word string) bool {
+	for index := 0; ; {
+		pos := strings.Index(value[index:], word)
+		if pos == -1 {
+			return false
+		}
+		pos += index
+		beforeOK := pos == 0 || !rendererAlphaNum(value[pos-1])
+		afterIndex := pos + len(word)
+		afterOK := afterIndex >= len(value) || !rendererAlphaNum(value[afterIndex])
+		if beforeOK && afterOK {
+			return true
+		}
+		index = pos + len(word)
+	}
+}
+
+func rendererAlphaNum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 func regionProxyNames(nodes []model.NodeIR) map[string][]string {
@@ -1331,7 +1393,7 @@ func udpOrDefault(node model.NodeIR) *bool {
 		return node.UDP
 	}
 	switch node.Type {
-	case model.ProtocolSS, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard:
+	case model.ProtocolSS, model.ProtocolSSR, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard:
 		return model.Bool(true)
 	default:
 		return nil

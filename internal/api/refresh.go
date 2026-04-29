@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	"subconv-next/internal/model"
@@ -17,6 +18,10 @@ type refreshOutcome struct {
 }
 
 func (s *Server) startRefresh(reason string) (*refreshOutcome, error) {
+	return s.startRefreshForConfig(s.snapshotConfig(), "", reason)
+}
+
+func (s *Server) startRefreshForConfig(cfg model.Config, workspaceHash, reason string) (*refreshOutcome, error) {
 	s.refreshMu.Lock()
 	if s.refreshRunning {
 		done := s.refreshDone
@@ -31,8 +36,7 @@ func (s *Server) startRefresh(reason string) (*refreshOutcome, error) {
 	s.setRefreshing(true)
 	defer s.finishRefresh()
 
-	cfg := s.snapshotConfig()
-	outcome, err := s.executeRefresh(cfg, reason)
+	outcome, err := s.executeRefresh(cfg, workspaceHash, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +74,14 @@ func (s *Server) waitForRefresh(timeout time.Duration) bool {
 	}
 }
 
-func (s *Server) executeRefresh(cfg model.Config, reason string) (*refreshOutcome, error) {
+func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) (*refreshOutcome, error) {
 	if s.refreshBeforeRun != nil {
 		s.refreshBeforeRun()
 	}
-	result, err := pipeline.RenderConfig(cfg)
+	s.setRefreshStage("fetching")
+	result, err := pipeline.RenderConfigWithProgress(cfg, func(stage string) {
+		s.setRefreshStage(stage)
+	})
 	now := time.Now().UTC()
 	if err != nil {
 		message := err.Error()
@@ -83,14 +90,17 @@ func (s *Server) executeRefresh(cfg model.Config, reason string) (*refreshOutcom
 		}
 		s.setRefreshFailure(message, now)
 		s.appendLog(reason + " failed: " + message)
+		s.appendWorkspaceLog(workspaceHash, reason+" failed: "+message)
 		if s.refreshAfterRun != nil {
 			s.refreshAfterRun()
 		}
 		return nil, err
 	}
+	s.setRefreshStage("writing")
 	if err := pipeline.SaveNodeState(cfg, result.State); err != nil {
 		s.setRefreshFailure(err.Error(), now)
 		s.appendLog(reason + " state save failed: " + err.Error())
+		s.appendWorkspaceLog(workspaceHash, reason+" state save failed: "+err.Error())
 		if s.refreshAfterRun != nil {
 			s.refreshAfterRun()
 		}
@@ -99,6 +109,7 @@ func (s *Server) executeRefresh(cfg model.Config, reason string) (*refreshOutcom
 	if err := pipeline.WriteRendered(result.OutputPath, result.YAML); err != nil {
 		s.setRefreshFailure(err.Error(), now)
 		s.appendLog(reason + " write failed: " + err.Error())
+		s.appendWorkspaceLog(workspaceHash, reason+" write failed: "+err.Error())
 		if s.refreshAfterRun != nil {
 			s.refreshAfterRun()
 		}
@@ -106,13 +117,33 @@ func (s *Server) executeRefresh(cfg model.Config, reason string) (*refreshOutcom
 	}
 
 	s.setRefreshSuccess(result.NodeCount, nodeNames(result.Nodes), result.OutputPath, now)
+	if strings.TrimSpace(workspaceHash) != "" {
+		s.setWorkspaceStatus(workspaceHash, model.RuntimeStatus{
+			StartedAt:                now,
+			Running:                  true,
+			LastRefreshAt:            now,
+			LastSuccessAt:            now,
+			NextRefreshAt:            nextRefreshTime(now, cfg),
+			RefreshInterval:          effectiveRefreshInterval(cfg),
+			YAMLExists:               true,
+			YAMLUpdatedAt:            now,
+			UpstreamSourceCount:      enabledSubscriptionCount(cfg.Subscriptions),
+			NodeCount:                result.NodeCount,
+			NodeNames:                nodeNames(result.Nodes),
+			EnabledSubscriptionCount: enabledSubscriptionCount(cfg.Subscriptions),
+			OutputPath:               result.OutputPath,
+		})
+	}
 	for _, warning := range result.Warnings {
 		s.appendLog(reason + " warning: " + warning)
+		s.appendWorkspaceLog(workspaceHash, reason+" warning: "+warning)
 	}
 	for _, parseErr := range result.Errors {
 		s.appendLog(reason + " parse error [" + parseErr.Kind + "]: " + parseErr.Message)
+		s.appendWorkspaceLog(workspaceHash, reason+" parse error ["+parseErr.Kind+"]: "+parseErr.Message)
 	}
 	s.appendLog(reason + " succeeded: wrote " + result.OutputPath)
+	s.appendWorkspaceLog(workspaceHash, reason+" succeeded: wrote "+result.OutputPath)
 	if s.refreshAfterRun != nil {
 		s.refreshAfterRun()
 	}
@@ -138,6 +169,25 @@ func (s *Server) StartScheduler(stop <-chan struct{}) {
 				if err != nil && !errors.Is(err, ErrRefreshInProgress) {
 					continue
 				}
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			cfg := s.snapshotConfig()
+			interval := time.Duration(workspaceCleanupInterval(cfg)) * time.Second
+			if interval <= 0 {
+				interval = time.Hour
+			}
+			timer := time.NewTimer(interval)
+			select {
+			case <-stop:
+				timer.Stop()
+				return
+			case <-timer.C:
+				_ = s.cleanupExpiredWorkspaces()
+				_ = s.cleanupStalePublished()
 			}
 		}
 	}()

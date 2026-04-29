@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -110,10 +111,23 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 
 	fetched, err := f.fetchNetwork(ctx, currentURL, source)
 	if err == nil {
-		if cacheErr := f.writeCache(source.URL, fetched); cacheErr != nil {
-			return fetched, []string{fmt.Sprintf("cache write failed for %s: %v", source.Name, cacheErr)}, nil
+		var warnings []string
+		if shouldRetryWithGenericUserAgent(source, fetched.Content) {
+			fallback := source
+			fallback.UserAgent = model.DefaultUserAgent
+			refetched, retryErr := f.fetchNetwork(ctx, currentURL, fallback)
+			if retryErr == nil {
+				fetched = refetched
+				warnings = append(warnings, fmt.Sprintf("retried %s with generic user-agent after receiving empty Clash/Mihomo YAML", source.Name))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("generic user-agent retry failed for %s: %v", source.Name, retryErr))
+			}
 		}
-		return fetched, nil, nil
+		if cacheErr := f.writeCache(source.URL, fetched); cacheErr != nil {
+			warnings = append(warnings, fmt.Sprintf("cache write failed for %s: %v", source.Name, cacheErr))
+			return fetched, warnings, nil
+		}
+		return fetched, warnings, nil
 	}
 
 	cached, cacheErr := f.readCache(source.URL)
@@ -350,4 +364,23 @@ func userAgentOrDefault(value string) string {
 		return model.DefaultUserAgent
 	}
 	return value
+}
+
+var emptyClashYAMLPattern = regexp.MustCompile(`(?mi)^proxies:\s*\[\s*\]\s*$`)
+
+func shouldRetryWithGenericUserAgent(source Source, content []byte) bool {
+	ua := strings.ToLower(strings.TrimSpace(source.UserAgent))
+	if ua == "" || ua == strings.ToLower(model.DefaultUserAgent) {
+		return false
+	}
+	if !strings.Contains(ua, "clash") && !strings.Contains(ua, "mihomo") && !strings.Contains(ua, "meta") && !strings.Contains(ua, "stash") && !strings.Contains(ua, "sing-box") {
+		return false
+	}
+
+	body := string(content)
+	lower := strings.ToLower(body)
+	if !strings.Contains(lower, "proxy-groups:") && !strings.Contains(lower, "rules:") {
+		return false
+	}
+	return emptyClashYAMLPattern.MatchString(body)
 }

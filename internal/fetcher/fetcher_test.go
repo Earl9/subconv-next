@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"subconv-next/internal/model"
 )
 
 func TestFetchSuccessAndCacheFallback(t *testing.T) {
@@ -85,6 +87,64 @@ func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("Fetch() error = nil, want blocked host error")
+	}
+}
+
+func TestFetchFallsBackFromEmptyClashYAML(t *testing.T) {
+	callUserAgents := []string{}
+
+	f := New(Options{
+		CacheDir:          t.TempDir(),
+		Timeout:           5 * time.Second,
+		MaxBodyBytes:      4096,
+		MaxRedirects:      3,
+		AllowPrivateHosts: true,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+		RequestDoer: func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
+			callUserAgents = append(callUserAgents, source.UserAgent)
+			if strings.EqualFold(strings.TrimSpace(source.UserAgent), "clash") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"text/plain"},
+					},
+					Body: io.NopCloser(strings.NewReader("proxies: []\nproxy-groups:\n  - { name: demo, type: select, proxies: [DIRECT] }\nrules:\n  - MATCH,DIRECT\n")),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/plain"},
+				},
+				Body: io.NopCloser(strings.NewReader("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#fallback")),
+			}, nil
+		},
+	})
+
+	source := Source{
+		Name:      "demo",
+		URL:       "https://example.com/subscription",
+		UserAgent: "clash",
+		Enabled:   true,
+	}
+
+	fetched, warnings, err := f.Fetch(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(callUserAgents) != 2 {
+		t.Fatalf("len(callUserAgents) = %d, want 2", len(callUserAgents))
+	}
+	if callUserAgents[1] != model.DefaultUserAgent {
+		t.Fatalf("fallback user-agent = %q, want %q", callUserAgents[1], model.DefaultUserAgent)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "generic user-agent") {
+		t.Fatalf("warnings = %#v, want generic user-agent retry warning", warnings)
+	}
+	if got := string(fetched.Content); !strings.Contains(got, "ss://") {
+		t.Fatalf("fetched.Content = %q, want fallback URI content", got)
 	}
 }
 

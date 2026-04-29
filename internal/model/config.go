@@ -1,8 +1,8 @@
 package model
 
 const (
-	DefaultUserAgent          = "SubConvNext/0.1"
-	DefaultListenAddr         = "0.0.0.0"
+	DefaultUserAgent          = "SubConvNext/1.0"
+	DefaultListenAddr         = "127.0.0.1"
 	DefaultListenPort         = 9876
 	DefaultLogLevel           = "info"
 	DefaultTemplate           = "standard"
@@ -25,21 +25,28 @@ type Config struct {
 }
 
 type ServiceConfig struct {
-	Enabled              bool   `json:"enabled"`
-	ListenAddr           string `json:"listen_addr"`
-	ListenPort           int    `json:"listen_port"`
-	LogLevel             string `json:"log_level"`
-	Template             string `json:"template"`
-	OutputPath           string `json:"output_path"`
-	CacheDir             string `json:"cache_dir"`
-	StatePath            string `json:"state_path"`
-	RefreshInterval      int    `json:"refresh_interval"`
-	RefreshOnRequest     bool   `json:"refresh_on_request"`
-	StaleIfError         bool   `json:"stale_if_error"`
-	SubscriptionToken    string `json:"subscription_token,omitempty"`
-	MaxSubscriptionBytes int    `json:"max_subscription_bytes"`
-	FetchTimeoutSeconds  int    `json:"fetch_timeout_seconds"`
-	AllowLAN             bool   `json:"allow_lan"`
+	Enabled                          bool   `json:"enabled"`
+	ListenAddr                       string `json:"listen_addr"`
+	ListenPort                       int    `json:"listen_port"`
+	LogLevel                         string `json:"log_level"`
+	Template                         string `json:"template"`
+	OutputPath                       string `json:"output_path"`
+	CacheDir                         string `json:"cache_dir"`
+	StatePath                        string `json:"state_path"`
+	RefreshInterval                  int    `json:"refresh_interval"`
+	RefreshOnRequest                 bool   `json:"refresh_on_request"`
+	StaleIfError                     bool   `json:"stale_if_error"`
+	StrictMode                       bool   `json:"strict_mode"`
+	WorkspaceTTLSeconds              int    `json:"workspace_ttl_seconds"`
+	WorkspaceCleanupIntervalSeconds  int    `json:"workspace_cleanup_interval_seconds,omitempty"`
+	PublishedDeleteIfNotAccessedDays int    `json:"published_delete_if_not_accessed_days,omitempty"`
+	WorkspaceCleanupInterval         int    `json:"workspace_cleanup_interval,omitempty"`
+	PublishedSubscriptionTTLSeconds  int    `json:"published_subscription_ttl_seconds,omitempty"`
+	AccessToken                      string `json:"access_token,omitempty"`
+	SubscriptionToken                string `json:"subscription_token,omitempty"`
+	MaxSubscriptionBytes             int    `json:"max_subscription_bytes"`
+	FetchTimeoutSeconds              int    `json:"fetch_timeout_seconds"`
+	AllowLAN                         bool   `json:"allow_lan"`
 }
 
 type SubscriptionConfig struct {
@@ -73,6 +80,7 @@ type RenderConfig struct {
 	Emoji                   bool                     `json:"emoji"`
 	ShowNodeType            bool                     `json:"show_node_type"`
 	IncludeInfoNode         bool                     `json:"include_info_node"`
+	ShowInfoNodes           bool                     `json:"show_info_nodes,omitempty"`
 	SkipTLSVerify           bool                     `json:"skip_tls_verify"`
 	UDP                     bool                     `json:"udp"`
 	NodeList                bool                     `json:"node_list"`
@@ -221,19 +229,23 @@ func DefaultConfig() Config {
 
 func DefaultServiceConfig() ServiceConfig {
 	return ServiceConfig{
-		Enabled:              true,
-		ListenAddr:           DefaultListenAddr,
-		ListenPort:           DefaultListenPort,
-		LogLevel:             DefaultLogLevel,
-		Template:             DefaultTemplate,
-		OutputPath:           DefaultOutputPath,
-		CacheDir:             DefaultCacheDir,
-		StatePath:            DefaultStatePath,
-		RefreshInterval:      DefaultRefreshInterval,
-		RefreshOnRequest:     true,
-		StaleIfError:         true,
-		MaxSubscriptionBytes: DefaultMaxSubscriptionB,
-		FetchTimeoutSeconds:  DefaultFetchTimeoutSecond,
+		Enabled:                         true,
+		ListenAddr:                      DefaultListenAddr,
+		ListenPort:                      DefaultListenPort,
+		LogLevel:                        DefaultLogLevel,
+		Template:                        DefaultTemplate,
+		OutputPath:                      DefaultOutputPath,
+		CacheDir:                        DefaultCacheDir,
+		StatePath:                       DefaultStatePath,
+		RefreshInterval:                 DefaultRefreshInterval,
+		RefreshOnRequest:                true,
+		StaleIfError:                    true,
+		StrictMode:                      true,
+		WorkspaceTTLSeconds:             86400,
+		WorkspaceCleanupIntervalSeconds: 3600,
+		WorkspaceCleanupInterval:        3600,
+		MaxSubscriptionBytes:            DefaultMaxSubscriptionB,
+		FetchTimeoutSeconds:             DefaultFetchTimeoutSecond,
 	}
 }
 
@@ -260,7 +272,8 @@ func DefaultRenderConfig() RenderConfig {
 		EnhancedMode:          DefaultEnhancedMode,
 		Emoji:                 true,
 		ShowNodeType:          true,
-		IncludeInfoNode:       true,
+		IncludeInfoNode:       false,
+		ShowInfoNodes:         false,
 		UDP:                   true,
 		FilterIllegal:         true,
 		GroupProxyMode:        "compact",

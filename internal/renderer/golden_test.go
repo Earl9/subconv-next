@@ -198,6 +198,14 @@ func TestRenderCompactProxies(t *testing.T) {
 	}
 }
 
+func TestRenderVMessDefaultsCipherAuto(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "vmess.txt"))
+	got := mustRender(t, nodes, standardRenderOptions())
+	if !strings.Contains(string(got), "cipher: auto") {
+		t.Fatalf("vmess output should include cipher: auto:\n%s", string(got))
+	}
+}
+
 func TestRenderCompactRuleProviders(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	got := mustRender(t, nodes, standardRenderOptions())
