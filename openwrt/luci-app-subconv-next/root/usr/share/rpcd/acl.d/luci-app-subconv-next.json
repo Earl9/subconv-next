@@ -1,0 +1,18 @@
+{
+	"luci-app-subconv-next": {
+		"description": "Grant access to SubConv Next configuration and service control",
+		"read": {
+			"uci": [ "subconv-next" ],
+			"ubus": {
+				"luci": [ "setInitAction" ],
+				"service": [ "list" ]
+			}
+		},
+		"write": {
+			"uci": [ "subconv-next" ],
+			"ubus": {
+				"luci": [ "setInitAction" ]
+			}
+		}
+	}
+}

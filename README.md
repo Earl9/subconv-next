@@ -399,13 +399,41 @@ docker build -t subconv-next:local .
 
 ## OpenWrt 计划
 
-V1 先保证 Docker 和普通 Linux 二进制稳定。OpenWrt 路线按以下顺序推进：
+OpenWrt 支持在 V1 中仍标记为实验性；普通部署优先推荐 Docker。
 
-1. 提供静态二进制。
-2. 提供 `init.d` 服务脚本和 procd 管理。
-3. 提供 UCI 配置。
-4. 验证 `ipk` 包。
-5. LuCI 后续再做，不包含在 V1 初始发布中。
+首个目标为 `rockchip/armv8`，即 `arm64 / aarch64`。默认发布包是 all-in-one IPK，包含后端二进制、`init.d`、UCI、`procd` 数据目录和 LuCI 管理壳。
+
+包格式按设备包管理器选择：
+
+- Kwrt/opkg 设备安装 `.ipk`，例如 `DISTRIB_ARCH='aarch64_generic'` 且 `opkg print-architecture` 包含 `aarch64_generic`。
+- 官方 OpenWrt 25.12 SDK 默认启用 `CONFIG_USE_APK=y`，通常输出 `.apk`，只适合 APK-based 固件。
+- 如果暂时没有 Kwrt/IPK SDK，可以使用 `scripts/package-openwrt-ipk-sdk.sh` 调用 OpenWrt SDK 自带 `scripts/ipkg-build` 从 arm64 静态二进制生成 opkg 可安装的 `.ipk`。
+
+安装路径：
+
+```text
+/usr/bin/subconv-next
+/etc/config/subconv-next
+/etc/init.d/subconv-next
+/etc/subconv-next/data
+/usr/share/luci/menu.d/luci-app-subconv-next.json
+/usr/share/rpcd/acl.d/luci-app-subconv-next.json
+/www/luci-static/resources/view/subconv-next/index.js
+```
+
+基本使用：
+
+```sh
+# opkg/IPK systems, including current Kwrt 25.12.2 opkg builds:
+opkg install /tmp/subconv-next_1.0.0-3_aarch64_generic.ipk
+
+# APK-based OpenWrt 25.12 builds:
+apk add --allow-untrusted /tmp/subconv-next-*.apk
+
+curl -fsS http://127.0.0.1:9876/healthz
+```
+
+all-in-one 包安装后会按 UCI `enabled=1` 默认自动 enable/start。LuCI 入口位于 `Services / SubConv Next`，可查看状态、修改端口、启动/停止/重启服务，并打开 SubConv Next Web UI；不需要单独安装 `luci-app-subconv-next`。
 
 当前 OpenWrt 相关说明见 [docs/openwrt-build.md](docs/openwrt-build.md)、[docs/03-openwrt-package.md](docs/03-openwrt-package.md) 和 [docs/10-luci-app.md](docs/10-luci-app.md)。
 

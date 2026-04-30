@@ -1,0 +1,13 @@
+{
+	"admin/services/subconv-next": {
+		"title": "SubConv Next",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "subconv-next/index"
+		},
+		"depends": {
+			"acl": [ "luci-app-subconv-next" ]
+		}
+	}
+}

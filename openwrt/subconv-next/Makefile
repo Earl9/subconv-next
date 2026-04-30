@@ -1,10 +1,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=subconv-next
-PKG_VERSION:=0.1.0
-PKG_RELEASE:=1
+PKG_VERSION:=1.0.0
+PKG_RELEASE:=3
 PKG_LICENSE:=MIT
-PKG_MAINTAINER:=SubConv Next
+PKG_MAINTAINER:=SubConv Next contributors
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 PKG_BUILD_DEPENDS:=golang/host
@@ -35,11 +35,15 @@ define Package/subconv-next
   CATEGORY:=Network
   TITLE:=SubConv Next Mihomo subscription generator
   URL:=https://github.com/subconv-next/subconv-next
-  DEPENDS:=
+  DEPENDS:=+ca-bundle +luci-base +rpcd +uci
 endef
 
 define Package/subconv-next/description
   Self-hosted subscription converter and Mihomo YAML generator.
+endef
+
+define Package/subconv-next/conffiles
+/etc/config/subconv-next
 endef
 
 define Build/Prepare
@@ -50,13 +54,18 @@ define Build/Prepare
 		--exclude data \
 		--exclude dist \
 		--exclude .cache \
-		--exclude subconv-next \
+		--exclude ./subconv-next \
 		-cf - . | tar -C $(PKG_BUILD_DIR) -xf -
 endef
 
 define Build/Compile
 	mkdir -p $(PKG_BUILD_DIR)/.cache/go-build $(PKG_BUILD_DIR)/.cache/go-mod
 	(cd $(PKG_BUILD_DIR); \
+		GO_BIN="$(STAGING_DIR_HOSTPKG)/bin/go"; \
+		if [ ! -x "$$$$GO_BIN" ]; then \
+			GO_BIN="$$$$(ls $(STAGING_DIR_HOSTPKG)/bin/go[0-9]* 2>/dev/null | sort -V | tail -n 1)"; \
+		fi; \
+		[ -x "$$$$GO_BIN" ] || (echo "OpenWrt Go host compiler not found in $(STAGING_DIR_HOSTPKG)/bin" >&2; exit 1); \
 		CGO_ENABLED=0 \
 		GOOS=linux \
 		GOARCH=$(GO_TARGET_ARCH) \
@@ -65,7 +74,7 @@ define Build/Compile
 		GOMIPS64=$(GO_MIPS64) \
 		GOCACHE=$(PKG_BUILD_DIR)/.cache/go-build \
 		GOMODCACHE=$(PKG_BUILD_DIR)/.cache/go-mod \
-		$(STAGING_DIR_HOSTPKG)/bin/go build -trimpath -ldflags="-s -w -X main.version=$(SUBCONV_NEXT_VERSION)" -o subconv-next ./cmd/subconv-next)
+		"$$$$GO_BIN" build -trimpath -ldflags="-s -w -X main.version=$(SUBCONV_NEXT_VERSION)" -o subconv-next ./cmd/subconv-next)
 endef
 
 define Package/subconv-next/install
@@ -76,17 +85,39 @@ define Package/subconv-next/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/subconv-next.config $(1)/etc/config/subconv-next
 	$(INSTALL_DIR) $(1)/etc/subconv-next/data
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json $(1)/usr/share/luci/menu.d/luci-app-subconv-next.json
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json $(1)/usr/share/rpcd/acl.d/luci-app-subconv-next.json
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/subconv-next
+	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js $(1)/www/luci-static/resources/view/subconv-next/index.js
 endef
 
 define Package/subconv-next/postinst
 #!/bin/sh
-[ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/subconv-next enable
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+if [ -x /etc/init.d/subconv-next ]; then
+	/etc/init.d/subconv-next enable || true
+	enabled="$$(uci -q get subconv-next.main.enabled)"
+	[ -z "$$enabled" ] && enabled="1"
+	if [ "$$enabled" = "1" ]; then
+		/etc/init.d/subconv-next start || true
+	fi
+fi
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache
+/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 exit 0
 endef
 
 define Package/subconv-next/prerm
 #!/bin/sh
-[ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/subconv-next disable
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+if [ -x /etc/init.d/subconv-next ]; then
+	/etc/init.d/subconv-next stop || true
+	/etc/init.d/subconv-next disable || true
+fi
 exit 0
 endef
 

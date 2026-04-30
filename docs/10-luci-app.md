@@ -1,186 +1,56 @@
-# 10. LuCI App
+# 10. LuCI 管理壳
 
-## 目标
+## 当前定位
 
-创建 `luci-app-subconv-next`，在 LuCI 中提供：
+LuCI 只提供 OpenWrt 服务管理壳，不重写 SubConv Next 主 Web UI。默认随 all-in-one `subconv-next` 主包一起安装，普通用户不需要单独安装 `luci-app-subconv-next`。
 
-```text
-Services → SubConv Next
-```
-
-页面：
-
-1. Overview
-2. Subscriptions
-3. Render Settings
-4. Logs
-5. About
-
-## 现代 LuCI 方式
-
-V1 使用 JavaScript view，不使用旧 Lua controller。
-
-目录：
+菜单路径：
 
 ```text
-package/openwrt/luci-app-subconv-next/root/
-├── usr/share/luci/menu.d/luci-app-subconv-next.json
-├── usr/share/rpcd/acl.d/luci-app-subconv-next.json
-└── www/luci-static/resources/view/subconv-next/
-    ├── overview.js
-    ├── subscriptions.js
-    ├── render.js
-    ├── logs.js
-    └── about.js
+Services / SubConv Next
 ```
 
-## menu.d
+## 安装文件
 
-```json
-{
-  "admin/services/subconv-next": {
-    "title": "SubConv Next",
-    "order": 60,
-    "action": {
-      "type": "firstchild"
-    },
-    "depends": {
-      "acl": [ "luci-app-subconv-next" ]
-    }
-  },
-  "admin/services/subconv-next/overview": {
-    "title": "Overview",
-    "order": 10,
-    "action": {
-      "type": "view",
-      "path": "subconv-next/overview"
-    }
-  },
-  "admin/services/subconv-next/subscriptions": {
-    "title": "Subscriptions",
-    "order": 20,
-    "action": {
-      "type": "view",
-      "path": "subconv-next/subscriptions"
-    }
-  },
-  "admin/services/subconv-next/render": {
-    "title": "Render Settings",
-    "order": 30,
-    "action": {
-      "type": "view",
-      "path": "subconv-next/render"
-    }
-  },
-  "admin/services/subconv-next/logs": {
-    "title": "Logs",
-    "order": 40,
-    "action": {
-      "type": "view",
-      "path": "subconv-next/logs"
-    }
-  }
-}
+```text
+/usr/share/luci/menu.d/luci-app-subconv-next.json
+/usr/share/rpcd/acl.d/luci-app-subconv-next.json
+/www/luci-static/resources/view/subconv-next/index.js
 ```
+
+源码路径：
+
+```text
+openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json
+openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json
+openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js
+```
+
+## 页面能力
+
+- 显示 Running / Stopped 状态。
+- 显示端口、数据目录和 Web UI URL。
+- 配置 `enabled`、`host`、`port`、`data_dir`、`public_base_url`、`log_level`。
+- 提供 Start、Stop、Restart、Open Web UI 按钮。
+- Save & Apply 后重启 `subconv-next` 使配置生效。
 
 ## ACL
 
-```json
-{
-  "luci-app-subconv-next": {
-    "description": "Grant access to SubConv Next configuration and API",
-    "read": {
-      "uci": [ "subconv_next" ],
-      "ubus": {
-        "service": [ "list" ],
-        "file": [ "read" ]
-      }
-    },
-    "write": {
-      "uci": [ "subconv_next" ],
-      "ubus": {
-        "service": [ "set", "delete", "list" ]
-      }
-    }
-  }
-}
+ACL 允许 LuCI 页面读取和写入 `subconv-next` UCI 配置，并通过 ubus 查询/控制 `subconv-next` 服务。页面不显示完整订阅 URL、发布 token 或节点密钥。
+
+## 可选拆分包
+
+`openwrt/luci-app-subconv-next/Makefile` 仍保留，用于高级打包场景单独构建 LuCI 包：
+
+```sh
+./scripts/package-openwrt-luci-ipk-sdk.sh
 ```
 
-V1 如果直接调用 daemon HTTP API，应只访问 localhost API，并避免暴露 token。
+默认发布路径不使用该拆分包；LuCI 文件已经包含在 `subconv-next_1.0.0-3_aarch64_generic.ipk` 中。
 
-## Overview 页面
+## 验收
 
-显示：
-
-- 服务状态
-- 版本
-- 节点数量
-- 启用订阅数量
-- 上次刷新时间
-- 上次错误
-- 按钮：启动、停止、重启、刷新生成、下载 YAML
-
-API：
-
-```text
-GET /api/status
-POST /api/refresh
-GET /sub/mihomo.yaml
-```
-
-## Subscriptions 页面
-
-使用 `form.Map('subconv_next')` 管理 UCI：
-
-- service main
-- subscription sections
-- inline sections
-
-字段：
-
-- name
-- enabled
-- url
-- user_agent
-- insecure_skip_verify
-
-支持动态添加/删除 subscription。
-
-## Render Settings 页面
-
-管理：
-
-- template
-- mixed_port
-- allow_lan
-- mode
-- log_level
-- ipv6
-- dns_enabled
-- enhanced_mode
-
-## Logs 页面
-
-调用：
-
-```text
-GET http://127.0.0.1:9876/api/logs?tail=200
-```
-
-显示纯文本。
-
-## UX 要求
-
-- 刷新按钮点击后显示 loading。
-- 成功后显示节点数量。
-- 失败后显示错误 message。
-- 不在页面显示完整订阅 URL query token。
-- URL 输入框使用 password-like toggle 可后续做，V1 可普通输入。
-
-## Codex 验收
-
-- LuCI 菜单出现。
-- 能新增订阅。
-- 点击 Save & Apply 后写入 `/etc/config/subconv_next`。
-- 能刷新生成。
-- 能下载 YAML。
+- 安装 all-in-one 主包后 LuCI 出现 `Services / SubConv Next`。
+- 页面可打开且不报 ACL 错误。
+- 点击 Open Web UI 可打开 `http://router-ip:9876`。
+- 修改端口并 Save & Apply 后，`curl http://127.0.0.1:{port}/healthz` 正常。
