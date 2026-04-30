@@ -139,9 +139,13 @@ func (s *Server) ensureWorkspacePublishedRef(ref *workspaceRef) (publishedRef, b
 	}
 	if strings.TrimSpace(ref.Meta.PublishID) != "" {
 		published, err := s.loadPublishedByID(ref.Meta.PublishID)
-		if err == nil {
+		if err == nil && publishedRestorable(published) {
 			return published, false, nil
 		}
+		ref.Meta.PublishID = ""
+		ref.Meta.LegacyPublishedToken = ""
+		ref.Meta.LegacyPublishedAt = time.Time{}
+		_ = s.saveWorkspaceMeta(*ref)
 	}
 	if strings.TrimSpace(ref.Meta.LegacyPublishedToken) != "" {
 		published, err := s.migrateWorkspaceLegacyPublished(ref, ref.Meta.LegacyPublishedToken)

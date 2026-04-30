@@ -240,6 +240,7 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 
 func applySubscriptionSection(dst *model.SubscriptionConfig, section uciSection) error {
 	setString(section, "name", &dst.Name)
+	setString(section, "emoji", &dst.Emoji)
 	if err := setBool(section, "enabled", &dst.Enabled); err != nil {
 		return fmt.Errorf("subscription.enabled: %w", err)
 	}
@@ -276,6 +277,16 @@ func applyRenderSection(dst *model.RenderConfig, section uciSection) error {
 		return fmt.Errorf("render.dns_enabled: %w", err)
 	}
 	setString(section, "enhanced_mode", &dst.EnhancedMode)
+	if err := setBool(section, "source_prefix", &dst.SourcePrefix); err != nil {
+		return fmt.Errorf("render.source_prefix: %w", err)
+	}
+	setString(section, "source_prefix_mode", &dst.NameOptions.SourcePrefixMode)
+	setString(section, "source_prefix_separator", &dst.NameOptions.SourcePrefixSeparator)
+	if err := setBool(section, "show_source_emoji", &dst.NameOptions.ShowSourceEmoji); err != nil {
+		return fmt.Errorf("render.show_source_emoji: %w", err)
+	}
+	setString(section, "source_emoji_separator", &dst.NameOptions.SourceEmojiSeparator)
+	setString(section, "dedupe_suffix_style", &dst.NameOptions.DedupeSuffixStyle)
 	return nil
 }
 

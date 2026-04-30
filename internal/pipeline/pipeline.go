@@ -53,19 +53,21 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 		SubscriptionMeta: map[string]model.SubscriptionMeta{},
 	}
 
-	for _, inline := range cfg.Inline {
-		if !inline.Enabled || strings.TrimSpace(inline.Content) == "" {
-			continue
-		}
+	if cfg.ManualNodesEnabled == nil || *cfg.ManualNodesEnabled {
+		for _, inline := range cfg.Inline {
+			if !inline.Enabled || strings.TrimSpace(inline.Content) == "" {
+				continue
+			}
 
-		parsed := parser.ParseContent([]byte(inline.Content), model.SourceInfo{
-			ID:   inline.ID,
-			Name: inline.Name,
-			Kind: "inline",
-		})
-		result.Nodes = append(result.Nodes, parsed.Nodes...)
-		result.Warnings = append(result.Warnings, parsed.Warnings...)
-		result.Errors = append(result.Errors, parsed.Errors...)
+			parsed := parser.ParseContent([]byte(inline.Content), model.SourceInfo{
+				ID:   inline.ID,
+				Name: inline.Name,
+				Kind: "inline",
+			})
+			result.Nodes = append(result.Nodes, parsed.Nodes...)
+			result.Warnings = append(result.Warnings, parsed.Warnings...)
+			result.Errors = append(result.Errors, parsed.Errors...)
+		}
 	}
 
 	enabledSubscriptions := 0
@@ -113,12 +115,14 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 				parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
 					ID:      sourceID,
 					Name:    sub.Name,
+					Emoji:   sub.Emoji,
 					Kind:    "subscription",
 					URLHash: sourceURLHash(sub.URL),
 				})
 				source := model.SourceInfo{
 					ID:      sourceID,
 					Name:    sub.Name,
+					Emoji:   sub.Emoji,
 					Kind:    "subscription",
 					URLHash: sourceURLHash(sub.URL),
 				}
@@ -337,14 +341,8 @@ func applyRenderPreferences(nodes []model.NodeIR, render model.RenderConfig) []m
 		if render.UDP {
 			node.UDP = model.Bool(true)
 		}
-		node = ApplySourcePrefix(node, render)
-		if render.ShowNodeType {
-			node.Name = withNodeTypePrefix(node)
-		}
-		if render.Emoji {
-			node.Name = withEmojiPrefix(node)
-		}
-		out = append(out, model.NormalizeNode(node))
+		node.Name = model.BuildYamlNodeName(node.Name, node.Source, model.EffectiveNameOptions(render))
+		out = append(out, node)
 	}
 
 	if render.SortNodes {
@@ -354,38 +352,6 @@ func applyRenderPreferences(nodes []model.NodeIR, render model.RenderConfig) []m
 	}
 
 	return model.NormalizeNodesWithScope(out, render.DedupeScope)
-}
-
-func ApplySourcePrefix(node model.NodeIR, render model.RenderConfig) model.NodeIR {
-	if !render.SourcePrefix {
-		return node
-	}
-
-	sourceName := strings.TrimSpace(node.Source.Name)
-	name := strings.TrimSpace(node.Name)
-	if sourceName == "" || name == "" {
-		return node
-	}
-	forced := rawBool(node.Raw, "_sourcePrefixForced")
-	if strings.HasPrefix(name, "["+sourceName+"]") && !forced {
-		return node
-	}
-	if rawBool(node.Raw, "_overrideName") && !forced {
-		return node
-	}
-
-	format := strings.TrimSpace(render.SourcePrefixFormat)
-	if format == "" {
-		format = "[{source}] {name}"
-	}
-	replacer := strings.NewReplacer(
-		"{source}", sourceName,
-		"{name}", name,
-		"{type}", strings.ToLower(string(node.Type)),
-		"{region}", model.NodeRegionCode(node),
-	)
-	node.Name = strings.TrimSpace(replacer.Replace(format))
-	return node
 }
 
 func newNameMatcher(pattern string) func(string) bool {
@@ -475,59 +441,6 @@ func containsWord(value, word string) bool {
 
 func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
-}
-
-func withNodeTypePrefix(node model.NodeIR) string {
-	name := strings.TrimSpace(node.Name)
-	prefix := "[" + strings.ToLower(string(node.Type)) + "]"
-	lowerName := strings.ToLower(name)
-	if strings.HasPrefix(lowerName, prefix+" ") || lowerName == prefix {
-		return name
-	}
-	if strings.HasPrefix(name, "[") {
-		if end := strings.Index(name, "]"); end > 0 {
-			head := strings.TrimSpace(name[:end+1])
-			tail := strings.TrimSpace(name[end+1:])
-			if strings.HasPrefix(strings.ToLower(tail), prefix+" ") || strings.ToLower(tail) == prefix {
-				return name
-			}
-			return strings.TrimSpace(head + " " + prefix + " " + tail)
-		}
-	}
-	return strings.TrimSpace(prefix + " " + name)
-}
-
-func withEmojiPrefix(node model.NodeIR) string {
-	name := strings.TrimSpace(node.Name)
-	if strings.HasPrefix(name, "🇭🇰") || strings.HasPrefix(name, "🇯🇵") || strings.HasPrefix(name, "🇺🇸") || strings.HasPrefix(name, "🇸🇬") ||
-		strings.HasPrefix(name, "🇹🇼") || strings.HasPrefix(name, "🇰🇷") || strings.HasPrefix(name, "🇩🇪") || strings.HasPrefix(name, "🇬🇧") ||
-		strings.HasPrefix(name, "🇳🇱") || strings.HasPrefix(name, "🇷🇺") ||
-		strings.HasPrefix(name, "🇫🇷") || strings.HasPrefix(name, "🇨🇦") || strings.HasPrefix(name, "🇦🇺") || strings.HasPrefix(name, "🇨🇳") {
-		return name
-	}
-
-	emojiByTag := map[string]string{
-		"HK": "🇭🇰",
-		"JP": "🇯🇵",
-		"US": "🇺🇸",
-		"SG": "🇸🇬",
-		"TW": "🇹🇼",
-		"KR": "🇰🇷",
-		"DE": "🇩🇪",
-		"GB": "🇬🇧",
-		"NL": "🇳🇱",
-		"RU": "🇷🇺",
-		"FR": "🇫🇷",
-		"CA": "🇨🇦",
-		"AU": "🇦🇺",
-		"CN": "🇨🇳",
-	}
-	for _, tag := range node.Tags {
-		if emoji := emojiByTag[tag]; emoji != "" {
-			return emoji + " " + name
-		}
-	}
-	return name
 }
 
 func normalizeKeywords(values []string) []string {

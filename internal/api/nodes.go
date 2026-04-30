@@ -68,6 +68,15 @@ type nodeListResponse struct {
 	Errors   []parser.ParseError `json:"errors,omitempty"`
 }
 
+type nodeStateResponse struct {
+	OK    bool            `json:"ok"`
+	State model.NodeState `json:"state"`
+}
+
+type nodeStateRequest struct {
+	State model.NodeState `json:"state"`
+}
+
 type nodeDetail struct {
 	ID           string                  `json:"id"`
 	Name         string                  `json:"name"`
@@ -180,6 +189,8 @@ func (s *Server) handleNodeSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteCustomNode(w, r, strings.TrimPrefix(path, "custom/"))
 	case path == "validate":
 		s.handleValidateNodes(w, r)
+	case path == "state":
+		s.handleNodeState(w, r)
 	case path == "overrides/clear":
 		s.handleClearOverrides(w, r)
 	case strings.HasSuffix(path, "/override"):
@@ -188,6 +199,40 @@ func (s *Server) handleNodeSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.handleResetNodeOverride(w, r, strings.TrimSuffix(path, "/reset"))
 	default:
 		s.handleNodeDetail(w, r, path)
+	}
+}
+
+func (s *Server) handleNodeState(w http.ResponseWriter, r *http.Request) {
+	cfg, state, _, err := s.workspaceConfigAndState(r)
+	if err != nil {
+		handleWorkspaceOrStateError(w, err)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		state.SubscriptionMeta = nil
+		state.LastAudit = model.AuditReport{}
+		writeJSON(w, http.StatusOK, nodeStateResponse{
+			OK:    true,
+			State: model.NormalizeNodeState(state),
+		})
+	case http.MethodPut:
+		var req nodeStateRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		next := model.NormalizeNodeState(req.State)
+		next.SubscriptionMeta = state.SubscriptionMeta
+		next.LastAudit = state.LastAudit
+		if err := pipeline.SaveNodeState(cfg, next); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+	default:
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
 	}
 }
 

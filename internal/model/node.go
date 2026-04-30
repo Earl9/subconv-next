@@ -113,6 +113,7 @@ type WGPeer struct {
 type SourceInfo struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
+	Emoji   string `json:"emoji,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 	URLHash string `json:"url_hash,omitempty"`
 }
@@ -140,10 +141,10 @@ func NormalizeNodesWithScope(nodes []NodeIR, scope string) []NodeIR {
 
 func NormalizeNode(node NodeIR) NodeIR {
 	node.Type = Protocol(strings.ToLower(strings.TrimSpace(string(node.Type))))
-	node.Name = sanitizeText(node.Name)
 	node.Server = strings.ToLower(strings.TrimSpace(node.Server))
 	node.Source.ID = sanitizeText(node.Source.ID)
 	node.Source.Name = sanitizeText(node.Source.Name)
+	node.Source.Emoji = strings.TrimSpace(node.Source.Emoji)
 	node.Source.Kind = sanitizeText(node.Source.Kind)
 	node.Source.URLHash = sanitizeText(node.Source.URLHash)
 	node.Sources = normalizeSourceList(node.Source, node.Sources)
@@ -152,7 +153,7 @@ func NormalizeNode(node NodeIR) NodeIR {
 		node.Port = 0
 	}
 
-	if node.Name == "" {
+	if strings.TrimSpace(node.Name) == "" {
 		node.Name = defaultNodeName(node)
 	}
 
@@ -278,7 +279,7 @@ func DedupeNodesByScope(nodes []NodeIR, scope string) []NodeIR {
 
 func normalizeSourceList(primary SourceInfo, sources []SourceInfo) []SourceInfo {
 	var out []SourceInfo
-	if primary.ID != "" || primary.Name != "" || primary.Kind != "" || primary.URLHash != "" {
+	if primary.ID != "" || primary.Name != "" || primary.Emoji != "" || primary.Kind != "" || primary.URLHash != "" {
 		out = append(out, normalizeSource(primary))
 	}
 	for _, source := range sources {
@@ -290,6 +291,7 @@ func normalizeSourceList(primary SourceInfo, sources []SourceInfo) []SourceInfo 
 func normalizeSource(source SourceInfo) SourceInfo {
 	source.ID = sanitizeText(source.ID)
 	source.Name = sanitizeText(source.Name)
+	source.Emoji = strings.TrimSpace(source.Emoji)
 	source.Kind = sanitizeText(source.Kind)
 	source.URLHash = sanitizeText(source.URLHash)
 	return source
@@ -301,8 +303,8 @@ func mergeSources(existing []SourceInfo, more ...SourceInfo) []SourceInfo {
 	combined := append(append([]SourceInfo{}, existing...), more...)
 	for _, source := range combined {
 		source = normalizeSource(source)
-		key := strings.Join([]string{source.ID, source.Name, source.Kind, source.URLHash}, "|")
-		if key == "|||" {
+		key := strings.Join([]string{source.ID, source.Name, source.Emoji, source.Kind, source.URLHash}, "|")
+		if key == "||||" {
 			continue
 		}
 		if _, ok := seen[key]; ok {
@@ -391,6 +393,129 @@ func duplicateWarning(source SourceInfo) string {
 		return fmt.Sprintf("duplicate skipped from source %s", source.Name)
 	}
 	return "duplicate skipped"
+}
+
+func DefaultNameOptions() NameOptions {
+	return NameOptions{
+		KeepRawName:           true,
+		SourcePrefixMode:      "emoji_name",
+		SourcePrefixSeparator: "｜",
+		DedupeSuffixStyle:     "#n",
+	}
+}
+
+func EffectiveNameOptions(render RenderConfig) NameOptions {
+	options := render.NameOptions
+	defaults := DefaultNameOptions()
+	options.KeepRawName = true
+	if !render.SourcePrefix {
+		options.SourcePrefixMode = "none"
+	} else if strings.TrimSpace(options.SourcePrefixMode) == "" {
+		options.SourcePrefixMode = defaults.SourcePrefixMode
+	}
+	options.SourcePrefixMode = normalizeSourcePrefixMode(options.SourcePrefixMode)
+	if strings.TrimSpace(options.SourcePrefixSeparator) == "" {
+		options.SourcePrefixSeparator = defaults.SourcePrefixSeparator
+	}
+	if strings.TrimSpace(options.DedupeSuffixStyle) == "" {
+		options.DedupeSuffixStyle = defaults.DedupeSuffixStyle
+	}
+	return options
+}
+
+func normalizeSourcePrefixMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "none", "emoji", "name", "emoji_name":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return DefaultNameOptions().SourcePrefixMode
+	}
+}
+
+func BuildSourcePrefix(source SourceInfo, options NameOptions) string {
+	mode := normalizeSourcePrefixMode(options.SourcePrefixMode)
+	emoji := strings.TrimSpace(source.Emoji)
+	name := strings.TrimSpace(source.Name)
+
+	switch mode {
+	case "none":
+		return ""
+	case "emoji":
+		return emoji
+	case "name":
+		return name
+	case "emoji_name":
+		if emoji != "" && name != "" {
+			return emoji + " " + name
+		}
+		if emoji != "" {
+			return emoji
+		}
+		return name
+	default:
+		return ""
+	}
+}
+
+func BuildYamlNodeName(rawName string, source SourceInfo, options NameOptions) string {
+	defaults := DefaultNameOptions()
+	if strings.TrimSpace(options.SourcePrefixMode) == "" {
+		options.SourcePrefixMode = defaults.SourcePrefixMode
+	}
+	options.SourcePrefixMode = normalizeSourcePrefixMode(options.SourcePrefixMode)
+	if strings.TrimSpace(options.SourcePrefixSeparator) == "" {
+		options.SourcePrefixSeparator = defaults.SourcePrefixSeparator
+	}
+
+	name := rawName
+
+	prefix := BuildSourcePrefix(source, options)
+	if prefix == "" {
+		return name
+	}
+	if name == "" {
+		return prefix
+	}
+	if options.SourcePrefixMode == "emoji" {
+		return prefix + " " + name
+	}
+	return prefix + options.SourcePrefixSeparator + name
+}
+
+func EnsureUniqueProxyNames(nodes []NodeIR, suffixStyle string) []NodeIR {
+	out := append([]NodeIR(nil), nodes...)
+	counts := make(map[string]int, len(out))
+	for i := range out {
+		base := out[i].Name
+		if strings.TrimSpace(base) == "" {
+			base = fmt.Sprintf("%s-%d", out[i].Type, i+1)
+		}
+		counts[base]++
+		if counts[base] == 1 {
+			out[i].Name = base
+			continue
+		}
+		out[i].Name = appendDedupeSuffix(base, counts[base], suffixStyle)
+	}
+	return out
+}
+
+func appendDedupeSuffix(base string, index int, suffixStyle string) string {
+	style := suffixStyle
+	if style == "" {
+		style = DefaultNameOptions().DedupeSuffixStyle
+	}
+	suffix := strings.ReplaceAll(style, "n", strconv.Itoa(index))
+	if !strings.Contains(style, "n") {
+		suffix = fmt.Sprintf("%s%d", style, index)
+	}
+	if suffix == "" {
+		suffix = fmt.Sprintf("#%d", index)
+	}
+	if strings.HasPrefix(suffix, " ") {
+		return base + suffix
+	}
+	return base + " " + suffix
 }
 
 func inferRegionTags(name string) []string {

@@ -127,19 +127,29 @@
                   </div>
                 </div>
 
-                <details class="manual-inline-section">
-                  <summary>
-                    <span class="summary-inline">
+                <section class="manual-section">
+                  <div class="manual-section-header">
+                    <div class="manual-section-title-wrap">
                       <span class="section-badge" data-icon-name="code"></span>
-                      <span>手动节点</span>
-                    </span>
-                  </summary>
-                  <p class="field-help">用于粘贴单个节点 URI 或 WireGuard 配置片段。</p>
-                  <div id="inline-list" class="subscription-list"></div>
-                  <div class="panel-actions">
-                    <button id="add-inline-btn" class="secondary-button small-button" type="button">添加手动节点</button>
+                      <div>
+                        <h3>手动节点</h3>
+                        <p>用于粘贴单个节点 URI 或 WireGuard 配置片段。</p>
+                      </div>
+                    </div>
+                    <div class="manual-header-actions">
+                      <button id="add-inline-btn" class="secondary-button small-button hidden" type="button">添加手动节点</button>
+                      <label class="manual-enable-switch" title="关闭后手动节点配置会保留，但不参与生成">
+                        <span>启用手动节点</span>
+                        <span class="switch">
+                          <input id="manual-nodes-enabled" type="checkbox" checked />
+                          <span class="switch-track"></span>
+                        </span>
+                      </label>
+                    </div>
                   </div>
-                </details>
+                  <div id="manual-disabled-note" class="manual-disabled-note hidden">手动节点已关闭，当前不会参与生成。</div>
+                  <div id="inline-list" class="manual-section-body"></div>
+                </section>
               </div>
             </section>
 
@@ -163,14 +173,14 @@
                 </div>
               </div>
 
-              <div class="info-banner">模板模式将使用完整模板覆盖规则类别选择，优先级更高。</div>
+              <div class="info-banner">当前仅启用所选模式；另一模式配置会保留在草稿中，但暂不参与生成。</div>
 
-              <div class="source-tabs">
-                <button id="source-mode-rules" class="tab-button active" type="button">规则模式</button>
-                <button id="source-mode-template" class="tab-button" type="button">模板模式</button>
+              <div class="source-tabs" role="tablist" aria-label="规则来源">
+                <button id="source-mode-rules" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="rules-mode-panel">规则模式</button>
+                <button id="source-mode-template" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="template-mode-panel">模板模式</button>
               </div>
 
-              <div id="rules-mode-panel" class="source-panel">
+              <div id="rules-mode-panel" class="source-panel" role="tabpanel" aria-labelledby="source-mode-rules">
                 <div class="rule-mode-subtabs hidden">
                   <button id="rule-subtab-builtin" class="tab-button active" type="button">内置规则</button>
                   <button id="rule-subtab-custom" class="tab-button" type="button">自定义规则</button>
@@ -304,7 +314,7 @@
                 </div>
               </div>
 
-              <div id="template-mode-panel" class="source-panel hidden">
+              <div id="template-mode-panel" class="source-panel hidden" role="tabpanel" aria-labelledby="source-mode-template">
                 <div class="field">
                   <label for="template-select">模板目录</label>
                   <select id="template-select"></select>
@@ -482,19 +492,22 @@
             </table>
           </div>
 
-          <div class="table-footer">
-            <div class="table-footer-left">
-              <label for="node-page-size">每页显示</label>
-              <select id="node-page-size">
-                <option value="25">25</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </select>
-            </div>
-            <div class="table-footer-right">
-              <button id="node-prev-page-btn" class="ghost-button small-button" type="button">上一页</button>
-              <span id="node-page-info" class="meta-text">第 1 页</span>
-              <button id="node-next-page-btn" class="ghost-button small-button" type="button">下一页</button>
+          <div class="node-table-footer">
+            <div id="node-range-info" class="node-table-footer-left">0 / 0 个节点</div>
+            <div class="node-table-footer-right">
+              <label class="page-size-control" for="node-page-size">
+                <span>每页</span>
+                <select id="node-page-size">
+                  <option value="25">25 条</option>
+                  <option value="50">50 条</option>
+                  <option value="100">100 条</option>
+                </select>
+              </label>
+              <div class="pagination-control">
+                <button id="node-prev-page-btn" class="ghost-button small-button" type="button">上一页</button>
+                <span id="node-page-info" class="pagination-info">1 / 1</span>
+                <button id="node-next-page-btn" class="ghost-button small-button" type="button">下一页</button>
+              </div>
             </div>
           </div>
         </section>
@@ -508,24 +521,23 @@
                 <span class="section-badge" data-icon-name="code"></span>
                 <h2>YAML 预览</h2>
               </div>
-              <p class="panel-subtitle">独立查看、搜索、复制和下载当前生成的 Mihomo YAML。</p>
+              <p class="panel-subtitle">独立查看、搜索和复制当前生成的 Mihomo YAML。</p>
             </div>
           </div>
 
-          <div class="yaml-toolbar">
-            <div class="toolbar-group toolbar-group-left">
+          <div class="yaml-preview-toolbar">
+            <div class="yaml-preview-actions">
               <button id="refresh-yaml-btn" class="ghost-button small-button" type="button">刷新预览</button>
-              <button id="download-yaml-btn" class="ghost-button small-button" type="button">下载 YAML</button>
               <button id="copy-yaml-btn" class="secondary-button small-button" type="button">复制全部</button>
             </div>
-            <div class="toolbar-group toolbar-group-right">
-              <input id="yaml-search" type="text" placeholder="搜索 YAML 内容" />
-              <label class="checkbox-line compact-check"><input id="yaml-wrap-toggle" type="checkbox" checked /> 自动换行</label>
+            <div class="yaml-preview-tools">
+              <input id="yaml-search" class="yaml-search-input" type="text" placeholder="搜索 YAML 内容" />
+              <label class="wrap-toggle"><input id="yaml-wrap-toggle" type="checkbox" checked /> 自动换行</label>
             </div>
           </div>
 
-          <div class="yaml-meta-bar">
-            <span id="yaml-search-meta" class="meta-text">预览内容为前 500 行，完整内容请下载使用。</span>
+          <div class="yaml-preview-meta">
+            <span id="yaml-search-meta">当前仅显示前 500 行，可复制完整 YAML 或通过订阅链接使用。</span>
           </div>
 
           <div id="yaml-viewer" class="yaml-viewer wrapped">

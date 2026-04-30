@@ -14,8 +14,8 @@ func TestNormalizeNode(t *testing.T) {
 	}
 
 	got := NormalizeNode(node)
-	if got.Name != "香港 HK" {
-		t.Fatalf("Name = %q, want %q", got.Name, "香港 HK")
+	if got.Name != "  香港 HK\t\n" {
+		t.Fatalf("Name = %q, want raw name %q", got.Name, "  香港 HK\t\n")
 	}
 	if got.Server != "example.com" {
 		t.Fatalf("Server = %q, want %q", got.Server, "example.com")

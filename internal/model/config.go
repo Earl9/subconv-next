@@ -1,7 +1,7 @@
 package model
 
 const (
-	DefaultUserAgent          = "SubConvNext/1.0"
+	DefaultUserAgent          = "clash.meta"
 	DefaultListenAddr         = "127.0.0.1"
 	DefaultListenPort         = 9876
 	DefaultLogLevel           = "info"
@@ -18,10 +18,11 @@ const (
 )
 
 type Config struct {
-	Service       ServiceConfig        `json:"service"`
-	Subscriptions []SubscriptionConfig `json:"subscriptions"`
-	Inline        []InlineConfig       `json:"inline"`
-	Render        RenderConfig         `json:"render"`
+	Service            ServiceConfig        `json:"service"`
+	Subscriptions      []SubscriptionConfig `json:"subscriptions"`
+	Inline             []InlineConfig       `json:"inline"`
+	ManualNodesEnabled *bool                `json:"manual_nodes_enabled,omitempty"`
+	Render             RenderConfig         `json:"render"`
 }
 
 type ServiceConfig struct {
@@ -52,6 +53,7 @@ type ServiceConfig struct {
 type SubscriptionConfig struct {
 	ID                 string   `json:"id,omitempty"`
 	Name               string   `json:"name"`
+	Emoji              string   `json:"emoji,omitempty"`
 	SourceLogo         string   `json:"source_logo,omitempty"`
 	Enabled            bool     `json:"enabled"`
 	URL                string   `json:"url"`
@@ -91,6 +93,7 @@ type RenderConfig struct {
 	SourcePrefix            bool                     `json:"source_prefix"`
 	SourcePrefixFormat      string                   `json:"source_prefix_format,omitempty"`
 	SourcePrefixSeparator   string                   `json:"source_prefix_separator,omitempty"`
+	NameOptions             NameOptions              `json:"name_options,omitempty"`
 	DedupeScope             string                   `json:"dedupe_scope,omitempty"`
 	GeodataMode             bool                     `json:"geodata_mode"`
 	GeoAutoUpdate           bool                     `json:"geo_auto_update"`
@@ -118,6 +121,15 @@ type RenderConfig struct {
 	RuleProviders           []RuleProviderConfig     `json:"rule_providers"`
 	CustomProxyGroups       []CustomProxyGroupConfig `json:"custom_proxy_groups"`
 	SubscriptionInfo        *SubscriptionInfoConfig  `json:"subscription_info,omitempty"`
+}
+
+type NameOptions struct {
+	KeepRawName           bool   `json:"keep_raw_name"`
+	SourcePrefixMode      string `json:"source_prefix_mode,omitempty"`
+	SourcePrefixSeparator string `json:"source_prefix_separator,omitempty"`
+	DedupeSuffixStyle     string `json:"dedupe_suffix_style,omitempty"`
+	ShowSourceEmoji       bool   `json:"show_source_emoji,omitempty"`      // Deprecated: use SourcePrefixMode.
+	SourceEmojiSeparator  string `json:"source_emoji_separator,omitempty"` // Deprecated: emoji-only mode always uses a space.
 }
 
 type DNSConfig struct {
@@ -221,9 +233,11 @@ type GeoxURLConfig struct {
 }
 
 func DefaultConfig() Config {
+	manualNodesEnabled := true
 	return Config{
-		Service: DefaultServiceConfig(),
-		Render:  DefaultRenderConfig(),
+		Service:            DefaultServiceConfig(),
+		ManualNodesEnabled: &manualNodesEnabled,
+		Render:             DefaultRenderConfig(),
 	}
 }
 
@@ -270,16 +284,17 @@ func DefaultRenderConfig() RenderConfig {
 		LogLevel:              DefaultLogLevel,
 		DNSEnabled:            true,
 		EnhancedMode:          DefaultEnhancedMode,
-		Emoji:                 true,
-		ShowNodeType:          true,
+		Emoji:                 false,
+		ShowNodeType:          false,
 		IncludeInfoNode:       false,
 		ShowInfoNodes:         false,
 		UDP:                   true,
 		FilterIllegal:         true,
 		GroupProxyMode:        "compact",
 		SourcePrefix:          true,
-		SourcePrefixFormat:    "[{source}] {name}",
-		SourcePrefixSeparator: " ",
+		SourcePrefixFormat:    "{emoji} {name}",
+		SourcePrefixSeparator: "｜",
+		NameOptions:           DefaultNameOptions(),
 		DedupeScope:           "global",
 		GeodataMode:           true,
 		GeoAutoUpdate:         true,

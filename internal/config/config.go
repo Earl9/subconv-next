@@ -93,10 +93,22 @@ func normalizeConfig(cfg model.Config) model.Config {
 		cfg.Render.SourcePrefix = true
 	}
 	if strings.TrimSpace(cfg.Render.SourcePrefixFormat) == "" {
-		cfg.Render.SourcePrefixFormat = "[{source}] {name}"
+		cfg.Render.SourcePrefixFormat = "{emoji} {name}"
 	}
 	if strings.TrimSpace(cfg.Render.SourcePrefixSeparator) == "" {
-		cfg.Render.SourcePrefixSeparator = " "
+		cfg.Render.SourcePrefixSeparator = "｜"
+	}
+	cfg.Render.NameOptions.KeepRawName = true
+	if !cfg.Render.SourcePrefix {
+		cfg.Render.NameOptions.SourcePrefixMode = "none"
+	} else if strings.TrimSpace(cfg.Render.NameOptions.SourcePrefixMode) == "" {
+		cfg.Render.NameOptions.SourcePrefixMode = model.DefaultNameOptions().SourcePrefixMode
+	}
+	if strings.TrimSpace(cfg.Render.NameOptions.SourcePrefixSeparator) == "" {
+		cfg.Render.NameOptions.SourcePrefixSeparator = cfg.Render.SourcePrefixSeparator
+	}
+	if strings.TrimSpace(cfg.Render.NameOptions.DedupeSuffixStyle) == "" {
+		cfg.Render.NameOptions.DedupeSuffixStyle = "#n"
 	}
 	if strings.TrimSpace(cfg.Render.DedupeScope) == "" {
 		cfg.Render.DedupeScope = "global"
@@ -151,6 +163,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 			sub.Name = fmt.Sprintf("source-%d", i+1)
 		}
 		sub.Name = uniqueDisplayName(sub.Name, seenSubNames)
+		sub.Emoji = strings.TrimSpace(sub.Emoji)
 		sub.SourceLogo = strings.TrimSpace(sub.SourceLogo)
 		if strings.TrimSpace(sub.ID) == "" {
 			sub.ID = stableConfigID("sub", sub.Name, sub.URL, i)

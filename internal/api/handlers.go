@@ -74,14 +74,50 @@ type workspaceResponse struct {
 }
 
 type publishedStatusResponse struct {
-	OK           bool   `json:"ok"`
-	PublishID    string `json:"publish_id,omitempty"`
-	URL          string `json:"url,omitempty"`
-	TokenHint    string `json:"token_hint,omitempty"`
-	CreatedAt    string `json:"created_at,omitempty"`
-	UpdatedAt    string `json:"updated_at,omitempty"`
-	LastAccessAt string `json:"last_access_at,omitempty"`
-	AccessCount  int    `json:"access_count"`
+	OK              bool   `json:"ok"`
+	PublishID       string `json:"publish_id,omitempty"`
+	URL             string `json:"url,omitempty"`
+	SubscriptionURL string `json:"subscription_url,omitempty"`
+	TokenHint       string `json:"token_hint,omitempty"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+	LastAccessAt    string `json:"last_access_at,omitempty"`
+	AccessCount     int    `json:"access_count"`
+	Status          string `json:"status,omitempty"`
+}
+
+type bindPublishedRequest struct {
+	PublishID string `json:"publish_id"`
+}
+
+type restoreDraftPublishRefRequest struct {
+	PublishID string `json:"publish_id"`
+}
+
+type restoreDraftRequest struct {
+	Config     model.Config                  `json:"config"`
+	PublishRef restoreDraftPublishRefRequest `json:"publish_ref,omitempty"`
+	NodeState  *model.NodeState              `json:"node_state,omitempty"`
+}
+
+type restoreDraftPublishResponse struct {
+	Exists          bool   `json:"exists"`
+	Reason          string `json:"reason,omitempty"`
+	PublishID       string `json:"publish_id,omitempty"`
+	URL             string `json:"url,omitempty"`
+	SubscriptionURL string `json:"subscription_url,omitempty"`
+	TokenHint       string `json:"token_hint,omitempty"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+	LastAccessAt    string `json:"last_access_at,omitempty"`
+	AccessCount     int    `json:"access_count"`
+	Status          string `json:"status,omitempty"`
+}
+
+type restoreDraftResponse struct {
+	OK          bool                        `json:"ok"`
+	WorkspaceID string                      `json:"workspace_id"`
+	Publish     restoreDraftPublishResponse `json:"publish"`
 }
 
 type subscriptionMetaSourceResponse struct {
@@ -461,9 +497,26 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWorkspaceSubroutes(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/workspaces/")
-	id = strings.Trim(id, "/")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/workspaces/"), "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	parts := strings.Split(path, "/")
+	id := strings.TrimSpace(parts[0])
 	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "bind-publish" {
+		s.handleBindWorkspacePublished(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "restore-draft" {
+		s.handleRestoreWorkspaceDraft(w, r, id)
+		return
+	}
+	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
 	}
@@ -476,6 +529,105 @@ func (s *Server) handleWorkspaceSubroutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handleBindWorkspacePublished(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req bindPublishedRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	publishID := strings.TrimSpace(req.PublishID)
+	if publishID == "" {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "publish_id is required")
+		return
+	}
+	published, err := s.loadPublishedByID(publishID)
+	if err != nil || !publishedRestorable(published) {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
+		return
+	}
+	ref, err := s.loadWorkspace(workspaceID)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	ref.Meta.PublishID = publishID
+	ref.Meta.LegacyPublishedToken = ""
+	ref.Meta.LegacyPublishedAt = time.Time{}
+	if err := s.saveWorkspaceMeta(ref); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "WORKSPACE_BIND_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req restoreDraftRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	ref, err := s.loadWorkspace(workspaceID)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg := config.Normalize(req.Config)
+	cfg.Service.OutputPath = ref.OutputPath
+	cfg.Service.StatePath = ref.StatePath
+	cfg.Service.CacheDir = ref.CacheDir
+	if err := config.Validate(cfg); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
+		return
+	}
+	if err := config.WriteJSON(ref.ConfigPath, cfg); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
+		return
+	}
+	if req.NodeState != nil {
+		state := model.NormalizeNodeState(*req.NodeState)
+		state.SubscriptionMeta = nil
+		state.LastAudit = model.AuditReport{}
+		if err := pipeline.SaveNodeState(cfg, state); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+			return
+		}
+	}
+
+	publishResp := restoreDraftPublishResponse{Exists: false}
+	publishID := strings.TrimSpace(req.PublishRef.PublishID)
+	if publishID != "" {
+		published, err := s.loadPublishedByID(publishID)
+		if err == nil && publishedRestorable(published) {
+			ref.Meta.PublishID = published.ID
+			ref.Meta.LegacyPublishedToken = ""
+			ref.Meta.LegacyPublishedAt = time.Time{}
+			publishResp = restoreDraftPublishedStatus(r, s.publishedStatus(r, published))
+		} else {
+			ref.Meta.PublishID = ""
+			ref.Meta.LegacyPublishedToken = ""
+			ref.Meta.LegacyPublishedAt = time.Time{}
+			publishResp.Reason = "PUBLISHED_NOT_FOUND"
+		}
+	}
+	if err := s.saveWorkspaceMeta(ref); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "WORKSPACE_RESTORE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, restoreDraftResponse{
+		OK:          true,
+		WorkspaceID: ref.ID,
+		Publish:     publishResp,
+	})
 }
 
 func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
@@ -493,20 +645,11 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	published, err := s.loadPublishedByID(ref.Meta.PublishID)
-	if err != nil {
+	if err != nil || !publishedRestorable(published) {
 		writeJSON(w, http.StatusOK, publishedStatusResponse{OK: true})
 		return
 	}
-	writeJSON(w, http.StatusOK, publishedStatusResponse{
-		OK:           true,
-		PublishID:    published.ID,
-		URL:          publishedURL(normalizePublicOrigin(r), published.Meta.Token),
-		TokenHint:    published.Meta.TokenHint,
-		CreatedAt:    formatTime(published.Meta.CreatedAt),
-		UpdatedAt:    formatTime(published.Meta.UpdatedAt),
-		LastAccessAt: formatTime(published.Meta.LastAccessAt),
-		AccessCount:  published.Meta.AccessCount,
-	})
+	writeJSON(w, http.StatusOK, s.publishedStatus(r, published))
 }
 
 func (s *Server) handlePublishedSubroutes(w http.ResponseWriter, r *http.Request) {
@@ -519,9 +662,28 @@ func (s *Server) handlePublishedSubroutes(w http.ResponseWriter, r *http.Request
 	case strings.HasSuffix(path, "/rotate-token"):
 		publishID := strings.TrimSuffix(path, "/rotate-token")
 		s.handleRotatePublishedToken(w, r, strings.Trim(publishID, "/"))
-	default:
+	case !strings.Contains(path, "/"):
+		if r.Method == http.MethodGet {
+			s.handleGetPublishedByID(w, r, path)
+			return
+		}
 		s.handleDeletePublished(w, r, path)
+	default:
+		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) handleGetPublishedByID(w http.ResponseWriter, r *http.Request, publishID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	published, err := s.loadPublishedByID(publishID)
+	if err != nil || !publishedRestorable(published) {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.publishedStatus(r, published))
 }
 
 func (s *Server) handleRotatePublishedToken(w http.ResponseWriter, r *http.Request, publishID string) {
@@ -534,16 +696,7 @@ func (s *Server) handleRotatePublishedToken(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, publishedStatusResponse{
-		OK:           true,
-		PublishID:    published.ID,
-		URL:          publishedURL(normalizePublicOrigin(r), published.Meta.Token),
-		TokenHint:    published.Meta.TokenHint,
-		CreatedAt:    formatTime(published.Meta.CreatedAt),
-		UpdatedAt:    formatTime(published.Meta.UpdatedAt),
-		LastAccessAt: formatTime(published.Meta.LastAccessAt),
-		AccessCount:  published.Meta.AccessCount,
-	})
+	writeJSON(w, http.StatusOK, s.publishedStatus(r, published))
 }
 
 func (s *Server) handleDeletePublished(w http.ResponseWriter, r *http.Request, publishID string) {
@@ -556,6 +709,47 @@ func (s *Server) handleDeletePublished(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) publishedStatus(r *http.Request, published publishedRef) publishedStatusResponse {
+	url := publishedURL(normalizePublicOrigin(r), published.Meta.Token)
+	return publishedStatusResponse{
+		OK:              true,
+		PublishID:       published.ID,
+		URL:             url,
+		SubscriptionURL: url,
+		TokenHint:       published.Meta.TokenHint,
+		CreatedAt:       formatTime(published.Meta.CreatedAt),
+		UpdatedAt:       formatTime(published.Meta.UpdatedAt),
+		LastAccessAt:    formatTime(published.Meta.LastAccessAt),
+		AccessCount:     published.Meta.AccessCount,
+		Status:          "active",
+	}
+}
+
+func restoreDraftPublishedStatus(_ *http.Request, status publishedStatusResponse) restoreDraftPublishResponse {
+	return restoreDraftPublishResponse{
+		Exists:          true,
+		PublishID:       status.PublishID,
+		URL:             status.URL,
+		SubscriptionURL: status.SubscriptionURL,
+		TokenHint:       status.TokenHint,
+		CreatedAt:       status.CreatedAt,
+		UpdatedAt:       status.UpdatedAt,
+		LastAccessAt:    status.LastAccessAt,
+		AccessCount:     status.AccessCount,
+		Status:          status.Status,
+	}
+}
+
+func publishedRestorable(published publishedRef) bool {
+	if published.Meta.Revoked || strings.TrimSpace(published.Meta.Token) == "" {
+		return false
+	}
+	if _, err := os.Stat(published.CurrentPath); err != nil {
+		return false
+	}
+	return true
 }
 
 func handleWorkspaceError(w http.ResponseWriter, err error) {

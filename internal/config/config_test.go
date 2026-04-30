@@ -71,8 +71,8 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			IPv6:              false,
 			DNSEnabled:        true,
 			EnhancedMode:      "fake-ip",
-			Emoji:             true,
-			ShowNodeType:      true,
+			Emoji:             false,
+			ShowNodeType:      false,
 			IncludeInfoNode:   false,
 			ShowInfoNodes:     false,
 			UDP:               true,
@@ -175,8 +175,11 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 	if jsonCfg.Render.GeodataMode != true || jsonCfg.Render.GeoAutoUpdate != true || jsonCfg.Render.GeodataLoader != "standard" || jsonCfg.Render.GeoUpdateInterval != 24 {
 		t.Fatalf("geodata defaults mismatch: %+v", jsonCfg.Render)
 	}
-	if !jsonCfg.Render.SourcePrefix || jsonCfg.Render.SourcePrefixFormat != "[{source}] {name}" || jsonCfg.Render.DedupeScope != "global" {
+	if !jsonCfg.Render.SourcePrefix || jsonCfg.Render.SourcePrefixFormat != "{emoji} {name}" || jsonCfg.Render.DedupeScope != "global" {
 		t.Fatalf("source prefix defaults mismatch: %+v", jsonCfg.Render)
+	}
+	if jsonCfg.Render.NameOptions.SourcePrefixMode != "emoji_name" || jsonCfg.Render.NameOptions.SourcePrefixSeparator != "｜" {
+		t.Fatalf("name option defaults mismatch: %+v", jsonCfg.Render.NameOptions)
 	}
 	if jsonCfg.Render.DNS == nil || jsonCfg.Render.DNS.Listen != "127.0.0.1:5335" {
 		t.Fatalf("dns defaults missing: %+v", jsonCfg.Render.DNS)

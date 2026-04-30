@@ -273,6 +273,34 @@ func TestRenderTemplateModeAppliesPreset(t *testing.T) {
 	}
 }
 
+func TestRenderTemplateModeIgnoresRulesModeCustomRules(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.TemplateRuleMode = "template"
+	opts.ExternalConfig.TemplateKey = "cm_online_multi_country_cf"
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"private"}
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "draft_only_rule",
+			Label:          "草稿规则",
+			Enabled:        true,
+			TargetMode:     "direct",
+			SourceType:     "inline",
+			Behavior:       "domain",
+			Format:         "text",
+			Payload:        []string{"example.com"},
+			InsertPosition: "before_match",
+		},
+	}
+
+	got := mustRender(t, nodes, opts)
+	text := string(got)
+	if strings.Contains(text, "draft_only_rule") || strings.Contains(text, "草稿规则") {
+		t.Fatalf("template mode must not include rules-mode custom rules:\n%s", text)
+	}
+}
+
 func TestRenderTemplateModeFallbackToLiteTemplate(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()
@@ -360,7 +388,7 @@ func mustRenderConfig(t *testing.T, nodes []model.NodeIR, opts model.RenderOptio
 	t.Helper()
 	opts = NormalizeRenderOptions(opts)
 	nodes = model.NormalizeNodes(nodes)
-	nodes = ensureUniqueNames(nodes)
+	nodes = ensureUniqueNames(nodes, opts.NameOptions.DedupeSuffixStyle)
 	proxies, err := buildProxies(nodes)
 	if err != nil {
 		t.Fatalf("buildProxies() error = %v", err)

@@ -130,6 +130,42 @@ func TestHandleHealthz(t *testing.T) {
 	}
 }
 
+func TestRandomPublishedIdentifiersAreStrongAndURLSafe(t *testing.T) {
+	seenTokens := map[string]struct{}{}
+	seenPublishIDs := map[string]struct{}{}
+	for i := 0; i < 128; i++ {
+		token, err := randomSubscriptionToken()
+		if err != nil {
+			t.Fatalf("randomSubscriptionToken() error = %v", err)
+		}
+		if len(token) < 32 {
+			t.Fatalf("token length = %d, want at least 32", len(token))
+		}
+		if strings.Contains(token, "=") || strings.ContainsAny(token, "/+") {
+			t.Fatalf("token = %q, want raw URL-safe base64", token)
+		}
+		if _, ok := seenTokens[token]; ok {
+			t.Fatalf("duplicate subscription token generated: %q", token)
+		}
+		seenTokens[token] = struct{}{}
+
+		publishID, err := randomPublishID()
+		if err != nil {
+			t.Fatalf("randomPublishID() error = %v", err)
+		}
+		if !strings.HasPrefix(publishID, "p_") || len(publishID) < 20 {
+			t.Fatalf("publish id = %q, want p_ prefix and random suffix", publishID)
+		}
+		if strings.Contains(publishID, "=") || strings.ContainsAny(publishID, "/+") {
+			t.Fatalf("publish id = %q, want raw URL-safe base64", publishID)
+		}
+		if _, ok := seenPublishIDs[publishID]; ok {
+			t.Fatalf("duplicate publish id generated: %q", publishID)
+		}
+		seenPublishIDs[publishID] = struct{}{}
+	}
+}
+
 func TestHandleStatus(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Subscriptions = []model.SubscriptionConfig{
@@ -1462,6 +1498,246 @@ func TestRotateTokenInvalidatesOldLink(t *testing.T) {
 	}
 }
 
+func TestGetPublishedByIDAndBindWorkspace(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#draft-restore"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	originalWorkspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", originalWorkspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/published/"+refreshBody.PublishID, nil)
+	getRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get published status code = %d; body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getBody publishedStatusResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode get published response: %v", err)
+	}
+	if getBody.PublishID != refreshBody.PublishID {
+		t.Fatalf("PublishID = %q, want %q", getBody.PublishID, refreshBody.PublishID)
+	}
+	if getBody.SubscriptionURL == "" || getBody.SubscriptionURL != getBody.URL {
+		t.Fatalf("SubscriptionURL = %q URL = %q, want matching non-empty urls", getBody.SubscriptionURL, getBody.URL)
+	}
+	if getBody.Status != "active" {
+		t.Fatalf("Status = %q, want active", getBody.Status)
+	}
+	token := publishedTokenFromURL(t, getBody.SubscriptionURL)
+	if getBody.TokenHint == "" || strings.Contains(getBody.TokenHint, token) {
+		t.Fatalf("TokenHint = %q, token = %q, want hint without full token", getBody.TokenHint, token)
+	}
+	if strings.Contains(getRec.Body.String(), `"token"`) {
+		t.Fatalf("published status leaked raw token field: %s", getRec.Body.String())
+	}
+
+	restoredWorkspaceID := createWorkspaceForTest(t, server, cfg)
+	bindBody := bytes.NewBufferString(`{"publish_id":"` + refreshBody.PublishID + `"}`)
+	bindReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+restoredWorkspaceID+"/bind-publish", bindBody)
+	bindReq.Header.Set("Content-Type", "application/json")
+	bindRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(bindRec, bindReq)
+	if bindRec.Code != http.StatusOK {
+		t.Fatalf("bind published status code = %d; body=%s", bindRec.Code, bindRec.Body.String())
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", restoredWorkspaceID), nil)
+	statusRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("published status code = %d; body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody publishedStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatalf("decode published status response: %v", err)
+	}
+	if statusBody.URL != refreshBody.SubscriptionURL {
+		t.Fatalf("bound workspace URL = %q, want original %q", statusBody.URL, refreshBody.SubscriptionURL)
+	}
+
+	secondRefreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", restoredWorkspaceID), nil)
+	secondRefreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRefreshRec, secondRefreshReq)
+	if secondRefreshRec.Code != http.StatusOK {
+		t.Fatalf("second refresh status code = %d; body=%s", secondRefreshRec.Code, secondRefreshRec.Body.String())
+	}
+	secondRefreshBody := decodeRefreshResponse(t, secondRefreshRec)
+	if secondRefreshBody.PublishID != refreshBody.PublishID {
+		t.Fatalf("second refresh PublishID = %q, want %q", secondRefreshBody.PublishID, refreshBody.PublishID)
+	}
+	if secondRefreshBody.SubscriptionURL != refreshBody.SubscriptionURL {
+		t.Fatalf("second refresh URL = %q, want %q", secondRefreshBody.SubscriptionURL, refreshBody.SubscriptionURL)
+	}
+}
+
+func TestRestoreDraftBindsPublishAndRefreshKeepsSameLink(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#restore-draft"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceA := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceA), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh A status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	first := decodeRefreshResponse(t, refreshRec)
+
+	workspaceB := createWorkspaceForTest(t, server, cfg)
+	restoreReqBody, err := json.Marshal(restoreDraftRequest{
+		Config: cfg,
+		PublishRef: restoreDraftPublishRefRequest{
+			PublishID: first.PublishID,
+		},
+		NodeState: &model.NodeState{
+			DisabledNodes: []string{"node-disabled-in-draft"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal restore draft request: %v", err)
+	}
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceB+"/restore-draft", bytes.NewReader(restoreReqBody))
+	restoreReq.Header.Set("Content-Type", "application/json")
+	restoreRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore draft status code = %d; body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	var restoreBody restoreDraftResponse
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreBody); err != nil {
+		t.Fatalf("decode restore draft response: %v", err)
+	}
+	if !restoreBody.Publish.Exists || restoreBody.Publish.PublishID != first.PublishID {
+		t.Fatalf("restore publish = %#v, want existing %q", restoreBody.Publish, first.PublishID)
+	}
+	if restoreBody.Publish.SubscriptionURL != first.SubscriptionURL {
+		t.Fatalf("restore URL = %q, want %q", restoreBody.Publish.SubscriptionURL, first.SubscriptionURL)
+	}
+	refB, err := server.loadWorkspace(workspaceB)
+	if err != nil {
+		t.Fatalf("loadWorkspace(B) error = %v", err)
+	}
+	if refB.Meta.PublishID != first.PublishID {
+		t.Fatalf("workspace B PublishID = %q, want %q", refB.Meta.PublishID, first.PublishID)
+	}
+
+	if _, err := os.Stat(filepath.Join(server.publishedRootDir(), first.PublishID, "current.yaml")); err != nil {
+		t.Fatalf("stat current.yaml before refresh: %v", err)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceB), nil)
+	secondRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("refresh B status code = %d; body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	second := decodeRefreshResponse(t, secondRec)
+	if second.PublishID != first.PublishID {
+		t.Fatalf("refresh B PublishID = %q, want %q", second.PublishID, first.PublishID)
+	}
+	if second.SubscriptionURL != first.SubscriptionURL {
+		t.Fatalf("refresh B URL = %q, want %q", second.SubscriptionURL, first.SubscriptionURL)
+	}
+	if publishedDirCount(t, server) != 1 {
+		t.Fatalf("published dir count = %d, want 1", publishedDirCount(t, server))
+	}
+	if _, err := os.Stat(filepath.Join(server.publishedRootDir(), first.PublishID, "current.yaml")); err != nil {
+		t.Fatalf("stat current.yaml after refresh: %v", err)
+	}
+}
+
+func TestRestoreDraftMissingPublishClearsBinding(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#missing-restore"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceA := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceA), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	first := decodeRefreshResponse(t, refreshRec)
+	if err := server.deletePublished(first.PublishID); err != nil {
+		t.Fatalf("deletePublished() error = %v", err)
+	}
+
+	workspaceB := createWorkspaceForTest(t, server, cfg)
+	restoreReqBody, err := json.Marshal(restoreDraftRequest{
+		Config: cfg,
+		PublishRef: restoreDraftPublishRefRequest{
+			PublishID: first.PublishID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal restore draft request: %v", err)
+	}
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceB+"/restore-draft", bytes.NewReader(restoreReqBody))
+	restoreReq.Header.Set("Content-Type", "application/json")
+	restoreRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore draft status code = %d; body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	var restoreBody restoreDraftResponse
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreBody); err != nil {
+		t.Fatalf("decode restore draft response: %v", err)
+	}
+	if restoreBody.Publish.Exists || restoreBody.Publish.Reason != "PUBLISHED_NOT_FOUND" {
+		t.Fatalf("restore publish = %#v, want missing published", restoreBody.Publish)
+	}
+	refB, err := server.loadWorkspace(workspaceB)
+	if err != nil {
+		t.Fatalf("loadWorkspace(B) error = %v", err)
+	}
+	if refB.Meta.PublishID != "" {
+		t.Fatalf("workspace B PublishID = %q, want empty", refB.Meta.PublishID)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceB), nil)
+	secondRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("refresh B status code = %d; body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	second := decodeRefreshResponse(t, secondRec)
+	if second.PublishID == "" || second.PublishID == first.PublishID {
+		t.Fatalf("new PublishID = %q, old = %q", second.PublishID, first.PublishID)
+	}
+}
+
+func TestGetPublishedByIDNotFound(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	server := NewServer("0.1.0-test", cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/published/p_missing", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "PUBLISHED_NOT_FOUND") {
+		t.Fatalf("body = %s, want PUBLISHED_NOT_FOUND", rec.Body.String())
+	}
+}
+
 func TestWorkspaceCleanupRemovesWorkspaceButKeepsPublished(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
@@ -1576,6 +1852,93 @@ func TestPublishedAccessCountAndNoStoreHeaders(t *testing.T) {
 	}
 	if statusBody.LastAccessAt == "" {
 		t.Fatalf("LastAccessAt is empty")
+	}
+}
+
+func TestNodeStateDraftAPI(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	putState := model.NodeState{
+		NodeOverrides: map[string]model.NodeOverride{
+			"node-1": {
+				Enabled: true,
+				Name:    "renamed-node",
+				Fields:  model.NodeOverrideFields{Server: "example.org", Port: 8443},
+			},
+		},
+		DisabledNodes: []string{"node-2"},
+		DeletedNodes:  []string{"node-3"},
+		CustomNodes: []model.NodeIR{
+			{
+				ID:     "custom-node-1",
+				Name:   "custom-node",
+				Type:   model.ProtocolSS,
+				Server: "127.0.0.1",
+				Port:   8388,
+				Auth:   model.Auth{Password: "secret"},
+				Source: model.SourceInfo{Kind: "custom", Name: "manual"},
+			},
+		},
+	}
+	body, err := json.Marshal(nodeStateRequest{State: putState})
+	if err != nil {
+		t.Fatalf("marshal node state request: %v", err)
+	}
+	putReq := httptest.NewRequest(http.MethodPut, withWorkspace("/api/nodes/state", workspaceID), bytes.NewReader(body))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put node state status code = %d; body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	workspaceCfg, err := server.loadWorkspaceConfig(ref)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	loaded, err := pipeline.LoadNodeState(workspaceCfg)
+	if err != nil {
+		t.Fatalf("LoadNodeState() error = %v", err)
+	}
+	loaded.SubscriptionMeta = map[string]model.SubscriptionMeta{
+		"source-1": {SourceID: "source-1", SourceName: "hidden-meta", Total: 1024},
+	}
+	loaded.LastAudit = model.AuditReport{RawCount: 99, FinalCount: 88}
+	if err := pipeline.SaveNodeState(workspaceCfg, loaded); err != nil {
+		t.Fatalf("SaveNodeState() error = %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes/state", workspaceID), nil)
+	getRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get node state status code = %d; body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getBody nodeStateResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode node state response: %v", err)
+	}
+	if got := getBody.State.NodeOverrides["node-1"].Name; got != "renamed-node" {
+		t.Fatalf("override name = %q, want renamed-node", got)
+	}
+	if !containsString(getBody.State.DisabledNodes, "node-2") || !containsString(getBody.State.DeletedNodes, "node-3") {
+		t.Fatalf("state disabled/deleted = %#v/%#v", getBody.State.DisabledNodes, getBody.State.DeletedNodes)
+	}
+	if len(getBody.State.CustomNodes) != 1 {
+		t.Fatalf("len(CustomNodes) = %d, want 1", len(getBody.State.CustomNodes))
+	}
+	if len(getBody.State.SubscriptionMeta) != 0 {
+		t.Fatalf("SubscriptionMeta = %#v, want omitted from draft state", getBody.State.SubscriptionMeta)
+	}
+	if getBody.State.LastAudit.RawCount != 0 || getBody.State.LastAudit.FinalCount != 0 {
+		t.Fatalf("LastAudit = %#v, want zero draft audit", getBody.State.LastAudit)
 	}
 }
 

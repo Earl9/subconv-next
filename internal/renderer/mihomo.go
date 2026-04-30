@@ -250,6 +250,7 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.SourcePrefix = cfg.Render.SourcePrefix
 	opts.SourcePrefixFormat = cfg.Render.SourcePrefixFormat
 	opts.SourcePrefixSeparator = cfg.Render.SourcePrefixSeparator
+	opts.NameOptions = cfg.Render.NameOptions
 	opts.DedupeScope = cfg.Render.DedupeScope
 	opts.GeodataMode = cfg.Render.GeodataMode
 	opts.GeoAutoUpdate = cfg.Render.GeoAutoUpdate
@@ -310,6 +311,18 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	if strings.TrimSpace(opts.ExternalConfig.TemplateLabel) == "" {
 		opts.ExternalConfig.TemplateLabel = defaults.ExternalConfig.TemplateLabel
 	}
+	opts.NameOptions.KeepRawName = true
+	if !opts.SourcePrefix {
+		opts.NameOptions.SourcePrefixMode = "none"
+	} else if strings.TrimSpace(opts.NameOptions.SourcePrefixMode) == "" {
+		opts.NameOptions.SourcePrefixMode = defaults.NameOptions.SourcePrefixMode
+	}
+	if strings.TrimSpace(opts.NameOptions.SourcePrefixSeparator) == "" {
+		opts.NameOptions.SourcePrefixSeparator = defaults.NameOptions.SourcePrefixSeparator
+	}
+	if strings.TrimSpace(opts.NameOptions.DedupeSuffixStyle) == "" {
+		opts.NameOptions.DedupeSuffixStyle = defaults.NameOptions.DedupeSuffixStyle
+	}
 	opts.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(opts.SubscriptionInfo)
 
 	return applyTemplateMode(opts)
@@ -328,6 +341,7 @@ func applyTemplateMode(opts model.RenderOptions) model.RenderOptions {
 		opts.RuleMode = preset.RuleMode
 	}
 	opts.EnabledRules = append([]string(nil), preset.EnabledRules...)
+	opts.CustomRules = nil
 	if strings.TrimSpace(preset.GroupProxyMode) != "" {
 		opts.GroupProxyMode = preset.GroupProxyMode
 	}
@@ -336,8 +350,8 @@ func applyTemplateMode(opts model.RenderOptions) model.RenderOptions {
 
 func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error) {
 	opts = NormalizeRenderOptions(opts)
-	nodes = model.NormalizeNodesNoDedupe(nodes)
-	nodes = ensureUniqueNames(nodes)
+	nodes = normalizeRenderNodesPreserveNames(nodes)
+	nodes = ensureUniqueNames(nodes, opts.NameOptions.DedupeSuffixStyle)
 
 	proxies, err := buildProxies(nodes)
 	if err != nil {
@@ -1266,24 +1280,21 @@ func cloneStringSliceMap(values map[string][]string) map[string][]string {
 	return out
 }
 
-func ensureUniqueNames(nodes []model.NodeIR) []model.NodeIR {
-	out := make([]model.NodeIR, len(nodes))
-	copy(out, nodes)
-
-	counts := make(map[string]int, len(nodes))
-	for i := range out {
-		base := out[i].Name
-		if strings.TrimSpace(base) == "" {
-			base = fmt.Sprintf("%s-%d", out[i].Type, i+1)
+func normalizeRenderNodesPreserveNames(nodes []model.NodeIR) []model.NodeIR {
+	out := make([]model.NodeIR, 0, len(nodes))
+	for _, node := range nodes {
+		name := node.Name
+		node = model.NormalizeNode(node)
+		if name != "" {
+			node.Name = name
 		}
-		counts[base]++
-		if counts[base] == 1 {
-			out[i].Name = base
-			continue
-		}
-		out[i].Name = fmt.Sprintf("%s %d", base, counts[base])
+		out = append(out, node)
 	}
 	return out
+}
+
+func ensureUniqueNames(nodes []model.NodeIR, suffixStyle string) []model.NodeIR {
+	return model.EnsureUniqueProxyNames(nodes, suffixStyle)
 }
 
 func nodeNames(nodes []model.NodeIR) []string {

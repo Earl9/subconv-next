@@ -78,6 +78,24 @@ func TestFilterSubscriptionNodesManualExcludedIDs(t *testing.T) {
 	}
 }
 
+func TestCollectNodesSkipsInlineWhenManualNodesDisabled(t *testing.T) {
+	cfg := model.DefaultConfig()
+	disabled := false
+	cfg.ManualNodesEnabled = &disabled
+	cfg.Inline = []model.InlineConfig{
+		{
+			Name:    "manual",
+			Enabled: true,
+			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#manual",
+		},
+	}
+
+	result := CollectNodes(cfg)
+	if len(result.Nodes) != 0 {
+		t.Fatalf("CollectNodes() nodes = %d, want 0 when manual nodes disabled", len(result.Nodes))
+	}
+}
+
 func TestNormalizeKeywords(t *testing.T) {
 	got := normalizeKeywords([]string{" JP, 香港 ", "日本\nJP", "", "香港"})
 	want := []string{"jp", "香港", "日本"}

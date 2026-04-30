@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -79,7 +78,7 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 	}
 
 	finalNodes = applyNodeDecorations(finalNodes, cfg.Render)
-	finalNodes = ensureUniqueFinalNodeNames(finalNodes)
+	finalNodes = ensureUniqueFinalNodeNames(finalNodes, cfg.Render)
 
 	audit.FinalCount = len(finalNodes)
 	audit.ExcludedCount = len(audit.ExcludedNodes)
@@ -142,8 +141,8 @@ func mergeNodeSources(existing, duplicate model.NodeIR) []model.SourceInfo {
 	seen := map[string]struct{}{}
 	out := make([]model.SourceInfo, 0, len(combined))
 	for _, source := range combined {
-		key := strings.Join([]string{source.ID, source.Name, source.Kind, source.URLHash}, "|")
-		if key == "|||" {
+		key := strings.Join([]string{source.ID, source.Name, source.Emoji, source.Kind, source.URLHash}, "|")
+		if key == "||||" {
 			continue
 		}
 		if _, ok := seen[key]; ok {
@@ -165,14 +164,8 @@ func applyNodeDecorations(nodes []model.NodeIR, render model.RenderConfig) []mod
 		if render.UDP {
 			node.UDP = model.Bool(true)
 		}
-		node = ApplySourcePrefix(node, render)
-		if render.ShowNodeType {
-			node.Name = withNodeTypePrefix(node)
-		}
-		if render.Emoji {
-			node.Name = withEmojiPrefix(node)
-		}
-		out = append(out, model.NormalizeNode(node))
+		node.Name = model.BuildYamlNodeName(node.Name, node.Source, model.EffectiveNameOptions(render))
+		out = append(out, node)
 	}
 	if render.SortNodes {
 		sort.SliceStable(out, func(i, j int) bool {
@@ -182,22 +175,8 @@ func applyNodeDecorations(nodes []model.NodeIR, render model.RenderConfig) []mod
 	return out
 }
 
-func ensureUniqueFinalNodeNames(nodes []model.NodeIR) []model.NodeIR {
-	out := append([]model.NodeIR(nil), nodes...)
-	counts := make(map[string]int, len(out))
-	for i := range out {
-		base := strings.TrimSpace(out[i].Name)
-		if base == "" {
-			base = fmt.Sprintf("%s-%d", out[i].Type, i+1)
-		}
-		counts[base]++
-		if counts[base] == 1 {
-			out[i].Name = base
-			continue
-		}
-		out[i].Name = fmt.Sprintf("%s %d", base, counts[base])
-	}
-	return out
+func ensureUniqueFinalNodeNames(nodes []model.NodeIR, render model.RenderConfig) []model.NodeIR {
+	return model.EnsureUniqueProxyNames(nodes, model.EffectiveNameOptions(render).DedupeSuffixStyle)
 }
 
 func mergeUniqueStrings(a, b []string) []string {

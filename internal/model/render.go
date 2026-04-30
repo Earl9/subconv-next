@@ -23,6 +23,7 @@ type RenderOptions struct {
 	SourcePrefix            bool                     `json:"source_prefix"`
 	SourcePrefixFormat      string                   `json:"source_prefix_format,omitempty"`
 	SourcePrefixSeparator   string                   `json:"source_prefix_separator,omitempty"`
+	NameOptions             NameOptions              `json:"name_options,omitempty"`
 	DedupeScope             string                   `json:"dedupe_scope,omitempty"`
 	GeodataMode             bool                     `json:"geodata_mode"`
 	GeoAutoUpdate           bool                     `json:"geo_auto_update"`
@@ -61,16 +62,17 @@ func DefaultRenderOptions() RenderOptions {
 		LogLevel:                DefaultLogLevel,
 		DNSEnabled:              true,
 		EnhancedMode:            DefaultEnhancedMode,
-		Emoji:                   true,
-		ShowNodeType:            true,
+		Emoji:                   false,
+		ShowNodeType:            false,
 		IncludeInfoNode:         false,
 		ShowInfoNodes:           false,
 		UDP:                     true,
 		FilterIllegal:           true,
 		GroupProxyMode:          "compact",
 		SourcePrefix:            true,
-		SourcePrefixFormat:      "[{source}] {name}",
-		SourcePrefixSeparator:   " ",
+		SourcePrefixFormat:      "{emoji} {name}",
+		SourcePrefixSeparator:   "｜",
+		NameOptions:             DefaultNameOptions(),
 		DedupeScope:             "global",
 		GeodataMode:             true,
 		GeoAutoUpdate:           true,

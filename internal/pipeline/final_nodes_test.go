@@ -26,7 +26,7 @@ func TestBuildFinalNodesDisabledAndDeletedNotRendered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildFinalNodes() error = %v", err)
 	}
-	if len(finalSet.Nodes) != 1 || finalSet.Nodes[0].Name != "[ss] keep" {
+	if len(finalSet.Nodes) != 1 || finalSet.Nodes[0].Name != "keep" {
 		t.Fatalf("final nodes = %#v, want only keep", finalSet.Nodes)
 	}
 	reasons := map[string]struct{}{}
@@ -53,7 +53,7 @@ func TestBuildFinalNodesExcludeKeywordAndInfoNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildFinalNodes() error = %v", err)
 	}
-	if len(finalSet.Nodes) != 1 || finalSet.Nodes[0].Name != "[ss] ok-node" {
+	if len(finalSet.Nodes) != 1 || finalSet.Nodes[0].Name != "ok-node" {
 		t.Fatalf("final nodes = %#v, want only ok-node", finalSet.Nodes)
 	}
 	reasonCount := map[string]int{}
