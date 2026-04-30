@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 type healthzResponse struct {
 	OK            bool   `json:"ok"`
 	Version       string `json:"version"`
+	DataDir       string `json:"data_dir"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
@@ -74,16 +76,18 @@ type workspaceResponse struct {
 }
 
 type publishedStatusResponse struct {
-	OK              bool   `json:"ok"`
-	PublishID       string `json:"publish_id,omitempty"`
-	URL             string `json:"url,omitempty"`
-	SubscriptionURL string `json:"subscription_url,omitempty"`
-	TokenHint       string `json:"token_hint,omitempty"`
-	CreatedAt       string `json:"created_at,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
-	LastAccessAt    string `json:"last_access_at,omitempty"`
-	AccessCount     int    `json:"access_count"`
-	Status          string `json:"status,omitempty"`
+	OK                      bool   `json:"ok"`
+	PublishID               string `json:"publish_id,omitempty"`
+	URL                     string `json:"url,omitempty"`
+	SubscriptionURL         string `json:"subscription_url,omitempty"`
+	TokenHint               string `json:"token_hint,omitempty"`
+	CreatedAt               string `json:"created_at,omitempty"`
+	UpdatedAt               string `json:"updated_at,omitempty"`
+	LastAccessAt            string `json:"last_access_at,omitempty"`
+	AccessCount             int    `json:"access_count"`
+	Status                  string `json:"status,omitempty"`
+	HasSubscriptionUserinfo bool   `json:"has_subscription_userinfo,omitempty"`
+	SubscriptionInfoHeader  string `json:"subscription_info_header,omitempty"`
 }
 
 type bindPublishedRequest struct {
@@ -101,17 +105,19 @@ type restoreDraftRequest struct {
 }
 
 type restoreDraftPublishResponse struct {
-	Exists          bool   `json:"exists"`
-	Reason          string `json:"reason,omitempty"`
-	PublishID       string `json:"publish_id,omitempty"`
-	URL             string `json:"url,omitempty"`
-	SubscriptionURL string `json:"subscription_url,omitempty"`
-	TokenHint       string `json:"token_hint,omitempty"`
-	CreatedAt       string `json:"created_at,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
-	LastAccessAt    string `json:"last_access_at,omitempty"`
-	AccessCount     int    `json:"access_count"`
-	Status          string `json:"status,omitempty"`
+	Exists                  bool   `json:"exists"`
+	Reason                  string `json:"reason,omitempty"`
+	PublishID               string `json:"publish_id,omitempty"`
+	URL                     string `json:"url,omitempty"`
+	SubscriptionURL         string `json:"subscription_url,omitempty"`
+	TokenHint               string `json:"token_hint,omitempty"`
+	CreatedAt               string `json:"created_at,omitempty"`
+	UpdatedAt               string `json:"updated_at,omitempty"`
+	LastAccessAt            string `json:"last_access_at,omitempty"`
+	AccessCount             int    `json:"access_count"`
+	Status                  string `json:"status,omitempty"`
+	HasSubscriptionUserinfo bool   `json:"has_subscription_userinfo,omitempty"`
+	SubscriptionInfoHeader  string `json:"subscription_info_header,omitempty"`
 }
 
 type restoreDraftResponse struct {
@@ -173,6 +179,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthzResponse{
 		OK:            true,
 		Version:       s.version,
+		DataDir:       s.baseDataDir(),
 		UptimeSeconds: s.uptimeSeconds(),
 	})
 }
@@ -338,7 +345,7 @@ func (s *Server) handleValidateOutput(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "YAML_READ_FAILED", err.Error())
 		return
 	}
-	if err := pipeline.ValidateOutputNoLeak(data, finalSet, audit, renderer.OptionsFromConfig(cfg)); err != nil {
+	if err := pipeline.ValidateFinalConfig(data, finalSet, audit, renderer.OptionsFromConfig(cfg)); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "OUTPUT_LEAK_DETECTED", err.Error())
 		return
 	}
@@ -712,33 +719,38 @@ func (s *Server) handleDeletePublished(w http.ResponseWriter, r *http.Request, p
 }
 
 func (s *Server) publishedStatus(r *http.Request, published publishedRef) publishedStatusResponse {
-	url := publishedURL(normalizePublicOrigin(r), published.Meta.Token)
+	url := publishedURL(s.publicOrigin(r), published.Meta.Token)
+	userinfoHeader := publishedSubscriptionUserinfoHeader(published.Meta.SubscriptionInfo)
 	return publishedStatusResponse{
-		OK:              true,
-		PublishID:       published.ID,
-		URL:             url,
-		SubscriptionURL: url,
-		TokenHint:       published.Meta.TokenHint,
-		CreatedAt:       formatTime(published.Meta.CreatedAt),
-		UpdatedAt:       formatTime(published.Meta.UpdatedAt),
-		LastAccessAt:    formatTime(published.Meta.LastAccessAt),
-		AccessCount:     published.Meta.AccessCount,
-		Status:          "active",
+		OK:                      true,
+		PublishID:               published.ID,
+		URL:                     url,
+		SubscriptionURL:         url,
+		TokenHint:               published.Meta.TokenHint,
+		CreatedAt:               formatTime(published.Meta.CreatedAt),
+		UpdatedAt:               formatTime(published.Meta.UpdatedAt),
+		LastAccessAt:            formatTime(published.Meta.LastAccessAt),
+		AccessCount:             published.Meta.AccessCount,
+		Status:                  "active",
+		HasSubscriptionUserinfo: userinfoHeader != "",
+		SubscriptionInfoHeader:  userinfoHeader,
 	}
 }
 
 func restoreDraftPublishedStatus(_ *http.Request, status publishedStatusResponse) restoreDraftPublishResponse {
 	return restoreDraftPublishResponse{
-		Exists:          true,
-		PublishID:       status.PublishID,
-		URL:             status.URL,
-		SubscriptionURL: status.SubscriptionURL,
-		TokenHint:       status.TokenHint,
-		CreatedAt:       status.CreatedAt,
-		UpdatedAt:       status.UpdatedAt,
-		LastAccessAt:    status.LastAccessAt,
-		AccessCount:     status.AccessCount,
-		Status:          status.Status,
+		Exists:                  true,
+		PublishID:               status.PublishID,
+		URL:                     status.URL,
+		SubscriptionURL:         status.SubscriptionURL,
+		TokenHint:               status.TokenHint,
+		CreatedAt:               status.CreatedAt,
+		UpdatedAt:               status.UpdatedAt,
+		LastAccessAt:            status.LastAccessAt,
+		AccessCount:             status.AccessCount,
+		Status:                  status.Status,
+		HasSubscriptionUserinfo: status.HasSubscriptionUserinfo,
+		SubscriptionInfoHeader:  status.SubscriptionInfoHeader,
 	}
 }
 
@@ -799,11 +811,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", message)
 		return
 	}
-	if err := s.finalizePublishedRefresh(&ref, &published); err != nil {
+	if err := s.finalizePublishedRefresh(&ref, &published, cfg, outcome.Result); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "PUBLISH_FAILED", err.Error())
 		return
 	}
-	subscriptionURL := publishedURL(normalizePublicOrigin(r), published.Meta.Token)
+	subscriptionURL := publishedURL(s.publicOrigin(r), published.Meta.Token)
 	writeJSON(w, http.StatusOK, refreshResponse{
 		OK:              true,
 		NodeCount:       outcome.Result.NodeCount,
@@ -815,8 +827,8 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
 		return
 	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
@@ -825,16 +837,26 @@ func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.
 		http.NotFound(w, r)
 		return
 	}
-	data, _, err := s.loadPublishedYAML(parts[0])
+	data, published, err := s.loadPublishedYAML(parts[0])
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "SUBSCRIPTION_NOT_FOUND", "subscription not found")
 		return
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+	w.Header().Set("Profile-Update-Interval", "24")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	userinfo := publishedSubscriptionUserinfoHeader(published.Meta.SubscriptionInfo)
+	if userinfo != "" {
+		w.Header().Set("Subscription-Userinfo", userinfo)
+	}
+	s.logPublishedSubscriptionServe(published, userinfo)
 	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
 	_, _ = w.Write(data)
 }
 
@@ -982,6 +1004,28 @@ func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Con
 	_, _ = w.Write(data)
 }
 
+func publishedSubscriptionUserinfoHeader(info *publishedSubscriptionUserinfo) string {
+	if info == nil || !info.HeaderEnabled || info.Total <= 0 || info.Sources <= 0 {
+		return ""
+	}
+	return model.FormatSubscriptionUserinfoHeader(model.AggregatedSubscriptionMeta{
+		Upload:   info.Upload,
+		Download: info.Download,
+		Total:    info.Total,
+		Expire:   info.Expire,
+	})
+}
+
+func (s *Server) logPublishedSubscriptionServe(published publishedRef, userinfo string) {
+	state := "missing"
+	extra := ""
+	if userinfo != "" {
+		state = "present"
+		extra = fmt.Sprintf(" header=%q", userinfo)
+	}
+	s.appendLog(fmt.Sprintf("serve subscription publish=%s token_hint=%s meta=ok userinfo=%s%s", published.ID, published.Meta.TokenHint, state, extra))
+}
+
 func sanitizeOutputFilename(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1006,6 +1050,13 @@ func normalizePublicOrigin(r *http.Request) string {
 		host = "127.0.0.1:9876"
 	}
 	return scheme + "://" + host
+}
+
+func (s *Server) publicOrigin(r *http.Request) string {
+	if publicBaseURL := strings.TrimRight(strings.TrimSpace(s.snapshotConfig().Service.PublicBaseURL), "/"); publicBaseURL != "" {
+		return publicBaseURL
+	}
+	return normalizePublicOrigin(r)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

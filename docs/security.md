@@ -72,7 +72,9 @@ The renderer receives final nodes only. Disabled, deleted, excluded, invalid, in
 After rendering, the YAML is parsed back and validated:
 
 - Every `proxies[].name` exists in the final node set.
-- `proxy-groups[].proxies` references only existing node names, group names, or built-ins such as `DIRECT`.
+- `proxy-groups[].proxies` references only existing node names, existing group names, `DIRECT`, or `REJECT`.
+- `⚡ 自动选择` references only real nodes.
+- Country or region proxy-groups are not generated in V1.
 - Excluded nodes are not referenced by proxies or groups.
 - Rule providers referenced by rules exist.
 - Rule targets exist.

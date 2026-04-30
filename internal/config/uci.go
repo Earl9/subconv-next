@@ -226,6 +226,7 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 	if err := setInt(section, "published_delete_if_not_accessed_days", &dst.PublishedDeleteIfNotAccessedDays); err != nil {
 		return fmt.Errorf("service.published_delete_if_not_accessed_days: %w", err)
 	}
+	setString(section, "public_base_url", &dst.PublicBaseURL)
 	if err := setInt(section, "max_subscription_bytes", &dst.MaxSubscriptionBytes); err != nil {
 		return fmt.Errorf("service.max_subscription_bytes: %w", err)
 	}
@@ -280,6 +281,10 @@ func applyRenderSection(dst *model.RenderConfig, section uciSection) error {
 	if err := setBool(section, "source_prefix", &dst.SourcePrefix); err != nil {
 		return fmt.Errorf("render.source_prefix: %w", err)
 	}
+	if err := setBool(section, "enable_region_groups", &dst.GroupOptions.EnableRegionGroups); err != nil {
+		return fmt.Errorf("render.enable_region_groups: %w", err)
+	}
+	setString(section, "rule_group_node_mode", &dst.GroupOptions.RuleGroupNodeMode)
 	setString(section, "source_prefix_mode", &dst.NameOptions.SourcePrefixMode)
 	setString(section, "source_prefix_separator", &dst.NameOptions.SourcePrefixSeparator)
 	if err := setBool(section, "show_source_emoji", &dst.NameOptions.ShowSourceEmoji); err != nil {

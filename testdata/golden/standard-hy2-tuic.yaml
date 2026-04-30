@@ -72,20 +72,20 @@ proxies:
 proxy-groups:
   - {name: "🚀 节点选择", type: select, proxies: [⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
   - {name: ⚡ 自动选择, type: url-test, proxies: [hy2-node, tuic-node], url: 'https://www.gstatic.com/generate_204', interval: 300, lazy: false}
-  - {name: "🤖 AI 服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🔍 谷歌服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
+  - {name: "🤖 AI 服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🔍 谷歌服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
   - {name: "🏠 私有网络", type: select, proxies: [DIRECT, REJECT, "🚀 节点选择", ⚡ 自动选择]}
   - {name: "🔒 国内服务", type: select, proxies: [DIRECT, REJECT, "🚀 节点选择", ⚡ 自动选择]}
-  - {name: "📲 电报消息", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🐱 代码托管", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: Ⓜ️ 微软服务, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🍏 苹果服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎬 奈飞", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🏰 迪士尼+", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "📺 欧美流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎌 亚洲流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🌍 非中国", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🐟 漏网之鱼", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
+  - {name: "📲 电报消息", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🐱 代码托管", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: Ⓜ️ 微软服务, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🍏 苹果服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🎬 奈飞", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🏰 迪士尼+", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "📺 欧美流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🎌 亚洲流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🌍 非中国", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
+  - {name: "🐟 漏网之鱼", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, hy2-node, tuic-node]}
 
 rule-providers:
   category-ai-chat-!cn: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/category-ai-chat-!cn.mrs', path: ./ruleset/category-ai-chat-!cn.mrs, interval: 86400, format: mrs}

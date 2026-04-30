@@ -71,6 +71,49 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 	}
 }
 
+func TestFetchCapturesSubscriptionUserinfoAndDefaultUserAgent(t *testing.T) {
+	var gotUserAgent string
+	f := New(Options{
+		CacheDir:          t.TempDir(),
+		Timeout:           5 * time.Second,
+		MaxBodyBytes:      1024,
+		MaxRedirects:      3,
+		AllowPrivateHosts: true,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+		RequestDoer: func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
+			gotUserAgent = userAgentOrDefault(source.UserAgent)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":          []string{"text/plain"},
+					"Subscription-Userinfo": []string{"upload=100; download=200; total=1000; expire=1745942400"},
+				},
+				Body: io.NopCloser(strings.NewReader("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#userinfo")),
+			}, nil
+		},
+	})
+
+	fetched, warnings, err := f.Fetch(context.Background(), Source{
+		Name:    "demo",
+		URL:     "https://example.com/subscription",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", warnings)
+	}
+	if gotUserAgent != model.DefaultUserAgent {
+		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, model.DefaultUserAgent)
+	}
+	if fetched.SubscriptionUserinfo != "upload=100; download=200; total=1000; expire=1745942400" {
+		t.Fatalf("SubscriptionUserinfo = %q, want upstream header", fetched.SubscriptionUserinfo)
+	}
+}
+
 func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
 	f := New(Options{
 		CacheDir:     t.TempDir(),

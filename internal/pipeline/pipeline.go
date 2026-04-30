@@ -190,6 +190,7 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 		})
 	}
 	state.LastAudit = audit
+	finalSet.Nodes = finalNodes
 
 	if len(finalNodes) == 0 {
 		return RenderResult{
@@ -203,6 +204,22 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 	}
 
 	renderOpts := renderer.OptionsFromConfig(cfg)
+	if err := ValidateFinalNodeSet(finalSet, audit); err != nil {
+		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_validation_failed", Message: err.Error()})
+		state.LastAudit = audit
+		if cfg.Service.StrictMode {
+			return RenderResult{
+				Nodes:            finalNodes,
+				NodeCount:        len(finalNodes),
+				Warnings:         collected.Warnings,
+				Errors:           collected.Errors,
+				State:            state,
+				SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+				AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+				Audit:            audit,
+			}, err
+		}
+	}
 	rendered, err := renderer.RenderMihomo(finalNodes, renderOpts)
 	if err != nil {
 		return RenderResult{
@@ -216,8 +233,8 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 			Audit:            audit,
 		}, err
 	}
-	if err := ValidateOutputNoLeak(rendered, FinalNodeSet{Nodes: finalNodes}, audit, renderOpts); err != nil {
-		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_leak", Message: err.Error()})
+	if err := ValidateFinalConfig(rendered, finalSet, audit, renderOpts); err != nil {
+		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_validation_failed", Message: err.Error()})
 		state.LastAudit = audit
 		if cfg.Service.StrictMode {
 			return RenderResult{

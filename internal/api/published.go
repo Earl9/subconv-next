@@ -5,26 +5,55 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"subconv-next/internal/model"
+	"subconv-next/internal/pipeline"
 	"subconv-next/internal/storage"
 )
 
 type publishedMeta struct {
-	PublishID     string    `json:"publish_id"`
-	Token         string    `json:"token,omitempty"`
-	TokenHash     string    `json:"token_hash"`
-	TokenHint     string    `json:"token_hint,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	PublishID        string                         `json:"publish_id"`
+	Token            string                         `json:"token,omitempty"`
+	TokenHash        string                         `json:"token_hash"`
+	TokenHint        string                         `json:"token_hint,omitempty"`
+	CreatedAt        time.Time                      `json:"created_at"`
+	UpdatedAt        time.Time                      `json:"updated_at"`
+	LastAccessAt     time.Time                      `json:"last_access_at,omitempty"`
+	AccessCount      int                            `json:"access_count"`
+	Revoked          bool                           `json:"revoked"`
+	WorkspaceHash    string                         `json:"workspace_hash,omitempty"`
+	RotatedAt        time.Time                      `json:"rotated_at,omitempty"`
+	SubscriptionInfo *publishedSubscriptionUserinfo `json:"subscription_userinfo,omitempty"`
+	SourceUserinfo   []publishedSourceUserinfo      `json:"source_userinfo,omitempty"`
+}
+
+type publishedSubscriptionUserinfo struct {
+	Upload        int64     `json:"upload"`
+	Download      int64     `json:"download"`
+	Total         int64     `json:"total"`
+	Expire        int64     `json:"expire,omitempty"`
+	Sources       int       `json:"sources"`
 	UpdatedAt     time.Time `json:"updated_at"`
-	LastAccessAt  time.Time `json:"last_access_at,omitempty"`
-	AccessCount   int       `json:"access_count"`
-	Revoked       bool      `json:"revoked"`
-	WorkspaceHash string    `json:"workspace_hash,omitempty"`
-	RotatedAt     time.Time `json:"rotated_at,omitempty"`
+	HeaderEnabled bool      `json:"header_enabled,omitempty"`
+}
+
+type publishedSourceUserinfo struct {
+	SourceID      string `json:"source_id,omitempty"`
+	SourceName    string `json:"source_name,omitempty"`
+	SourceURLHost string `json:"source_url_host,omitempty"`
+	Upload        int64  `json:"upload,omitempty"`
+	Download      int64  `json:"download,omitempty"`
+	Total         int64  `json:"total,omitempty"`
+	Expire        int64  `json:"expire,omitempty"`
+	Available     bool   `json:"available"`
+	FromHeader    bool   `json:"from_header,omitempty"`
+	FromInfoNode  bool   `json:"from_info_node,omitempty"`
+	FetchedAt     string `json:"fetched_at,omitempty"`
 }
 
 type legacyPublishedMeta struct {
@@ -238,13 +267,14 @@ func (s *Server) releaseWorkspacePublishedRef(ref *workspaceRef, published publi
 	_ = os.RemoveAll(published.Dir)
 }
 
-func (s *Server) finalizePublishedRefresh(ref *workspaceRef, published *publishedRef) error {
+func (s *Server) finalizePublishedRefresh(ref *workspaceRef, published *publishedRef, cfg model.Config, result pipeline.RenderResult) error {
 	if published == nil {
 		return nil
 	}
 	now := time.Now().UTC()
 	published.Meta.WorkspaceHash = firstNonEmptyString(ref.Hash, published.Meta.WorkspaceHash)
 	published.Meta.UpdatedAt = now
+	published.Meta.SubscriptionInfo, published.Meta.SourceUserinfo = buildPublishedSubscriptionUserinfo(cfg, result.SubscriptionMeta, now)
 	if err := s.savePublishedMeta(*published); err != nil {
 		return err
 	}
@@ -257,6 +287,104 @@ func (s *Server) finalizePublishedRefresh(ref *workspaceRef, published *publishe
 	return nil
 }
 
+func buildPublishedSubscriptionUserinfo(cfg model.Config, metas map[string]model.SubscriptionMeta, updatedAt time.Time) (*publishedSubscriptionUserinfo, []publishedSourceUserinfo) {
+	sources := pipeline.BuildSubscriptionMetaSources(cfg, metas)
+	sourceHosts := subscriptionSourceHosts(cfg)
+	sourceUserinfo := make([]publishedSourceUserinfo, 0, len(sources))
+
+	var (
+		upload     int64
+		download   int64
+		total      int64
+		expire     int64
+		validCount int
+	)
+
+	for _, meta := range sources {
+		meta = model.NormalizeSubscriptionMeta(meta)
+		available := meta.FromHeader
+		sourceUserinfo = append(sourceUserinfo, publishedSourceUserinfo{
+			SourceID:      meta.SourceID,
+			SourceName:    meta.SourceName,
+			SourceURLHost: firstNonEmptyString(sourceHosts.byID[meta.SourceID], sourceHosts.byName[meta.SourceName]),
+			Upload:        meta.Upload,
+			Download:      meta.Download,
+			Total:         meta.Total,
+			Expire:        meta.Expire,
+			Available:     available,
+			FromHeader:    meta.FromHeader,
+			FromInfoNode:  meta.FromInfoNode,
+			FetchedAt:     meta.FetchedAt,
+		})
+
+		if !available || meta.Total <= 0 {
+			continue
+		}
+		validCount++
+		upload += meta.Upload
+		download += meta.Download
+		total += meta.Total
+		if meta.Expire > 0 && (expire == 0 || meta.Expire < expire) {
+			expire = meta.Expire
+		}
+	}
+
+	if validCount == 0 {
+		return nil, sourceUserinfo
+	}
+
+	aggregate := model.AggregatedSubscriptionMeta{
+		Upload:   upload,
+		Download: download,
+		Total:    total,
+		Used:     upload + download,
+		Expire:   expire,
+	}
+	info := &publishedSubscriptionUserinfo{
+		Upload:        upload,
+		Download:      download,
+		Total:         total,
+		Expire:        expire,
+		Sources:       validCount,
+		UpdatedAt:     updatedAt.UTC(),
+		HeaderEnabled: model.FormatSubscriptionUserinfoHeader(aggregate) != "",
+	}
+	return info, sourceUserinfo
+}
+
+type subscriptionSourceHostIndex struct {
+	byID   map[string]string
+	byName map[string]string
+}
+
+func subscriptionSourceHosts(cfg model.Config) subscriptionSourceHostIndex {
+	index := subscriptionSourceHostIndex{
+		byID:   map[string]string{},
+		byName: map[string]string{},
+	}
+	for _, sub := range cfg.Subscriptions {
+		host := subscriptionURLHost(sub.URL)
+		if host == "" {
+			continue
+		}
+		if sourceID := strings.TrimSpace(sub.ID); sourceID != "" {
+			index.byID[sourceID] = host
+		}
+		if name := strings.TrimSpace(sub.Name); name != "" {
+			index.byName[name] = host
+		}
+	}
+	return index
+}
+
+func subscriptionURLHost(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Hostname())
+}
+
 func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
 	published, err := s.loadPublishedByToken(token)
 	if err != nil {
@@ -265,6 +393,7 @@ func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
 	if published.Meta.Revoked {
 		return nil, publishedRef{}, errWorkspaceNotFound
 	}
+	published = s.ensurePublishedSubscriptionUserinfo(published)
 	data, err := os.ReadFile(published.CurrentPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -276,6 +405,88 @@ func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
 	published.Meta.AccessCount++
 	_ = s.savePublishedMeta(published)
 	return data, published, nil
+}
+
+func (s *Server) ensurePublishedSubscriptionUserinfo(published publishedRef) publishedRef {
+	if published.Meta.SubscriptionInfo != nil && published.Meta.SubscriptionInfo.Total > 0 {
+		return published
+	}
+
+	ref, cfg, state, ok := s.loadPublishedWorkspaceState(published)
+	if !ok {
+		return published
+	}
+
+	info, sources := buildPublishedSubscriptionUserinfo(cfg, state.SubscriptionMeta, time.Now().UTC())
+	if info == nil || info.Total <= 0 {
+		return published
+	}
+
+	published.Meta.WorkspaceHash = firstNonEmptyString(published.Meta.WorkspaceHash, ref.Hash)
+	published.Meta.SubscriptionInfo = info
+	published.Meta.SourceUserinfo = sources
+	if err := s.savePublishedMeta(published); err != nil {
+		s.appendLog("published subscription userinfo restore failed: publish=" + published.ID + " error=" + err.Error())
+		return published
+	}
+	s.appendLog(fmt.Sprintf("published subscription userinfo restored: publish=%s token_hint=%s sources=%d", published.ID, published.Meta.TokenHint, info.Sources))
+	return published
+}
+
+func (s *Server) loadPublishedWorkspaceState(published publishedRef) (workspaceRef, model.Config, model.NodeState, bool) {
+	if hash := strings.TrimSpace(published.Meta.WorkspaceHash); hash != "" {
+		if ref, cfg, state, ok := s.loadWorkspaceStateByHash(hash); ok {
+			return ref, cfg, state, true
+		}
+	}
+
+	root := s.workspaceRootDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return workspaceRef{}, model.Config{}, model.NodeState{}, false
+	}
+	var bestRef workspaceRef
+	var bestCfg model.Config
+	var bestState model.NodeState
+	var bestAccess time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		ref, cfg, state, ok := s.loadWorkspaceStateByHash(entry.Name())
+		if !ok || ref.Meta.PublishID != published.ID {
+			continue
+		}
+		if len(state.SubscriptionMeta) == 0 {
+			continue
+		}
+		if bestRef.Hash == "" || ref.Meta.LastAccessAt.After(bestAccess) {
+			bestRef = ref
+			bestCfg = cfg
+			bestState = state
+			bestAccess = ref.Meta.LastAccessAt
+		}
+	}
+	if bestRef.Hash == "" {
+		return workspaceRef{}, model.Config{}, model.NodeState{}, false
+	}
+	return bestRef, bestCfg, bestState, true
+}
+
+func (s *Server) loadWorkspaceStateByHash(hash string) (workspaceRef, model.Config, model.NodeState, bool) {
+	ref, err := s.loadWorkspaceByHash(hash)
+	if err != nil {
+		return workspaceRef{}, model.Config{}, model.NodeState{}, false
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		return workspaceRef{}, model.Config{}, model.NodeState{}, false
+	}
+	state, err := pipeline.LoadNodeState(cfg)
+	if err != nil {
+		return workspaceRef{}, model.Config{}, model.NodeState{}, false
+	}
+	return ref, cfg, state, true
 }
 
 func (s *Server) loadPublishedByToken(token string) (publishedRef, error) {

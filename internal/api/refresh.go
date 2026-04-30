@@ -3,11 +3,13 @@ package api
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"subconv-next/internal/model"
 	"subconv-next/internal/pipeline"
+	"subconv-next/internal/renderer"
 )
 
 var ErrRefreshInProgress = errors.New("refresh is already running")
@@ -106,7 +108,42 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 		}
 		return nil, err
 	}
-	if err := pipeline.WriteRendered(result.OutputPath, result.YAML); err != nil {
+	stagedPath := filepath.Join(filepath.Dir(result.OutputPath), "."+filepath.Base(result.OutputPath)+".validate")
+	defer func() {
+		_ = os.Remove(stagedPath)
+	}()
+	if err := pipeline.WriteRendered(stagedPath, result.YAML); err != nil {
+		s.setRefreshFailure(err.Error(), now)
+		s.appendLog(reason + " write failed: " + err.Error())
+		s.appendWorkspaceLog(workspaceHash, reason+" write failed: "+err.Error())
+		if s.refreshAfterRun != nil {
+			s.refreshAfterRun()
+		}
+		return nil, err
+	}
+	if s.refreshAfterWrite != nil {
+		s.refreshAfterWrite(stagedPath)
+	}
+	written, err := os.ReadFile(stagedPath)
+	if err != nil {
+		s.setRefreshFailure(err.Error(), now)
+		s.appendLog(reason + " post-write validation read failed: " + err.Error())
+		s.appendWorkspaceLog(workspaceHash, reason+" post-write validation read failed: "+err.Error())
+		if s.refreshAfterRun != nil {
+			s.refreshAfterRun()
+		}
+		return nil, err
+	}
+	if err := pipeline.ValidateFinalConfig(written, pipeline.FinalNodeSet{Nodes: result.Nodes}, result.Audit, renderer.OptionsFromConfig(cfg)); err != nil {
+		s.setRefreshFailure(err.Error(), now)
+		s.appendLog(reason + " post-write validation failed: " + err.Error())
+		s.appendWorkspaceLog(workspaceHash, reason+" post-write validation failed: "+err.Error())
+		if s.refreshAfterRun != nil {
+			s.refreshAfterRun()
+		}
+		return nil, err
+	}
+	if err := pipeline.WriteRendered(result.OutputPath, written); err != nil {
 		s.setRefreshFailure(err.Error(), now)
 		s.appendLog(reason + " write failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" write failed: "+err.Error())

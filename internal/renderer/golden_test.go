@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
 	"subconv-next/internal/model"
 	"subconv-next/internal/parser"
 )
@@ -322,6 +323,140 @@ func TestRenderTemplateModeFallbackToLiteTemplate(t *testing.T) {
 	}
 }
 
+func TestNoRegionGroupsGenerated(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+		testSSNode("HK Node", "hk.example.com"),
+		testSSNode("SG Node", "sg.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.EnabledRules = []string{"ai"}
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	regionGroupNames := []string{"🇭🇰 香港", "🇯🇵 日本", "🇺🇸 美国", "🇸🇬 新加坡", "🇹🇼 台湾", "🇬🇧 英国", "🇩🇪 德国", "🇳🇱 荷兰", "🇷🇺 俄罗斯", "🇰🇷 韩国"}
+	for _, name := range regionGroupNames {
+		assertNoProxyGroup(t, cfg.ProxyGroups, name)
+	}
+
+	main := findProxyGroup(t, cfg.ProxyGroups, groupNodeSelect)
+	for _, name := range []string{groupAutoSelect, "DIRECT", "REJECT", "JP Node", "US Node", "HK Node", "SG Node"} {
+		assertContainsProxy(t, main.Proxies, name)
+	}
+	for _, name := range regionGroupNames {
+		assertNotContainsProxy(t, main.Proxies, name)
+	}
+
+	globalAuto := findProxyGroup(t, cfg.ProxyGroups, groupAutoSelect)
+	assertEqualProxies(t, globalAuto.Proxies, []string{"JP Node", "US Node", "HK Node", "SG Node"})
+
+	ai := findProxyGroup(t, cfg.ProxyGroups, "🤖 AI 服务")
+	for _, name := range []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"} {
+		assertContainsProxy(t, ai.Proxies, name)
+	}
+}
+
+func TestRuleGroupsIncludeRealNodesInFullMode(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"ai", "youtube", "netflix"}
+	opts.GroupOptions = model.NormalizeGroupOptions(model.GroupOptions{RuleGroupNodeMode: "full"})
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	for _, groupName := range []string{"🤖 AI 服务", "📹 油管视频", "🎬 奈飞", groupFinal} {
+		group := findProxyGroup(t, cfg.ProxyGroups, groupName)
+		for _, name := range []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT", "JP Node", "US Node"} {
+			assertContainsProxy(t, group.Proxies, name)
+		}
+	}
+}
+
+func TestRuleGroupsStayCompactInCompactMode(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"ai"}
+	opts.GroupOptions = model.NormalizeGroupOptions(model.GroupOptions{RuleGroupNodeMode: "compact"})
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	ai := findProxyGroup(t, cfg.ProxyGroups, "🤖 AI 服务")
+	assertEqualProxies(t, ai.Proxies, []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"})
+	assertNotContainsProxy(t, ai.Proxies, "JP Node")
+	assertNotContainsProxy(t, ai.Proxies, "US Node")
+}
+
+func TestSpecialRuleGroupsRemainCompactInFullMode(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"adblock", "private", "domestic"}
+	opts.GroupOptions = model.NormalizeGroupOptions(model.GroupOptions{RuleGroupNodeMode: "full"})
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	for _, groupName := range []string{"🛑 广告拦截", "🏠 私有网络", "🔒 国内服务"} {
+		group := findProxyGroup(t, cfg.ProxyGroups, groupName)
+		assertNotContainsProxy(t, group.Proxies, "JP Node")
+		assertNotContainsProxy(t, group.Proxies, "US Node")
+	}
+	assertEqualProxies(t, findProxyGroup(t, cfg.ProxyGroups, "🛑 广告拦截").Proxies, []string{"REJECT", "DIRECT", groupNodeSelect})
+	assertEqualProxies(t, findProxyGroup(t, cfg.ProxyGroups, "🏠 私有网络").Proxies, []string{"DIRECT", "REJECT", groupNodeSelect, groupAutoSelect})
+	assertEqualProxies(t, findProxyGroup(t, cfg.ProxyGroups, "🔒 国内服务").Proxies, []string{"DIRECT", "REJECT", groupNodeSelect, groupAutoSelect})
+}
+
+func TestFinalYAMLSerializationSanitizesRegionGroups(t *testing.T) {
+	cfg := mihomoConfig{
+		Proxies: []mihomoProxy{
+			{Name: "HK Node", Type: "ss", Server: "hk.example.com", Port: 443},
+			{Name: "JP Node", Type: "ss", Server: "jp.example.com", Port: 443},
+		},
+		ProxyGroups: []mihomoProxyGroup{
+			{Name: groupNodeSelect, Type: "select", Proxies: []string{groupAutoSelect, "DIRECT", "🇭🇰 香港", "🇯🇵 日本"}},
+			{Name: groupAutoSelect, Type: "url-test", Proxies: []string{"HK Node", "🇭🇰 香港", "DIRECT"}},
+			{Name: "⚡ 香港自动", Type: "url-test", Proxies: []string{"HK Node", groupAutoSelect}},
+			{Name: "🇭🇰 香港", Type: "select", Proxies: []string{groupAutoSelect, groupNodeSelect, "🇯🇵 日本", "⚡ 日本自动", "⚡ 香港自动", "DIRECT", "HK Node"}},
+			{Name: "⚡ 日本自动", Type: "url-test", Proxies: []string{"JP Node"}},
+			{Name: "🇯🇵 日本", Type: "select", Proxies: []string{groupAutoSelect, "DIRECT", "JP Node"}},
+			{Name: "🤖 AI 服务", Type: "select", Proxies: []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"}},
+		},
+		Rules: []string{"MATCH," + groupNodeSelect},
+	}
+
+	yamlText := string(renderConfig(cfg))
+	var out struct {
+		ProxyGroups []mihomoProxyGroup `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlText), &out); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v\n%s", err, yamlText)
+	}
+
+	assertNoProxyGroup(t, out.ProxyGroups, "🇭🇰 香港")
+	assertNoProxyGroup(t, out.ProxyGroups, "🇯🇵 日本")
+	assertNoProxyGroup(t, out.ProxyGroups, "⚡ 香港自动")
+	assertNoProxyGroup(t, out.ProxyGroups, "⚡ 日本自动")
+
+	globalAuto := findProxyGroup(t, out.ProxyGroups, groupAutoSelect)
+	assertEqualProxies(t, globalAuto.Proxies, []string{"HK Node"})
+
+	main := findProxyGroup(t, out.ProxyGroups, groupNodeSelect)
+	for _, forbidden := range []string{"🇭🇰 香港", "🇯🇵 日本", "⚡ 香港自动", "⚡ 日本自动"} {
+		assertNotContainsProxy(t, main.Proxies, forbidden)
+	}
+
+	ai := findProxyGroup(t, out.ProxyGroups, "🤖 AI 服务")
+	assertContainsProxy(t, ai.Proxies, groupNodeSelect)
+	assertContainsProxy(t, ai.Proxies, groupAutoSelect)
+}
+
 func TestRenderRulesModeIgnoresTemplatePreset(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()
@@ -394,7 +529,7 @@ func mustRenderConfig(t *testing.T, nodes []model.NodeIR, opts model.RenderOptio
 		t.Fatalf("buildProxies() error = %v", err)
 	}
 	enabled := resolveEnabledRules(opts.RuleMode, opts.EnabledRules)
-	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, enabled, opts.CustomRules, opts.GroupProxyMode)
+	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, enabled, opts.CustomRules, opts.GroupProxyMode, opts.GroupOptions)
 	if err != nil {
 		t.Fatalf("buildProxyGroups() error = %v", err)
 	}
@@ -441,4 +576,65 @@ func standardRenderOptions() model.RenderOptions {
 	opts.RuleMode = "balanced"
 	opts.GroupProxyMode = "compact"
 	return opts
+}
+
+func testSSNode(name, server string) model.NodeIR {
+	return model.NodeIR{
+		Name:   name,
+		Type:   model.ProtocolSS,
+		Server: server,
+		Port:   443,
+		Auth: model.Auth{
+			Password: "password",
+		},
+		Raw: map[string]interface{}{
+			"method": "aes-256-gcm",
+		},
+	}
+}
+
+func findProxyGroup(t *testing.T, groups []mihomoProxyGroup, name string) mihomoProxyGroup {
+	t.Helper()
+	for _, group := range groups {
+		if group.Name == name {
+			return group
+		}
+	}
+	t.Fatalf("missing proxy-group %q in %#v", name, groups)
+	return mihomoProxyGroup{}
+}
+
+func assertNoProxyGroup(t *testing.T, groups []mihomoProxyGroup, name string) {
+	t.Helper()
+	for _, group := range groups {
+		if group.Name == name {
+			t.Fatalf("proxy-groups must not contain %q: %#v", name, groups)
+		}
+	}
+}
+
+func assertContainsProxy(t *testing.T, proxies []string, want string) {
+	t.Helper()
+	if !containsString(proxies, want) {
+		t.Fatalf("proxies %#v missing %q", proxies, want)
+	}
+}
+
+func assertNotContainsProxy(t *testing.T, proxies []string, forbidden string) {
+	t.Helper()
+	if containsString(proxies, forbidden) {
+		t.Fatalf("proxies %#v must not contain %q", proxies, forbidden)
+	}
+}
+
+func assertEqualProxies(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("proxies = %#v, want %#v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("proxies = %#v, want %#v", got, want)
+		}
+	}
 }

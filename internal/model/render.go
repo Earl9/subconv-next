@@ -20,6 +20,7 @@ type RenderOptions struct {
 	FilterIllegal           bool                     `json:"filter_illegal"`
 	InsertURL               bool                     `json:"insert_url"`
 	GroupProxyMode          string                   `json:"group_proxy_mode,omitempty"`
+	GroupOptions            GroupOptions             `json:"group_options,omitempty"`
 	SourcePrefix            bool                     `json:"source_prefix"`
 	SourcePrefixFormat      string                   `json:"source_prefix_format,omitempty"`
 	SourcePrefixSeparator   string                   `json:"source_prefix_separator,omitempty"`
@@ -69,6 +70,7 @@ func DefaultRenderOptions() RenderOptions {
 		UDP:                     true,
 		FilterIllegal:           true,
 		GroupProxyMode:          "compact",
+		GroupOptions:            DefaultGroupOptions(),
 		SourcePrefix:            true,
 		SourcePrefixFormat:      "{emoji} {name}",
 		SourcePrefixSeparator:   "｜",

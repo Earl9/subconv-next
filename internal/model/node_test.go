@@ -96,3 +96,29 @@ func TestStableNodeIDIgnoresDisplayNameButTracksSecretDigest(t *testing.T) {
 		t.Fatalf("StableNodeID leaked secret content: %q", StableNodeID(base))
 	}
 }
+
+func TestNormalizeGroupOptionsDisablesRegionGroupsForV1(t *testing.T) {
+	got := NormalizeGroupOptions(GroupOptions{EnableRegionGroups: true})
+	if got.EnableRegionGroups {
+		t.Fatalf("EnableRegionGroups = true, want false for V1")
+	}
+	if got.RuleGroupNodeMode != "full" {
+		t.Fatalf("RuleGroupNodeMode = %q, want full", got.RuleGroupNodeMode)
+	}
+	if !got.IncludeRealNodesInRuleGroups {
+		t.Fatalf("IncludeRealNodesInRuleGroups = false, want true")
+	}
+	if !got.SpecialGroupsUseCompact {
+		t.Fatalf("SpecialGroupsUseCompact = false, want true")
+	}
+}
+
+func TestNormalizeGroupOptionsCompactRuleGroups(t *testing.T) {
+	got := NormalizeGroupOptions(GroupOptions{RuleGroupNodeMode: "compact"})
+	if got.RuleGroupNodeMode != "compact" {
+		t.Fatalf("RuleGroupNodeMode = %q, want compact", got.RuleGroupNodeMode)
+	}
+	if got.IncludeRealNodesInRuleGroups {
+		t.Fatalf("IncludeRealNodesInRuleGroups = true, want false")
+	}
+}

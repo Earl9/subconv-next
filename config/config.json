@@ -36,6 +36,12 @@
     "filter_illegal": true,
     "insert_url": false,
     "group_proxy_mode": "compact",
+    "group_options": {
+      "enable_region_groups": false,
+      "rule_group_node_mode": "full",
+      "include_real_nodes_in_rule_groups": true,
+      "special_groups_use_compact": true
+    },
     "source_prefix": true,
     "source_prefix_format": "{emoji} {name}",
     "source_prefix_separator": "｜",

@@ -47,3 +47,37 @@ func TestFailOnCriticalWarnings(t *testing.T) {
 		t.Fatalf("failOnCriticalWarnings() error = nil, want non-nil")
 	}
 }
+
+func TestValidateMihomoConfigRegionGroupRoleWarnings(t *testing.T) {
+	cfg := mihomoConfig{
+		Proxies: []mihomoProxy{
+			{Name: "HK Node", Type: "ss"},
+			{Name: "JP Node", Type: "ss"},
+		},
+		ProxyGroups: []mihomoProxyGroup{
+			{Name: groupNodeSelect, Type: "select", Proxies: []string{groupAutoSelect, "🇭🇰 香港"}},
+			{Name: groupAutoSelect, Type: "url-test", Proxies: []string{"HK Node", "🇭🇰 香港"}},
+			{Name: "⚡ 香港自动", Type: "url-test", Proxies: []string{"HK Node", groupAutoSelect}},
+			{Name: "🇭🇰 香港", Type: "select", Proxies: []string{groupAutoSelect, groupNodeSelect, "⚡ 日本自动", "HK Node"}},
+			{Name: "⚡ 日本自动", Type: "url-test", Proxies: []string{"JP Node"}},
+			{Name: "🇯🇵 日本", Type: "select", Proxies: []string{"DIRECT", "JP Node"}},
+		},
+		Rules: []string{"MATCH," + groupNodeSelect},
+	}
+
+	warnings := ValidateMihomoConfig(cfg)
+	got := map[string]bool{}
+	for _, warning := range warnings {
+		got[warning.Code] = true
+	}
+
+	for _, code := range []string{
+		"invalid_global_auto_reference",
+		"invalid_region_auto_reference",
+		"invalid_region_group_reference",
+	} {
+		if !got[code] {
+			t.Fatalf("missing warning code %q in %#v", code, warnings)
+		}
+	}
+}

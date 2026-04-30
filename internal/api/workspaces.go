@@ -150,6 +150,7 @@ func (s *Server) workspaceBaseConfig() model.Config {
 	cfg.Service.WorkspaceCleanupIntervalSeconds = base.Service.WorkspaceCleanupIntervalSeconds
 	cfg.Service.WorkspaceCleanupInterval = base.Service.WorkspaceCleanupInterval
 	cfg.Service.PublishedDeleteIfNotAccessedDays = base.Service.PublishedDeleteIfNotAccessedDays
+	cfg.Service.PublicBaseURL = base.Service.PublicBaseURL
 	return cfg
 }
 

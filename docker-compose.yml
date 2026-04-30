@@ -4,14 +4,20 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: subconv-next
+    environment:
+      SUBCONV_HOST: ${SUBCONV_HOST:-0.0.0.0}
+      SUBCONV_PORT: ${SUBCONV_PORT:-9876}
+      SUBCONV_DATA_DIR: ${SUBCONV_DATA_DIR:-/data}
+      SUBCONV_PUBLIC_BASE_URL: ${SUBCONV_PUBLIC_BASE_URL:-}
+      SUBCONV_LOG_LEVEL: ${SUBCONV_LOG_LEVEL:-info}
     restart: unless-stopped
     ports:
-      - "0.0.0.0:9876:9876"
+      - "${SUBCONV_HOST_BIND:-0.0.0.0}:${SUBCONV_PORT:-9876}:${SUBCONV_PORT:-9876}"
     volumes:
       - ./config:/config
       - ./data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9876/healthz"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${SUBCONV_PORT:-9876}/healthz >/dev/null || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3

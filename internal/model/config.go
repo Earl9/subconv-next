@@ -43,6 +43,7 @@ type ServiceConfig struct {
 	PublishedDeleteIfNotAccessedDays int    `json:"published_delete_if_not_accessed_days,omitempty"`
 	WorkspaceCleanupInterval         int    `json:"workspace_cleanup_interval,omitempty"`
 	PublishedSubscriptionTTLSeconds  int    `json:"published_subscription_ttl_seconds,omitempty"`
+	PublicBaseURL                    string `json:"public_base_url,omitempty"`
 	AccessToken                      string `json:"access_token,omitempty"`
 	SubscriptionToken                string `json:"subscription_token,omitempty"`
 	MaxSubscriptionBytes             int    `json:"max_subscription_bytes"`
@@ -90,6 +91,7 @@ type RenderConfig struct {
 	FilterIllegal           bool                     `json:"filter_illegal"`
 	InsertURL               bool                     `json:"insert_url"`
 	GroupProxyMode          string                   `json:"group_proxy_mode,omitempty"`
+	GroupOptions            GroupOptions             `json:"group_options,omitempty"`
 	SourcePrefix            bool                     `json:"source_prefix"`
 	SourcePrefixFormat      string                   `json:"source_prefix_format,omitempty"`
 	SourcePrefixSeparator   string                   `json:"source_prefix_separator,omitempty"`
@@ -130,6 +132,34 @@ type NameOptions struct {
 	DedupeSuffixStyle     string `json:"dedupe_suffix_style,omitempty"`
 	ShowSourceEmoji       bool   `json:"show_source_emoji,omitempty"`      // Deprecated: use SourcePrefixMode.
 	SourceEmojiSeparator  string `json:"source_emoji_separator,omitempty"` // Deprecated: emoji-only mode always uses a space.
+}
+
+type GroupOptions struct {
+	EnableRegionGroups           bool   `json:"enable_region_groups"`
+	RuleGroupNodeMode            string `json:"rule_group_node_mode,omitempty"`
+	IncludeRealNodesInRuleGroups bool   `json:"include_real_nodes_in_rule_groups"`
+	SpecialGroupsUseCompact      bool   `json:"special_groups_use_compact"`
+}
+
+func DefaultGroupOptions() GroupOptions {
+	return GroupOptions{
+		EnableRegionGroups:           false,
+		RuleGroupNodeMode:            "full",
+		IncludeRealNodesInRuleGroups: true,
+		SpecialGroupsUseCompact:      true,
+	}
+}
+
+func NormalizeGroupOptions(opt GroupOptions) GroupOptions {
+	opt.EnableRegionGroups = false
+	switch opt.RuleGroupNodeMode {
+	case "compact", "full":
+	default:
+		opt.RuleGroupNodeMode = "full"
+	}
+	opt.IncludeRealNodesInRuleGroups = opt.RuleGroupNodeMode == "full"
+	opt.SpecialGroupsUseCompact = true
+	return opt
 }
 
 type DNSConfig struct {
@@ -291,6 +321,7 @@ func DefaultRenderConfig() RenderConfig {
 		UDP:                   true,
 		FilterIllegal:         true,
 		GroupProxyMode:        "compact",
+		GroupOptions:          DefaultGroupOptions(),
 		SourcePrefix:          true,
 		SourcePrefixFormat:    "{emoji} {name}",
 		SourcePrefixSeparator: "｜",

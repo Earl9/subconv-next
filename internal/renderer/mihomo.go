@@ -247,6 +247,7 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.FilterIllegal = cfg.Render.FilterIllegal
 	opts.InsertURL = cfg.Render.InsertURL
 	opts.GroupProxyMode = cfg.Render.GroupProxyMode
+	opts.GroupOptions = cfg.Render.GroupOptions
 	opts.SourcePrefix = cfg.Render.SourcePrefix
 	opts.SourcePrefixFormat = cfg.Render.SourcePrefixFormat
 	opts.SourcePrefixSeparator = cfg.Render.SourcePrefixSeparator
@@ -302,6 +303,7 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	if strings.TrimSpace(opts.GroupProxyMode) == "" {
 		opts.GroupProxyMode = defaults.GroupProxyMode
 	}
+	opts.GroupOptions = model.NormalizeGroupOptions(opts.GroupOptions)
 	if strings.TrimSpace(opts.TemplateRuleMode) == "" {
 		opts.TemplateRuleMode = defaults.TemplateRuleMode
 	}
@@ -378,7 +380,7 @@ func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error
 		RuleProviderOrder:       orderedProviderNames(resolvedEnabledRules),
 		Rules:                   buildRules(opts.Template, opts.FinalPolicy, resolvedEnabledRules, opts.AdditionalRules, opts.RuleProviders, opts.CustomRules, opts.CustomProxyGroups),
 	}
-	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, resolvedEnabledRules, opts.CustomRules, opts.GroupProxyMode)
+	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, resolvedEnabledRules, opts.CustomRules, opts.GroupProxyMode, opts.GroupOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -674,13 +676,15 @@ func buildWGPeers(peers []model.WGPeer) []mihomoWGPeer {
 	return out
 }
 
-func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []model.CustomProxyGroupConfig, enabledRules []string, customRules []model.CustomRule, groupProxyMode string) ([]mihomoProxyGroup, error) {
+func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []model.CustomProxyGroupConfig, enabledRules []string, customRules []model.CustomRule, groupProxyMode string, groupOpt model.GroupOptions) ([]mihomoProxyGroup, error) {
 	groupProxyMode = strings.ToLower(strings.TrimSpace(groupProxyMode))
 	if groupProxyMode == "" {
 		groupProxyMode = "compact"
 	}
+	groupOpt = model.NormalizeGroupOptions(groupOpt)
 	allNames := nodeNames(nodes)
-	regularNames := nodeNames(filterOutInfoNodes(nodes))
+	regularNodes := filterOutInfoNodes(nodes)
+	regularNames := nodeNames(regularNodes)
 	if len(allNames) == 0 {
 		return []mihomoProxyGroup{
 			{
@@ -707,20 +711,15 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 		return nil
 	}
 
-	regionNameOrder := regionProxyNames(nodes)
-	var regionGroupNames []string
-	for _, region := range regionGroups {
-		names := regionNameOrder[region.Tag]
-		if len(names) == 0 {
-			continue
-		}
-		regionGroupNames = append(regionGroupNames, region.Name)
+	mainSelectProxies := []string{"DIRECT", "REJECT"}
+	if len(regularNames) > 0 {
+		mainSelectProxies = append([]string{groupAutoSelect}, mainSelectProxies...)
+		mainSelectProxies = append(mainSelectProxies, regularNames...)
 	}
-
 	if err := addGroup(mihomoProxyGroup{
 		Name:    groupNodeSelect,
 		Type:    "select",
-		Proxies: append([]string{groupAutoSelect, "DIRECT", "REJECT"}, append(append([]string{}, regionGroupNames...), allNames...)...),
+		Proxies: mainSelectProxies,
 	}); err != nil {
 		return nil, err
 	}
@@ -735,33 +734,19 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 		return nil, err
 	}
 
-	for _, region := range regionGroups {
-		names := regionNameOrder[region.Tag]
-		if len(names) == 0 {
-			continue
-		}
-		if err := addGroup(mihomoProxyGroup{
-			Name:    region.Name,
-			Type:    "select",
-			Proxies: append([]string{groupAutoSelect, "DIRECT"}, names...),
-		}); err != nil {
-			return nil, err
-		}
-	}
-
-	resolvedCustomRules := resolveCustomRules(customRules, enabledRules, regionGroupNames, customGroups)
+	resolvedCustomRules := resolveCustomRules(customRules, enabledRules, nil, customGroups)
 	if len(enabledRules) > 0 || len(resolvedCustomRules) > 0 {
 		for _, category := range orderedRuleCategories(enabledRules) {
 			if err := addGroup(mihomoProxyGroup{
 				Name:    category.GroupName,
 				Type:    "select",
-				Proxies: serviceGroupProxiesForCategory(category.Key, groupProxyMode, regionGroupNames, allNames),
+				Proxies: serviceGroupProxiesForCategory(category.Key, groupOpt, regularNames),
 			}); err != nil {
 				return nil, err
 			}
 		}
 
-		customGroupProxies := serviceGroupProxiesForCategory("", groupProxyMode, regionGroupNames, allNames)
+		customGroupProxies := serviceGroupProxiesForCategory("", groupOpt, regularNames)
 		for _, rule := range resolvedCustomRules {
 			if !rule.CreateGroup {
 				continue
@@ -775,7 +760,7 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	if err := addGroup(mihomoProxyGroup{
 		Name:    groupFinal,
 		Type:    "select",
-		Proxies: serviceGroupProxiesForCategory("", groupProxyMode, regionGroupNames, allNames),
+		Proxies: serviceGroupProxiesForCategory("", groupOpt, regularNames),
 	}); err != nil {
 		return nil, err
 	}
@@ -795,7 +780,7 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 		}
 	}
 
-	return groups, nil
+	return sanitizeGeneratedProxyGroups(groups, regularNames), nil
 }
 
 func filterOutInfoNodes(nodes []model.NodeIR) []model.NodeIR {
@@ -848,35 +833,78 @@ func rendererAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
 }
 
-func regionProxyNames(nodes []model.NodeIR) map[string][]string {
-	regionNames := make(map[string][]string)
-	for _, node := range nodes {
-		for _, tag := range node.Tags {
-			regionNames[tag] = append(regionNames[tag], node.Name)
-		}
+func regionAutoGroupName(regionName string) string {
+	label := strings.TrimSpace(regionName)
+	fields := strings.Fields(label)
+	if len(fields) > 1 {
+		label = strings.Join(fields[1:], "")
 	}
-
-	for key, names := range regionNames {
-		regionNames[key] = uniqueOrdered(names)
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "地区"
 	}
-	return regionNames
+	return "⚡ " + label + "自动"
 }
 
-func serviceGroupProxiesForCategory(categoryKey, groupProxyMode string, regionGroupNames, allNames []string) []string {
+func sanitizeGeneratedProxyGroups(groups []mihomoProxyGroup, regularNames []string) []mihomoProxyGroup {
+	realNameSet := stringSet(regularNames)
+
+	out := make([]mihomoProxyGroup, 0, len(groups))
+	for _, group := range groups {
+		if group.Name == groupAutoSelect {
+			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
+				_, ok := realNameSet[ref]
+				return ok
+			})
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+func filterProxyRefs(proxies []string, allow func(string) bool) []string {
+	out := make([]string, 0, len(proxies))
+	for _, proxy := range proxies {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" || !allow(proxy) {
+			continue
+		}
+		out = append(out, proxy)
+	}
+	return uniqueOrdered(out)
+}
+
+func stringSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func serviceGroupProxiesForCategory(categoryKey string, groupOpt model.GroupOptions, realNames []string) []string {
 	switch categoryKey {
 	case "adblock":
 		return []string{"REJECT", "DIRECT", groupNodeSelect}
 	case "private", "domestic":
-		return []string{"DIRECT", "REJECT", groupNodeSelect, groupAutoSelect}
-	default:
-		proxies := []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"}
-		if groupProxyMode == "regional" || groupProxyMode == "full" {
-			proxies = append(proxies, regionGroupNames...)
-		}
-		if groupProxyMode == "full" {
-			proxies = append(proxies, allNames...)
+		proxies := []string{"DIRECT", "REJECT", groupNodeSelect}
+		if len(realNames) > 0 {
+			proxies = append(proxies, groupAutoSelect)
 		}
 		return proxies
+	default:
+		proxies := []string{groupNodeSelect}
+		if len(realNames) > 0 {
+			proxies = append(proxies, groupAutoSelect)
+		}
+		proxies = append(proxies, "DIRECT", "REJECT")
+		if model.NormalizeGroupOptions(groupOpt).RuleGroupNodeMode == "full" {
+			proxies = append(proxies, realNames...)
+		}
+		return uniqueOrdered(proxies)
 	}
 }
 
@@ -1465,6 +1493,7 @@ func cloneStringMap(values map[string]interface{}) map[string]interface{} {
 }
 
 func renderConfig(cfg mihomoConfig) []byte {
+	cfg = sanitizeConfigBeforeSerialize(cfg)
 	sections := make([]struct {
 		key   string
 		value *yaml.Node
@@ -1546,6 +1575,75 @@ func renderConfig(cfg mihomoConfig) []byte {
 		out.Write(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	}
 	return []byte(unescapeYAMLUnicodeEscapes(out.String()))
+}
+
+func sanitizeConfigBeforeSerialize(cfg mihomoConfig) mihomoConfig {
+	realProxyNames := make(map[string]struct{}, len(cfg.Proxies))
+	for _, proxy := range cfg.Proxies {
+		name := strings.TrimSpace(proxy.Name)
+		if name != "" {
+			realProxyNames[name] = struct{}{}
+		}
+	}
+	cfg.ProxyGroups = sanitizeProxyGroupsBeforeSerialize(cfg.ProxyGroups, realProxyNames)
+	return cfg
+}
+
+func sanitizeProxyGroupsBeforeSerialize(groups []mihomoProxyGroup, realProxyNames map[string]struct{}) []mihomoProxyGroup {
+	regionAutoNames := make(map[string]struct{}, len(regionGroups))
+	for _, region := range regionGroups {
+		regionAutoNames[regionAutoGroupName(region.Name)] = struct{}{}
+	}
+
+	out := make([]mihomoProxyGroup, 0, len(groups))
+	for _, group := range groups {
+		switch {
+		case isRegionLikeGroupName(group.Name):
+			continue
+		case isKnownRegionAutoName(group.Name, regionAutoNames):
+			continue
+		case group.Name == groupAutoSelect:
+			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
+				_, ok := realProxyNames[ref]
+				return ok
+			})
+		default:
+			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
+				if isRegionLikeGroupName(ref) {
+					return false
+				}
+				if _, ok := regionAutoNames[ref]; ok {
+					return false
+				}
+				return true
+			})
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+func isKnownRegionAutoName(name string, regionAutoNames map[string]struct{}) bool {
+	_, ok := regionAutoNames[strings.TrimSpace(name)]
+	return ok
+}
+
+func isRegionLikeGroupName(name string) bool {
+	name = strings.TrimSpace(name)
+	for _, region := range regionGroups {
+		parts := strings.Fields(region.Name)
+		if len(parts) < 2 {
+			if name == region.Name {
+				return true
+			}
+			continue
+		}
+		flag, label := parts[0], strings.Join(parts[1:], "")
+		if strings.HasPrefix(name, flag) && strings.Contains(name, label) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildDNSNode(dns mihomoDNS) *yaml.Node {

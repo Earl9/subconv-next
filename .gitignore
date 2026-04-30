@@ -2,3 +2,6 @@ subconv-next
 dist/
 data/
 .tmpinspect/
+!openwrt/
+!openwrt/subconv-next/
+!openwrt/subconv-next/**

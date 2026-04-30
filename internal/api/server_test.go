@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,9 @@ func TestHandleHealthz(t *testing.T) {
 	}
 	if body.Version != "0.1.0-test" {
 		t.Fatalf("body.Version = %q, want %q", body.Version, "0.1.0-test")
+	}
+	if body.DataDir != "/data" {
+		t.Fatalf("body.DataDir = %q, want /data", body.DataDir)
 	}
 	if body.UptimeSeconds < 0 {
 		t.Fatalf("body.UptimeSeconds = %d, want >= 0", body.UptimeSeconds)
@@ -1142,6 +1146,29 @@ func TestMaskSensitiveTextMasksKeyValueSecrets(t *testing.T) {
 	}
 }
 
+func TestMaskSensitiveTextMasksPublishedURLAndNodeSecrets(t *testing.T) {
+	value := strings.Join([]string{
+		"subscription http://127.0.0.1:9876/s/SDCWuCZAorYdAi-87nrSgNu9oGMqILT2/mihomo.yaml",
+		"upstream https://example.com/sub?password=p1&uuid=00000000-0000-0000-0000-000000000000&private-key=client-key",
+		"node ss://secret@example.com:443#demo",
+	}, " ")
+	masked := maskSensitiveText(value)
+	for _, secret := range []string{
+		"SDCWuCZAorYdAi-87nrSgNu9oGMqILT2",
+		"p1",
+		"00000000-0000-0000-0000-000000000000",
+		"client-key",
+		"secret@example.com",
+	} {
+		if strings.Contains(masked, secret) {
+			t.Fatalf("maskSensitiveText() leaked %q in %q", secret, masked)
+		}
+	}
+	if !strings.Contains(masked, "/s/<redacted>/mihomo.yaml") || !strings.Contains(masked, "ss://***@") {
+		t.Fatalf("maskSensitiveText() = %q, want redacted published URL and node URI", masked)
+	}
+}
+
 func TestHandleConfigGetAndPut(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.AccessToken = "config-token"
@@ -1364,6 +1391,44 @@ func TestSubscriptionTokenCannotAccessConfig(t *testing.T) {
 	}
 }
 
+func TestPublishedURLUsesConfiguredPublicBaseURL(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Service.PublicBaseURL = "https://subconv.example.com/base"
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#public-base-url"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshReq.Host = "internal.local:9876"
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+	if !strings.HasPrefix(refreshBody.SubscriptionURL, "https://subconv.example.com/base/s/") {
+		t.Fatalf("SubscriptionURL = %q, want configured public base URL", refreshBody.SubscriptionURL)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", workspaceID), nil)
+	statusReq.Host = "internal.local:9876"
+	statusRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("status code = %d; body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody publishedStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatalf("decode published status: %v", err)
+	}
+	if statusBody.SubscriptionURL != refreshBody.SubscriptionURL {
+		t.Fatalf("published status URL = %q, want %q", statusBody.SubscriptionURL, refreshBody.SubscriptionURL)
+	}
+}
+
 func TestPublishedSubscriptionStillWorksAfterWorkspaceDeleted(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Inline = []model.InlineConfig{
@@ -1399,6 +1464,36 @@ func TestPublishedSubscriptionStillWorksAfterWorkspaceDeleted(t *testing.T) {
 	}
 	if !bytes.Contains(subRec.Body.Bytes(), []byte("ss-node")) {
 		t.Fatalf("subscription body = %q, want published yaml", subRec.Body.String())
+	}
+}
+
+func TestPublishedSubscriptionPersistsAfterServerRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(dir, "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#persisted-link"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+
+	restarted := NewServer("0.1.0-test", cfg)
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription after restart status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if !bytes.Contains(subRec.Body.Bytes(), []byte("persisted-link")) {
+		t.Fatalf("subscription body = %q, want persisted published yaml", subRec.Body.String())
 	}
 }
 
@@ -1445,6 +1540,57 @@ func TestRefreshOverwritesCurrentYAMLAndKeepsSameToken(t *testing.T) {
 	}
 	if len(names) != 2 || !containsString(names, "current.yaml") || !containsString(names, "meta.json") {
 		t.Fatalf("published entries = %#v, want only current.yaml and meta.json", names)
+	}
+}
+
+func TestRefreshPostWriteValidationFailureDoesNotPublishCurrentYAML(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Render.SourcePrefix = false
+	cfg.Render.NameOptions.SourcePrefixMode = "none"
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#post-write-invalid"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	server.refreshAfterWrite = func(path string) {
+		_ = os.WriteFile(path, []byte(`
+proxies:
+  - {name: "post-write-invalid", type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: p}
+proxy-groups:
+  - {name: "🚀 节点选择", type: select, proxies: ["⚡ 自动选择", DIRECT, REJECT, "post-write-invalid", "missing-node"]}
+  - {name: "⚡ 自动选择", type: url-test, proxies: ["post-write-invalid"], url: "https://www.gstatic.com/generate_204", interval: 300}
+rules:
+  - MATCH,🚀 节点选择
+`), 0o644)
+		server.refreshAfterWrite = nil
+	}
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusBadRequest {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	if !strings.Contains(refreshRec.Body.String(), "missing-node") {
+		t.Fatalf("refresh body = %s, want validation reason", refreshRec.Body.String())
+	}
+
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	if ref.Meta.PublishID != "" {
+		t.Fatalf("workspace PublishID = %q, want release of failed published ref", ref.Meta.PublishID)
+	}
+	if count := publishedDirCount(t, server); count != 0 {
+		t.Fatalf("published dir count = %d, want 0 after failed publish", count)
+	}
+	if matches, err := filepath.Glob(filepath.Join(server.publishedRootDir(), "*", "*current.yaml*")); err != nil {
+		t.Fatalf("Glob(current.yaml) error = %v", err)
+	} else if len(matches) != 0 {
+		t.Fatalf("published yaml files = %v, want none after failed validation", matches)
 	}
 }
 
@@ -1495,6 +1641,321 @@ func TestRotateTokenInvalidatesOldLink(t *testing.T) {
 	server.Handler().ServeHTTP(newSubRec, newSubReq)
 	if newSubRec.Code != http.StatusOK {
 		t.Fatalf("new subscription status code = %d, want %d; body=%s", newSubRec.Code, http.StatusOK, newSubRec.Body.String())
+	}
+}
+
+func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
+	dir := t.TempDir()
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(dir, "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#userinfo"},
+	}
+	cfg.Render.SubscriptionInfo = &model.SubscriptionInfoConfig{
+		Enabled:        true,
+		ExposeHeader:   false,
+		ShowPerSource:  true,
+		MergeStrategy:  "none",
+		ExpireStrategy: "earliest",
+	}
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
+		{ID: "source-b", Name: "B", Enabled: false, URL: "https://example.net/b"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+	workspaceRef, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	workspaceCfg, err := server.loadWorkspaceConfig(workspaceRef)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	published, err := server.loadPublishedByID(refreshBody.PublishID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	published.Meta.SubscriptionInfo, published.Meta.SourceUserinfo = buildPublishedSubscriptionUserinfo(workspaceCfg, map[string]model.SubscriptionMeta{
+		"source-a": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+			SourceID:   "source-a",
+			SourceName: "A",
+			Upload:     10,
+			Download:   20,
+			Total:      100,
+			Expire:     2000,
+			FromHeader: true,
+		}),
+		"source-b": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+			SourceID:   "source-b",
+			SourceName: "B",
+			Upload:     30,
+			Download:   40,
+			Total:      300,
+			Expire:     1000,
+			FromHeader: true,
+		}),
+	}, time.Now().UTC())
+	if err := server.savePublishedMeta(published); err != nil {
+		t.Fatalf("savePublishedMeta() error = %v", err)
+	}
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if got := subRec.Header().Get("Content-Type"); got != "text/yaml; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/yaml", got)
+	}
+	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
+	}
+	if got := subRec.Header().Get("Profile-Update-Interval"); got != "24" {
+		t.Fatalf("Profile-Update-Interval = %q, want 24", got)
+	}
+	userinfo := subRec.Header().Get("Subscription-Userinfo")
+	if userinfo != "upload=40; download=60; total=400; expire=1000" {
+		t.Fatalf("Subscription-Userinfo = %q, want aggregated bytes", userinfo)
+	}
+	if regexp.MustCompile(`(?i)(gb|mb|kb|tb|年|月|日|-)`).MatchString(userinfo) {
+		t.Fatalf("Subscription-Userinfo = %q, want byte numbers only", userinfo)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", workspaceID), nil)
+	statusRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("published status code = %d; body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody publishedStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatalf("decode published status: %v", err)
+	}
+	if !statusBody.HasSubscriptionUserinfo || statusBody.SubscriptionInfoHeader != userinfo {
+		t.Fatalf("published status = %#v, want subscription userinfo status", statusBody)
+	}
+
+	metaBytes, err := os.ReadFile(filepath.Join(server.publishedRootDir(), refreshBody.PublishID, "meta.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(meta.json) error = %v", err)
+	}
+	if bytes.Contains(metaBytes, []byte("/s/")) {
+		t.Fatalf("published meta leaked full subscription URL: %s", string(metaBytes))
+	}
+	if !bytes.Contains(metaBytes, []byte(`"subscription_userinfo"`)) || !bytes.Contains(metaBytes, []byte(`"source_userinfo"`)) {
+		t.Fatalf("published meta = %s, want subscription info persisted", string(metaBytes))
+	}
+
+	restarted := NewServer("0.1.0-test", cfg)
+	headReq := httptest.NewRequest(http.MethodHead, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	headRec := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(headRec, headReq)
+	if headRec.Code != http.StatusOK {
+		t.Fatalf("HEAD subscription status code = %d; body=%s", headRec.Code, headRec.Body.String())
+	}
+	if got := headRec.Header().Get("Subscription-Userinfo"); got != userinfo {
+		t.Fatalf("HEAD Subscription-Userinfo = %q, want %q after restart", got, userinfo)
+	}
+	if got := headRec.Header().Get("Profile-Update-Interval"); got != "24" {
+		t.Fatalf("HEAD Profile-Update-Interval = %q, want 24", got)
+	}
+	if got := headRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+		t.Fatalf("HEAD Content-Disposition = %q, want attachment filename", got)
+	}
+	if headRec.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", headRec.Body.Len())
+	}
+
+	logs := restarted.snapshotLogs(20)
+	logText := strings.Join(logs, "\n")
+	if !strings.Contains(logText, "serve subscription publish="+refreshBody.PublishID) ||
+		!strings.Contains(logText, "userinfo=present") ||
+		!strings.Contains(logText, `header="upload=40; download=60; total=400; expire=1000"`) {
+		t.Fatalf("logs = %q, want published serve userinfo log", logText)
+	}
+	if strings.Contains(logText, publishedTokenFromURL(t, refreshBody.SubscriptionURL)) {
+		t.Fatalf("logs leaked full token: %q", logText)
+	}
+}
+
+func TestPublishedSubscriptionOmitsUserinfoHeaderWhenUnavailable(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#no-info"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if got := subRec.Header().Get("Subscription-Userinfo"); got != "" {
+		t.Fatalf("Subscription-Userinfo = %q, want empty without upstream info", got)
+	}
+	if got := subRec.Header().Get("Profile-Update-Interval"); got != "24" {
+		t.Fatalf("Profile-Update-Interval = %q, want 24", got)
+	}
+	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
+	}
+}
+
+func TestPublishedSubscriptionRestoresMissingUserinfoFromWorkspaceState(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#restore-userinfo"},
+	}
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
+		{ID: "source-b", Name: "B", Enabled: false, URL: "https://example.net/b"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	workspaceCfg, err := server.loadWorkspaceConfig(ref)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	if err := pipeline.SaveNodeState(workspaceCfg, model.NodeState{
+		SubscriptionMeta: map[string]model.SubscriptionMeta{
+			"source-a": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-a",
+				SourceName: "A",
+				Upload:     11,
+				Download:   22,
+				Total:      111,
+				Expire:     4000,
+				FromHeader: true,
+			}),
+			"source-b": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+				SourceID:   "source-b",
+				SourceName: "B",
+				Upload:     33,
+				Download:   44,
+				Total:      333,
+				Expire:     3000,
+				FromHeader: true,
+			}),
+		},
+	}); err != nil {
+		t.Fatalf("SaveNodeState() error = %v", err)
+	}
+	published, err := server.loadPublishedByID(refreshBody.PublishID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	published.Meta.SubscriptionInfo = nil
+	published.Meta.SourceUserinfo = nil
+	if err := server.savePublishedMeta(published); err != nil {
+		t.Fatalf("savePublishedMeta() error = %v", err)
+	}
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if got := subRec.Header().Get("Subscription-Userinfo"); got != "upload=44; download=66; total=444; expire=3000" {
+		t.Fatalf("Subscription-Userinfo = %q, want restored aggregate", got)
+	}
+
+	metaBytes, err := os.ReadFile(filepath.Join(server.publishedRootDir(), refreshBody.PublishID, "meta.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(meta.json) error = %v", err)
+	}
+	if !bytes.Contains(metaBytes, []byte(`"subscription_userinfo"`)) || !bytes.Contains(metaBytes, []byte(`"total": 444`)) {
+		t.Fatalf("published meta = %s, want restored subscription_userinfo persisted", string(metaBytes))
+	}
+}
+
+func TestPublishedSubscriptionDoesNotSynthesizeUserinfoFromInfoNode(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#info-node"},
+	}
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
+	}
+	server := NewServer("0.1.0-test", cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+	workspaceRef, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	workspaceCfg, err := server.loadWorkspaceConfig(workspaceRef)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	published, err := server.loadPublishedByID(refreshBody.PublishID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	published.Meta.SubscriptionInfo, published.Meta.SourceUserinfo = buildPublishedSubscriptionUserinfo(workspaceCfg, map[string]model.SubscriptionMeta{
+		"source-a": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+			SourceID:     "source-a",
+			SourceName:   "A",
+			Download:     20,
+			Total:        100,
+			Expire:       2000,
+			FromInfoNode: true,
+		}),
+	}, time.Now().UTC())
+	if err := server.savePublishedMeta(published); err != nil {
+		t.Fatalf("savePublishedMeta() error = %v", err)
+	}
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if got := subRec.Header().Get("Subscription-Userinfo"); got != "" {
+		t.Fatalf("Subscription-Userinfo = %q, want empty without upstream header", got)
 	}
 }
 
@@ -1804,6 +2265,27 @@ func TestDeletePublishedInvalidatesLink(t *testing.T) {
 	server.Handler().ServeHTTP(subRec, subReq)
 	if subRec.Code != http.StatusNotFound {
 		t.Fatalf("subscription status after delete = %d, want %d; body=%s", subRec.Code, http.StatusNotFound, subRec.Body.String())
+	}
+
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	if ref.Meta.PublishID != "" {
+		t.Fatalf("workspace PublishID = %q, want cleared after publish delete", ref.Meta.PublishID)
+	}
+	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", workspaceID), nil)
+	statusRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("published status code = %d; body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody publishedStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatalf("decode published status: %v", err)
+	}
+	if statusBody.PublishID != "" || statusBody.SubscriptionURL != "" {
+		t.Fatalf("published status after delete = %#v, want empty", statusBody)
 	}
 }
 

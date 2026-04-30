@@ -37,6 +37,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 	if cfg.Service.WorkspaceCleanupInterval == 0 && cfg.Service.WorkspaceCleanupIntervalSeconds > 0 {
 		cfg.Service.WorkspaceCleanupInterval = cfg.Service.WorkspaceCleanupIntervalSeconds
 	}
+	cfg.Service.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.Service.PublicBaseURL), "/")
 	if cfg.Subscriptions == nil {
 		cfg.Subscriptions = []model.SubscriptionConfig{}
 	}
@@ -85,6 +86,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 	if cfg.Render.CustomProxyGroups == nil {
 		cfg.Render.CustomProxyGroups = []model.CustomProxyGroupConfig{}
 	}
+	cfg.Render.GroupOptions = model.NormalizeGroupOptions(cfg.Render.GroupOptions)
 	cfg.Render.SubscriptionInfo = model.NormalizeSubscriptionInfoConfig(cfg.Render.SubscriptionInfo)
 	cfg.Render.ShowInfoNodes = cfg.Render.ShowInfoNodes && cfg.Render.IncludeInfoNode
 	if !cfg.Render.SourcePrefix {

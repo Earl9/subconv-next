@@ -37,8 +37,9 @@ type Server struct {
 	siteLogoMu    sync.RWMutex
 	siteLogoCache map[string]siteLogoCacheEntry
 
-	refreshBeforeRun func()
-	refreshAfterRun  func()
+	refreshBeforeRun  func()
+	refreshAfterRun   func()
+	refreshAfterWrite func(path string)
 }
 
 func NewServer(version string, cfg model.Config) *Server {

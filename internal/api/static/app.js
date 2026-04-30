@@ -489,6 +489,12 @@ const DEFAULT_RENDER = {
   sort_nodes: false,
   filter_illegal: true,
   insert_url: false,
+  group_options: {
+    enable_region_groups: false,
+    rule_group_node_mode: "full",
+    include_real_nodes_in_rule_groups: true,
+    special_groups_use_compact: true,
+  },
   source_prefix: true,
   name_options: {
     keep_raw_name: true,
@@ -1048,6 +1054,7 @@ function applyDefaultState() {
     "source-prefix-mode",
     DEFAULT_RENDER.name_options.source_prefix_mode,
   );
+  setValue("rule-group-node-mode", DEFAULT_RENDER.group_options.rule_group_node_mode);
   syncSourcePrefixModeControl();
   setValue("template-select", DEFAULT_RENDER.external_config.template_key);
   setValue("custom-template-url", "");
@@ -1758,6 +1765,10 @@ function fillFormFromConfig(config) {
     "opt-source-prefix",
     prefixMode !== "none" && render.source_prefix !== false,
   );
+  setValue(
+    "rule-group-node-mode",
+    normalizeRuleGroupNodeMode(render.group_options?.rule_group_node_mode),
+  );
   syncSourcePrefixModeControl();
 
   state.activeSourceMode =
@@ -1853,6 +1864,7 @@ function renderOutputTiles() {
           .join("")}
       </div>
       ${group.items.includes("source_prefix") ? renderSourcePrefixModeControl() : ""}
+      ${group.items.includes("node_list") ? renderRuleGroupNodeModeControl() : ""}
     `;
     grid.appendChild(card);
   });
@@ -1874,6 +1886,23 @@ function syncSourcePrefixModeControl() {
   const prefixToggle = document.getElementById("opt-source-prefix");
   if (!modeSelect || !prefixToggle) return;
   modeSelect.disabled = !prefixToggle.checked;
+}
+
+function renderRuleGroupNodeModeControl() {
+  return `
+    <div class="source-prefix-mode-control">
+      <label for="rule-group-node-mode">策略组节点列表</label>
+      <select id="rule-group-node-mode">
+        <option value="full">完整：分流组可直接选择具体节点</option>
+        <option value="compact">简洁：仅显示主策略、自动选择、DIRECT、REJECT</option>
+      </select>
+      <div class="option-desc">完整模式会让 AI、YouTube、Netflix 等分流组直接显示所有节点；广告拦截、私有网络、国内服务仍保持紧凑。</div>
+    </div>
+  `;
+}
+
+function normalizeRuleGroupNodeMode(value) {
+  return value === "compact" ? "compact" : "full";
 }
 
 function renderRulePresetControl() {
@@ -3449,6 +3478,10 @@ function buildConfigFromForm(options = {}) {
   const prefixMode = currentSourcePrefixMode();
   const activeMode =
     state.activeSourceMode === "template" ? "template" : "rules";
+  const ruleGroupNodeMode = normalizeRuleGroupNodeMode(
+    getValue("rule-group-node-mode") ||
+      DEFAULT_RENDER.group_options.rule_group_node_mode,
+  );
   const templateExternalConfig =
     !activeOnly || activeMode === "template"
       ? {
@@ -3483,6 +3516,13 @@ function buildConfigFromForm(options = {}) {
     filter_illegal: getChecked("opt-filter-illegal"),
     insert_url: getChecked("opt-insert-url"),
     source_prefix: prefixMode !== "none",
+    group_options: {
+      ...(base.render?.group_options || DEFAULT_RENDER.group_options),
+      enable_region_groups: false,
+      rule_group_node_mode: ruleGroupNodeMode,
+      include_real_nodes_in_rule_groups: ruleGroupNodeMode === "full",
+      special_groups_use_compact: true,
+    },
     name_options: {
       keep_raw_name: true,
       source_prefix_mode: prefixMode,
@@ -3800,6 +3840,11 @@ function renderResult() {
         ? String(Number.parseInt(published.access_count, 10) || 0)
         : "-",
     ],
+    [
+      "已返回订阅信息",
+      published?.has_subscription_userinfo ? "是" : "否",
+    ],
+    ["Header", published?.has_subscription_userinfo ? "subscription-userinfo" : "-"],
     ["刷新状态", hasResult ? refreshStatusText : "-"],
   ];
 

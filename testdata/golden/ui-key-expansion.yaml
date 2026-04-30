@@ -71,20 +71,20 @@ proxies:
 proxy-groups:
   - {name: "🚀 节点选择", type: select, proxies: [⚡ 自动选择, DIRECT, REJECT, ss-node]}
   - {name: ⚡ 自动选择, type: url-test, proxies: [ss-node], url: 'https://www.gstatic.com/generate_204', interval: 300, lazy: false}
-  - {name: "🐦 推特/X", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "📘 Meta 系", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎙️ Discord", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "💬 其他社交", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎬 奈飞", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🏰 迪士尼+", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "📺 欧美流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎌 亚洲流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎮 Steam", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🖥️ PC 游戏", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🎯 主机游戏", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "💳 支付平台", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: ₿ 加密货币, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
-  - {name: "🐟 漏网之鱼", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT]}
+  - {name: "🐦 推特/X", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "📘 Meta 系", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🎙️ Discord", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "💬 其他社交", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🎬 奈飞", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🏰 迪士尼+", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "📺 欧美流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🎌 亚洲流媒体", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🎮 Steam", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🖥️ PC 游戏", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🎯 主机游戏", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "💳 支付平台", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: ₿ 加密货币, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
+  - {name: "🐟 漏网之鱼", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, ss-node]}
 
 rule-providers:
   twitter: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/twitter.mrs', path: ./ruleset/twitter.mrs, interval: 86400, format: mrs}

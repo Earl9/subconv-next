@@ -77,6 +77,24 @@ func TestBuildYamlNodeNameNoProtocolRewrite(t *testing.T) {
 	}
 }
 
+func TestBuildYamlNodeNameDoesNotCleanAnytlsOrAppendProtocolTag(t *testing.T) {
+	rawName := "[anytls]JP Osaka Oracle"
+	got := model.BuildYamlNodeName(rawName, model.SourceInfo{Name: "CokeCloud", Emoji: "🔥"}, model.NameOptions{
+		KeepRawName:           true,
+		SourcePrefixMode:      "emoji_name",
+		SourcePrefixSeparator: "｜",
+	})
+	if got != "🔥 CokeCloud｜[anytls]JP Osaka Oracle" {
+		t.Fatalf("BuildYamlNodeName() = %q", got)
+	}
+	if !strings.Contains(got, rawName) {
+		t.Fatalf("BuildYamlNodeName() = %q, want raw name preserved", got)
+	}
+	if strings.Contains(got, " ANYTLS") || strings.Contains(got, " anytls") {
+		t.Fatalf("BuildYamlNodeName() = %q, must not append protocol short tag", got)
+	}
+}
+
 func TestBuildYamlNodeNamePrefixModes(t *testing.T) {
 	rawName := "[anytls]JP Osaka Oracle"
 	source := model.SourceInfo{Name: "SecOne", Emoji: "⚡"}

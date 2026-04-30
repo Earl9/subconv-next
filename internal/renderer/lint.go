@@ -53,6 +53,7 @@ func ValidateMihomoConfig(cfg mihomoConfig) []ValidationWarning {
 		}
 		groupNames[group.Name] = struct{}{}
 	}
+	warnings = append(warnings, validateProxyGroupRoles(cfg.ProxyGroups, proxyNames)...)
 
 	providerNames := make(map[string]struct{}, len(cfg.RuleProviders))
 	providerPaths := make(map[string]string, len(cfg.RuleProviders))
@@ -164,6 +165,70 @@ func ValidateMihomoConfig(cfg mihomoConfig) []ValidationWarning {
 	}
 
 	return warnings
+}
+
+func validateProxyGroupRoles(groups []mihomoProxyGroup, proxyNames map[string]struct{}) []ValidationWarning {
+	var warnings []ValidationWarning
+	regionSelectNames := make(map[string]struct{}, len(regionGroups))
+	regionAutoNames := make(map[string]string, len(regionGroups))
+	for _, region := range regionGroups {
+		regionSelectNames[region.Name] = struct{}{}
+		regionAutoNames[regionAutoGroupName(region.Name)] = region.Name
+	}
+
+	for _, group := range groups {
+		switch {
+		case group.Name == groupAutoSelect:
+			for _, ref := range group.Proxies {
+				if _, ok := proxyNames[ref]; !ok {
+					warnings = append(warnings, ValidationWarning{
+						Code:    "invalid_global_auto_reference",
+						Message: fmt.Sprintf("global auto group %q must only reference real proxy %q", group.Name, ref),
+					})
+				}
+			}
+		case isRegionAutoGroup(group.Name, regionAutoNames):
+			for _, ref := range group.Proxies {
+				if _, ok := proxyNames[ref]; !ok {
+					warnings = append(warnings, ValidationWarning{
+						Code:    "invalid_region_auto_reference",
+						Message: fmt.Sprintf("region auto group %q must only reference regional proxy %q", group.Name, ref),
+					})
+				}
+			}
+		case isRegionSelectGroup(group.Name, regionSelectNames):
+			ownAuto := regionAutoGroupName(group.Name)
+			for _, ref := range group.Proxies {
+				if isBuiltinProxyReference(ref) || ref == ownAuto {
+					continue
+				}
+				if ref == groupAutoSelect || ref == groupNodeSelect || isRegionSelectGroup(ref, regionSelectNames) || isOtherRegionAuto(ref, ownAuto, regionAutoNames) {
+					warnings = append(warnings, ValidationWarning{
+						Code:    "invalid_region_group_reference",
+						Message: fmt.Sprintf("region group %q must not reference policy group %q", group.Name, ref),
+					})
+				}
+			}
+		}
+	}
+	return warnings
+}
+
+func isRegionSelectGroup(name string, regionSelectNames map[string]struct{}) bool {
+	_, ok := regionSelectNames[name]
+	return ok
+}
+
+func isOtherRegionAuto(name, ownAuto string, regionAutoNames map[string]string) bool {
+	if name == ownAuto {
+		return false
+	}
+	return isRegionAutoGroup(name, regionAutoNames)
+}
+
+func isRegionAutoGroup(name string, regionAutoNames map[string]string) bool {
+	_, ok := regionAutoNames[name]
+	return ok
 }
 
 func failOnCriticalWarnings(warnings []ValidationWarning) error {
