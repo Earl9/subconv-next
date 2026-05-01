@@ -70,7 +70,7 @@ http://127.0.0.1:9876/
 OpenWrt / Kwrt 支持以 all-in-one IPK 提供，当前目标为 `rockchip/armv8` / `aarch64_generic`。
 
 ```sh
-opkg install /tmp/subconv-next_1.0.0-3_aarch64_generic.ipk
+opkg install /tmp/subconv-next_1.0.0-4_aarch64_generic.ipk
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
@@ -95,7 +95,7 @@ curl -fsS http://127.0.0.1:9876/healthz
 - GitHub Releases: <https://github.com/Earl9/subconv-next/releases>
 - `subconv-next-linux-amd64`
 - `subconv-next-linux-arm64`
-- `subconv-next_1.0.0-3_aarch64_generic.ipk`
+- `subconv-next_1.0.0-4_aarch64_generic.ipk`
 - `checksums.txt`
 
 ## 安全说明
