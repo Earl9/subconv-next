@@ -1,6 +1,10 @@
 /subconv-next
 dist/
 data/
+*.ipk
+*.apk
+checksums.txt
+subconv-next-linux-*
 .tmpinspect/
 !openwrt/
 !openwrt/subconv-next/

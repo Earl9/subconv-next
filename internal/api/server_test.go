@@ -18,6 +18,57 @@ import (
 	"subconv-next/internal/pipeline"
 )
 
+func newTestServer(t *testing.T, cfg model.Config) (*Server, model.Config) {
+	t.Helper()
+	cfg = testConfigWithDataDir(t, cfg)
+	return NewServer("0.1.0-test", cfg), cfg
+}
+
+func testConfigWithDataDir(t *testing.T, cfg model.Config) model.Config {
+	t.Helper()
+	cfg = config.Normalize(cfg)
+	dataDir := configuredTestDataDir(cfg)
+	if dataDir == "" {
+		dataDir = t.TempDir()
+	}
+	if shouldUseTestPath(cfg.Service.StatePath, model.DefaultStatePath) {
+		cfg.Service.StatePath = filepath.Join(dataDir, "state.json")
+	}
+	if shouldUseTestPath(cfg.Service.CacheDir, model.DefaultCacheDir) {
+		cfg.Service.CacheDir = filepath.Join(dataDir, "cache")
+	}
+	if shouldUseTestPath(cfg.Service.OutputPath, model.DefaultOutputPath) {
+		cfg.Service.OutputPath = filepath.Join(dataDir, "mihomo.yaml")
+	}
+	return cfg
+}
+
+func configuredTestDataDir(cfg model.Config) string {
+	for _, candidate := range []struct {
+		value        string
+		defaultValue string
+	}{
+		{cfg.Service.StatePath, model.DefaultStatePath},
+		{cfg.Service.OutputPath, model.DefaultOutputPath},
+		{cfg.Service.CacheDir, model.DefaultCacheDir},
+	} {
+		value := strings.TrimSpace(candidate.value)
+		if value == "" || value == candidate.defaultValue || !filepath.IsAbs(value) {
+			continue
+		}
+		if filepath.Base(value) == "cache" {
+			return filepath.Dir(value)
+		}
+		return filepath.Dir(value)
+	}
+	return ""
+}
+
+func shouldUseTestPath(value, defaultValue string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == defaultValue
+}
+
 func createWorkspaceForTest(t *testing.T, server *Server, cfg model.Config) string {
 	t.Helper()
 	ref := createWorkspaceRefForTest(t, server, cfg)
@@ -104,7 +155,7 @@ func publishedDirCount(t *testing.T, server *Server) int {
 
 func TestHandleHealthz(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -126,8 +177,9 @@ func TestHandleHealthz(t *testing.T) {
 	if body.Version != "0.1.0-test" {
 		t.Fatalf("body.Version = %q, want %q", body.Version, "0.1.0-test")
 	}
-	if body.DataDir != "/data" {
-		t.Fatalf("body.DataDir = %q, want /data", body.DataDir)
+	wantDataDir := filepath.Dir(cfg.Service.StatePath)
+	if body.DataDir != wantDataDir {
+		t.Fatalf("body.DataDir = %q, want %q", body.DataDir, wantDataDir)
 	}
 	if body.UptimeSeconds < 0 {
 		t.Fatalf("body.UptimeSeconds = %d, want >= 0", body.UptimeSeconds)
@@ -177,7 +229,7 @@ func TestHandleStatus(t *testing.T) {
 		{Name: "disabled", Enabled: false, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceID := ref.ID
 	req := httptest.NewRequest(http.MethodGet, withWorkspace("/api/status", workspaceID), nil)
@@ -216,7 +268,7 @@ func TestHandleSubscriptionMeta(t *testing.T) {
 		{ID: "source-2", Name: "备用机场", Enabled: true, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceID := ref.ID
 	workspaceCfg, err := server.loadWorkspaceConfig(ref)
@@ -273,7 +325,7 @@ func TestHandleSubscriptionMeta(t *testing.T) {
 
 func TestHandleParse(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	body := bytes.NewBufferString(`{"content":"vless://uuid-1@example.com:443?sni=example.com#demo","content_type":"auto"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/parse", body)
@@ -307,7 +359,7 @@ func TestHandleNodes(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 	req := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes", workspaceID), nil)
 	rec := httptest.NewRecorder()
@@ -346,7 +398,7 @@ func TestNodeOverrideMaskingAndReset(t *testing.T) {
 			Content: "trojan://super-secret@example.com:443?sni=example.com#trojan-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceID := ref.ID
 	listReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes", workspaceID), nil)
@@ -430,7 +482,7 @@ func TestNodeDetailMasksWireGuardPeerSecrets(t *testing.T) {
 			Content: "wireguard://private-key@example.com:51820?public-key=server-key&pre-shared-key=peer-secret&ip=172.16.0.2/32#wg-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	listReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes", workspaceID), nil)
@@ -466,7 +518,7 @@ func TestDisableNodeAndAddCustomNode(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceID := ref.ID
 	listReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes", workspaceID), nil)
@@ -524,7 +576,7 @@ func TestDisableNodeAndAddCustomNode(t *testing.T) {
 
 func TestHandleGenerate(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	body := bytes.NewBufferString(`{
   "template":"lite",
@@ -571,7 +623,7 @@ func TestHandleRefresh(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 	req := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
 	rec := httptest.NewRecorder()
@@ -601,7 +653,7 @@ func TestFixedSubscriptionPathDisabled(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
 	rec := httptest.NewRecorder()
@@ -623,7 +675,7 @@ func TestFixedSubscriptionPathDownloadDisabled(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml?download=1", nil)
 	rec := httptest.NewRecorder()
@@ -649,7 +701,7 @@ func TestFixedSubscriptionPathIgnoresLegacyToken(t *testing.T) {
 			Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#ss-node",
 		},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
 	rec := httptest.NewRecorder()
@@ -680,7 +732,7 @@ func TestHandleAudit(t *testing.T) {
 		t.Fatalf("SaveNodeState() error = %v", err)
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceCfg, err := server.loadWorkspaceConfig(ref)
 	if err != nil {
@@ -749,7 +801,7 @@ func TestFixedSubscriptionPathDoesNotExposeUserinfoHeader(t *testing.T) {
 		t.Fatalf("SaveNodeState() error = %v", err)
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
@@ -796,7 +848,7 @@ func TestFixedSubscriptionPathOmittedWithMergeStrategyNone(t *testing.T) {
 		t.Fatalf("SaveNodeState() error = %v", err)
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
@@ -811,7 +863,7 @@ func TestFixedSubscriptionPathOmittedWithMergeStrategyNone(t *testing.T) {
 
 func TestHandleLogs(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	server.appendLog("first")
 	server.appendLog("second")
 	ref := createWorkspaceRefForTest(t, server, cfg)
@@ -846,7 +898,7 @@ func TestFixedSubscriptionPathDoesNotServeCachedYAML(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczJAZXhhbXBsZS5jb206NDQz#fresh"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	oldYAML := []byte("old: yaml\n")
 	if err := os.WriteFile(cfg.Service.OutputPath, oldYAML, 0o644); err != nil {
@@ -873,7 +925,7 @@ func TestFixedSubscriptionPathDoesNotRefreshExpiredYAML(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczNAZXhhbXBsZS5jb206NDQz#fresh-node"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	if err := os.WriteFile(cfg.Service.OutputPath, []byte("old: yaml\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(output) error = %v", err)
@@ -904,7 +956,7 @@ func TestFixedSubscriptionPathDoesNotServeStaleYAML(t *testing.T) {
 	cfg.Subscriptions = []model.SubscriptionConfig{
 		{ID: "sub-1", Name: "broken", Enabled: true, URL: "https://127.0.0.1/broken", UserAgent: model.DefaultUserAgent},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	oldYAML := []byte("old: stale\n")
 	if err := os.WriteFile(cfg.Service.OutputPath, oldYAML, 0o644); err != nil {
@@ -936,7 +988,7 @@ func TestFixedSubscriptionPathNoStaleAvailable(t *testing.T) {
 	cfg.Subscriptions = []model.SubscriptionConfig{
 		{ID: "sub-1", Name: "broken", Enabled: true, URL: "https://127.0.0.1/broken", UserAgent: model.DefaultUserAgent},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/sub/mihomo.yaml", nil)
 	rec := httptest.NewRecorder()
@@ -988,7 +1040,7 @@ func TestStrictModePreventsWritingBadYAML(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceCfg, err := server.loadWorkspaceConfig(ref)
 	if err != nil {
@@ -1038,7 +1090,7 @@ func TestRefreshLock(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczRAZXhhbXBsZS5jb206NDQz#lock"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	started := make(chan struct{})
@@ -1083,7 +1135,7 @@ func TestOverridesSurviveRefresh(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczVAZXhhbXBsZS5jb206NDQz#original"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 	workspaceID := ref.ID
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1175,7 +1227,7 @@ func TestHandleConfigGetAndPut(t *testing.T) {
 	cfg.Subscriptions = []model.SubscriptionConfig{
 		{ID: "source-1", Name: "secret-source", Enabled: true, URL: "https://example.com/sub?token=abc123&user=bob", UserAgent: model.DefaultUserAgent},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	getReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/config", ref.ID), nil)
@@ -1240,7 +1292,7 @@ func TestHandleConfigGetAndPut(t *testing.T) {
 
 func TestConfigRequiresWorkspace(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	rec := httptest.NewRecorder()
@@ -1253,7 +1305,7 @@ func TestConfigRequiresWorkspace(t *testing.T) {
 
 func TestWorkspaceCreateAndDelete(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces", nil)
 	rec := httptest.NewRecorder()
@@ -1292,7 +1344,7 @@ func TestWorkspaceCreateAndDelete(t *testing.T) {
 
 func TestWorkspaceRandom(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	refA := createWorkspaceRefForTest(t, server, cfg)
 	refB := createWorkspaceRefForTest(t, server, cfg)
 	if refA.ID == refB.ID {
@@ -1305,7 +1357,7 @@ func TestWorkspaceRandom(t *testing.T) {
 
 func TestRootDoesNotLoadPreviousConfig(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -1322,7 +1374,7 @@ func TestRootDoesNotLoadPreviousConfig(t *testing.T) {
 
 func TestWorkspaceIsolation(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	refA := createWorkspaceRefForTest(t, server, cfg)
 	cfgA, err := server.loadWorkspaceConfig(refA)
@@ -1364,7 +1416,7 @@ func TestSubscriptionTokenCannotAccessConfig(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#ss-node"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", ref.ID), nil)
@@ -1398,7 +1450,7 @@ func TestPublishedURLUsesConfiguredPublicBaseURL(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#public-base-url"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1434,7 +1486,7 @@ func TestPublishedSubscriptionStillWorksAfterWorkspaceDeleted(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#ss-node"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", ref.ID), nil)
@@ -1474,7 +1526,7 @@ func TestPublishedSubscriptionPersistsAfterServerRestart(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#persisted-link"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1503,7 +1555,7 @@ func TestRefreshOverwritesCurrentYAMLAndKeepsSameToken(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#stable"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	var first refreshResponse
@@ -1551,7 +1603,7 @@ func TestRefreshPostWriteValidationFailureDoesNotPublishCurrentYAML(t *testing.T
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#post-write-invalid"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	server.refreshAfterWrite = func(path string) {
@@ -1600,7 +1652,7 @@ func TestRotateTokenInvalidatesOldLink(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#rotate"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1662,7 +1714,7 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
 		{ID: "source-b", Name: "B", Enabled: false, URL: "https://example.net/b"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1803,7 +1855,7 @@ func TestPublishedSubscriptionOmitsUserinfoHeaderWhenUnavailable(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#no-info"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1841,7 +1893,7 @@ func TestPublishedSubscriptionRestoresMissingUserinfoFromWorkspaceState(t *testi
 		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
 		{ID: "source-b", Name: "B", Enabled: false, URL: "https://example.net/b"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1921,7 +1973,7 @@ func TestPublishedSubscriptionDoesNotSynthesizeUserinfoFromInfoNode(t *testing.T
 	cfg.Subscriptions = []model.SubscriptionConfig{
 		{ID: "source-a", Name: "A", Enabled: false, URL: "https://example.com/a"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -1974,7 +2026,7 @@ func TestGetPublishedByIDAndBindWorkspace(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#draft-restore"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	originalWorkspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", originalWorkspaceID), nil)
@@ -2057,7 +2109,7 @@ func TestRestoreDraftBindsPublishAndRefreshKeepsSameLink(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#restore-draft"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceA := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceA), nil)
@@ -2137,7 +2189,7 @@ func TestRestoreDraftMissingPublishClearsBinding(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#missing-restore"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceA := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceA), nil)
@@ -2195,7 +2247,7 @@ func TestRestoreDraftMissingPublishClearsBinding(t *testing.T) {
 func TestGetPublishedByIDNotFound(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/published/p_missing", nil)
 	rec := httptest.NewRecorder()
@@ -2214,7 +2266,7 @@ func TestWorkspaceCleanupRemovesWorkspaceButKeepsPublished(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#cleanup"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", ref.ID), nil)
@@ -2254,7 +2306,7 @@ func TestDeletePublishedInvalidatesLink(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#delete-published"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -2304,7 +2356,7 @@ func TestPublishedAccessCountAndNoStoreHeaders(t *testing.T) {
 	cfg.Inline = []model.InlineConfig{
 		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#access"},
 	}
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
@@ -2349,7 +2401,7 @@ func TestPublishedAccessCountAndNoStoreHeaders(t *testing.T) {
 func TestNodeStateDraftAPI(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	workspaceID := createWorkspaceForTest(t, server, cfg)
 
 	putState := model.NodeState{
@@ -2437,7 +2489,7 @@ func TestNoTokenInLogs(t *testing.T) {
 	dir := t.TempDir()
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(dir, "state.json")
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 	token := "abcd1234efgh5678"
 	server.appendLog("published url http://127.0.0.1:9876/s/" + token + "/mihomo.yaml")
 
@@ -2458,7 +2510,7 @@ func TestAppLogRotation(t *testing.T) {
 	dir := t.TempDir()
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(dir, "state.json")
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	logPath := filepath.Join(server.logsDir(), "app.log")
 	if err := os.MkdirAll(server.logsDir(), 0o755); err != nil {
@@ -2493,7 +2545,7 @@ func containsString(values []string, target string) bool {
 
 func TestRootServesHTML(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -2509,7 +2561,7 @@ func TestRootServesHTML(t *testing.T) {
 
 func TestStyleCSSServed(t *testing.T) {
 	cfg := model.DefaultConfig()
-	server := NewServer("0.1.0-test", cfg)
+	server, cfg := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	rec := httptest.NewRecorder()
