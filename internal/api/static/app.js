@@ -726,7 +726,7 @@ function bindEvents() {
     .addEventListener("click", copyGeneratedUrl);
   document
     .getElementById("open-generated-url-btn")
-    .addEventListener("click", () => openUrl(state.generatedUrl));
+    .addEventListener("click", () => openUrl(buildBrowserViewURL(state.generatedUrl)));
   document
     .getElementById("view-generated-link-btn")
     .addEventListener("click", focusGeneratedLink);
@@ -5213,6 +5213,17 @@ function countYAMLLines(text) {
 
 function buildSubscriptionURL() {
   return state.published?.url || state.generatedUrl || "";
+}
+
+function buildBrowserViewURL(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url, window.location.href);
+    parsed.searchParams.set("view", "1");
+    return parsed.toString();
+  } catch {
+    return `${url}${url.includes("?") ? "&" : "?"}view=1`;
+  }
 }
 
 function openUrl(url) {

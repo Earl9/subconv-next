@@ -1720,6 +1720,15 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
 	}
+	viewReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL)+"?view=1", nil)
+	viewRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(viewRec, viewReq)
+	if viewRec.Code != http.StatusOK {
+		t.Fatalf("view subscription status code = %d; body=%s", viewRec.Code, viewRec.Body.String())
+	}
+	if got := viewRec.Header().Get("Content-Disposition"); got != `inline; filename="mihomo.yaml"` {
+		t.Fatalf("view Content-Disposition = %q, want inline filename", got)
+	}
 	if got := subRec.Header().Get("Profile-Update-Interval"); got != "24" {
 		t.Fatalf("Profile-Update-Interval = %q, want 24", got)
 	}

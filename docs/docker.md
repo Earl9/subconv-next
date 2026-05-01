@@ -5,7 +5,7 @@ SubConv Next is Docker-first for V1. The image contains the Go binary and embedd
 ## Quick Start
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
@@ -127,11 +127,18 @@ The health response does not include subscription URLs, published tokens, upstre
 
 ```sh
 docker compose pull
-docker compose up -d --build
+docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-If using only local builds, `docker compose pull` can be skipped. Keep `./data` mounted during updates.
+If using only local builds, build and run a local image separately:
+
+```sh
+docker build -t subconv-next:local .
+docker run --rm -p 9876:9876 -v "$PWD/config:/config" -v "$PWD/data:/data" subconv-next:local
+```
+
+Keep `./data` mounted during updates.
 
 ## Log Redaction Check
 
@@ -162,11 +169,18 @@ For registry release:
 ```sh
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/OWNER/subconv-next:latest \
+  -t ghcr.io/earl9/subconv-next:v1.0.0 \
+  -t ghcr.io/earl9/subconv-next:latest \
+  --push \
   .
 ```
 
-Add `--push` when publishing to the registry.
+Verify the pushed manifest:
+
+```sh
+docker buildx imagetools inspect ghcr.io/earl9/subconv-next:v1.0.0
+docker buildx imagetools inspect ghcr.io/earl9/subconv-next:latest
+```
 
 The Dockerfile uses `TARGETOS` and `TARGETARCH`, so arm64 builds do not require code changes.
 

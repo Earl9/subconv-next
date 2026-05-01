@@ -1,8 +1,6 @@
 services:
   subconv-next:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/earl9/subconv-next:latest
     container_name: subconv-next
     environment:
       SUBCONV_HOST: ${SUBCONV_HOST:-0.0.0.0}

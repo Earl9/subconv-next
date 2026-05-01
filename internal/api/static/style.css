@@ -196,11 +196,25 @@ button {
 .icon-button {
   width: 36px;
   height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
   color: var(--muted);
   cursor: pointer;
+  text-decoration: none;
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.github-link:hover {
+  color: var(--text-main);
+  border-color: var(--border-strong);
 }
 
 .workspace-tabs {

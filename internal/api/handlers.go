@@ -843,7 +843,11 @@ func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.
 		return
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+	if wantsInlineSubscriptionYAML(r) {
+		w.Header().Set("Content-Disposition", `inline; filename="mihomo.yaml"`)
+	} else {
+		w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+	}
 	w.Header().Set("Profile-Update-Interval", "24")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
@@ -858,6 +862,11 @@ func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+func wantsInlineSubscriptionYAML(r *http.Request) bool {
+	query := r.URL.Query()
+	return query.Get("view") == "1" || query.Get("inline") == "1"
 }
 
 func (s *Server) handleDeprecatedSubscriptionYAML(w http.ResponseWriter, r *http.Request) {
