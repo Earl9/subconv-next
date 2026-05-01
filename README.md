@@ -67,7 +67,7 @@ http://127.0.0.1:9876/
 
 ### OpenWrt / Kwrt
 
-OpenWrt / Kwrt 支持以 all-in-one IPK 提供，当前目标为 `rockchip/armv8` / `aarch64_generic`。
+OpenWrt / Kwrt 支持以 all-in-one IPK 提供。`aarch64_generic` 已在 Kwrt 25.12.2 `rockchip/armv8` 上验证；其它 IPK 是实验性包。
 
 ```sh
 opkg install /tmp/subconv-next_1.0.0-4_aarch64_generic.ipk
@@ -88,6 +88,8 @@ curl -fsS http://127.0.0.1:9876/healthz
 
 当 UCI `enabled=1` 时，安装后会自动 enable 并启动服务。LuCI 入口为 `Services / SubConv Next`。
 
+Release Assets 中的多架构 IPK 是静态 Go 交叉编译二进制通过 `ipkg-build` 封装的包，不是使用每个目标平台官方 OpenWrt SDK 分别编译出的包。请按设备的 `opkg print-architecture` 选择文件。
+
 ## 下载
 
 发布文件只放在 GitHub Release Assets，不提交到仓库：
@@ -95,7 +97,12 @@ curl -fsS http://127.0.0.1:9876/healthz
 - GitHub Releases: <https://github.com/Earl9/subconv-next/releases>
 - `subconv-next-linux-amd64`
 - `subconv-next-linux-arm64`
-- `subconv-next_1.0.0-4_aarch64_generic.ipk`
+- Verified IPK: `subconv-next_1.0.0-4_aarch64_generic.ipk`
+- Experimental IPK: `subconv-next_1.0.0-4_x86_64.ipk`
+- Experimental IPK: `subconv-next_1.0.0-4_arm_cortex-a7_neon-vfpv4.ipk`
+- Experimental IPK: `subconv-next_1.0.0-4_arm_cortex-a9_vfpv3-d16.ipk`
+- Experimental IPK: `subconv-next_1.0.0-4_mips_24kc.ipk`
+- Experimental IPK: `subconv-next_1.0.0-4_mipsel_24kc.ipk`
 - `checksums.txt`
 
 ## 安全说明
