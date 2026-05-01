@@ -21,9 +21,11 @@ V1 重点面向自托管部署：Docker 运行形态、OpenWrt / Kwrt all-in-one
 
 支持协议包括 `ss`、`ssr`、`vmess`、`vless`、`trojan`、`hysteria2`、`tuic`、`anytls` 和 `wireguard`。其中 `anytls` 和 `wireguard` 在 V1 中仍按实验性支持处理。
 
-## 截图
+## Screenshots
 
-当前仓库暂未提交截图。启动服务后访问 `http://127.0.0.1:9876/` 查看 Web UI。
+| Web UI |
+|---|
+| ![SubConv Next main configuration page](docs/assets/screenshot-main.png) |
 
 ## 快速开始
 
