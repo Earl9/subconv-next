@@ -34,4 +34,4 @@ jobs:
           git remote remove github 2>/dev/null || true
           git remote add github "https://x-access-token:${GH_TOKEN}@github.com/Earl9/subconv-next.git"
 
-          git push --force-with-lease github HEAD:refs/heads/main
+          git push github +HEAD:refs/heads/main
