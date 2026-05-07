@@ -331,11 +331,26 @@ func (s *Server) cleanupExpiredWorkspaces() error {
 		if err != nil {
 			continue
 		}
+		if s.workspaceHasPublishedRefreshBinding(ref) {
+			continue
+		}
 		if s.workspaceExpired(ref.Meta) {
 			_ = s.removeWorkspace(ref)
 		}
 	}
 	return nil
+}
+
+func (s *Server) workspaceHasPublishedRefreshBinding(ref workspaceRef) bool {
+	publishID := strings.TrimSpace(ref.Meta.PublishID)
+	if publishID == "" {
+		return false
+	}
+	published, err := s.loadPublishedByID(publishID)
+	if err != nil {
+		return false
+	}
+	return !published.Meta.Revoked && strings.TrimSpace(published.Meta.Token) != ""
 }
 
 func randomWorkspaceID() (string, error) {

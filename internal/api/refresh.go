@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -187,12 +188,104 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 	return &refreshOutcome{Result: result, At: now}, nil
 }
 
+func (s *Server) refreshPublishedWorkspace(ref workspaceRef, reason string) (*refreshOutcome, publishedRef, error) {
+	publishID := strings.TrimSpace(ref.Meta.PublishID)
+	if publishID == "" {
+		return nil, publishedRef{}, errWorkspaceNotFound
+	}
+	published, err := s.loadPublishedByID(publishID)
+	if err != nil {
+		return nil, publishedRef{}, err
+	}
+	if published.Meta.Revoked || strings.TrimSpace(published.Meta.Token) == "" {
+		return nil, published, errWorkspaceNotFound
+	}
+	cfg, err := s.loadWorkspaceConfig(ref)
+	if err != nil {
+		return nil, published, err
+	}
+	cfg.Service.OutputPath = published.CurrentPath
+	outcome, err := s.startRefreshForConfig(cfg, ref.Hash, reason)
+	if err != nil {
+		return nil, published, err
+	}
+	if err := s.finalizePublishedRefresh(&ref, &published, cfg, outcome.Result); err != nil {
+		return nil, published, err
+	}
+	return outcome, published, nil
+}
+
+func (s *Server) refreshPublishedWorkspaces(reason string) {
+	for _, ref := range s.refreshablePublishedWorkspaces() {
+		_, published, err := s.refreshPublishedWorkspace(ref, reason)
+		if err == nil {
+			s.appendLog(reason + " succeeded: publish=" + published.ID)
+			continue
+		}
+		if errors.Is(err, ErrRefreshInProgress) {
+			s.appendWorkspaceLog(ref.Hash, reason+" skipped: refresh already running")
+			continue
+		}
+		s.appendLog(reason + " failed: publish=" + ref.Meta.PublishID + " error=" + err.Error())
+		s.appendWorkspaceLog(ref.Hash, reason+" failed: "+err.Error())
+	}
+}
+
+func (s *Server) refreshablePublishedWorkspaces() []workspaceRef {
+	root := s.workspaceRootDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+
+	byPublishID := map[string]workspaceRef{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		ref, err := s.loadWorkspaceByHash(entry.Name())
+		if err != nil {
+			continue
+		}
+		publishID := strings.TrimSpace(ref.Meta.PublishID)
+		if publishID == "" {
+			continue
+		}
+		published, err := s.loadPublishedByID(publishID)
+		if err != nil || published.Meta.Revoked || strings.TrimSpace(published.Meta.Token) == "" {
+			continue
+		}
+		current, ok := byPublishID[publishID]
+		preferredHash := strings.TrimSpace(published.Meta.WorkspaceHash)
+		switch {
+		case !ok:
+			byPublishID[publishID] = ref
+		case preferredHash != "" && ref.Hash == preferredHash:
+			byPublishID[publishID] = ref
+		case preferredHash != "" && current.Hash == preferredHash:
+			continue
+		case ref.Meta.LastAccessAt.After(current.Meta.LastAccessAt):
+			byPublishID[publishID] = ref
+		}
+	}
+
+	refs := make([]workspaceRef, 0, len(byPublishID))
+	for _, ref := range byPublishID {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		return refs[i].Hash < refs[j].Hash
+	})
+	return refs
+}
+
 func (s *Server) StartScheduler(stop <-chan struct{}) {
 	go func() {
 		cfg := s.snapshotConfig()
 		if !yamlFileExists(cfg.Service.OutputPath) {
 			_, _ = s.startRefresh("startup refresh")
 		}
+		s.refreshPublishedWorkspaces("startup published refresh")
 		for {
 			cfg = s.snapshotConfig()
 			interval := time.Duration(effectiveRefreshInterval(cfg)) * time.Second
@@ -204,8 +297,9 @@ func (s *Server) StartScheduler(stop <-chan struct{}) {
 			case <-timer.C:
 				_, err := s.startRefresh("scheduled refresh")
 				if err != nil && !errors.Is(err, ErrRefreshInProgress) {
-					continue
+					s.appendLog("scheduled refresh failed: " + err.Error())
 				}
+				s.refreshPublishedWorkspaces("scheduled published refresh")
 			}
 		}
 	}()

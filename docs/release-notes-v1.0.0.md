@@ -2,21 +2,23 @@
 
 SubConv Next v1.0.0 provides the Go daemon with embedded Web UI, Docker images, Linux binaries, and OpenWrt/Kwrt all-in-one IPK packages.
 
+This IPK refresh fixes published subscription auto-refresh: scheduled refreshes and expired `/s/{token}/mihomo.yaml` requests now update the bound published YAML when upstream sources add nodes.
+
 ## Release Assets
 
 Verified:
 
 - `subconv-next-linux-amd64`
 - `subconv-next-linux-arm64`
-- `subconv-next_1.0.0-4_aarch64_generic.ipk` verified on Kwrt 25.12.2 `rockchip/armv8`
+- `subconv-next_1.0.0-5_aarch64_generic.ipk` verified on Kwrt 25.12.2 `rockchip/armv8`
 
 Experimental:
 
-- `subconv-next_1.0.0-4_x86_64.ipk`
-- `subconv-next_1.0.0-4_arm_cortex-a7_neon-vfpv4.ipk`
-- `subconv-next_1.0.0-4_arm_cortex-a9_vfpv3-d16.ipk`
-- `subconv-next_1.0.0-4_mips_24kc.ipk`
-- `subconv-next_1.0.0-4_mipsel_24kc.ipk`
+- `subconv-next_1.0.0-5_x86_64.ipk`
+- `subconv-next_1.0.0-5_arm_cortex-a7_neon-vfpv4.ipk`
+- `subconv-next_1.0.0-5_arm_cortex-a9_vfpv3-d16.ipk`
+- `subconv-next_1.0.0-5_mips_24kc.ipk`
+- `subconv-next_1.0.0-5_mipsel_24kc.ipk`
 
 Checksums:
 

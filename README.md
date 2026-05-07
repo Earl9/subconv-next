@@ -70,7 +70,7 @@ http://127.0.0.1:9876/
 OpenWrt / Kwrt 支持以 all-in-one IPK 提供。`aarch64_generic` 已在 Kwrt 25.12.2 `rockchip/armv8` 上验证；其它 IPK 是实验性包。
 
 ```sh
-opkg install /tmp/subconv-next_1.0.0-4_aarch64_generic.ipk
+opkg install /tmp/subconv-next_1.0.0-5_aarch64_generic.ipk
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
@@ -97,12 +97,12 @@ Release Assets 中的多架构 IPK 是静态 Go 交叉编译二进制通过 `ipk
 - GitHub Releases: <https://github.com/Earl9/subconv-next/releases>
 - `subconv-next-linux-amd64`
 - `subconv-next-linux-arm64`
-- Verified IPK: `subconv-next_1.0.0-4_aarch64_generic.ipk`
-- Experimental IPK: `subconv-next_1.0.0-4_x86_64.ipk`
-- Experimental IPK: `subconv-next_1.0.0-4_arm_cortex-a7_neon-vfpv4.ipk`
-- Experimental IPK: `subconv-next_1.0.0-4_arm_cortex-a9_vfpv3-d16.ipk`
-- Experimental IPK: `subconv-next_1.0.0-4_mips_24kc.ipk`
-- Experimental IPK: `subconv-next_1.0.0-4_mipsel_24kc.ipk`
+- Verified IPK: `subconv-next_1.0.0-5_aarch64_generic.ipk`
+- Experimental IPK: `subconv-next_1.0.0-5_x86_64.ipk`
+- Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a7_neon-vfpv4.ipk`
+- Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a9_vfpv3-d16.ipk`
+- Experimental IPK: `subconv-next_1.0.0-5_mips_24kc.ipk`
+- Experimental IPK: `subconv-next_1.0.0-5_mipsel_24kc.ipk`
 - `checksums.txt`
 
 ## 安全说明

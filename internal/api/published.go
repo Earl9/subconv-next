@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -393,6 +394,7 @@ func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
 	if published.Meta.Revoked {
 		return nil, publishedRef{}, errWorkspaceNotFound
 	}
+	published = s.refreshPublishedOnRequest(published)
 	published = s.ensurePublishedSubscriptionUserinfo(published)
 	data, err := os.ReadFile(published.CurrentPath)
 	if err != nil {
@@ -405,6 +407,28 @@ func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
 	published.Meta.AccessCount++
 	_ = s.savePublishedMeta(published)
 	return data, published, nil
+}
+
+func (s *Server) refreshPublishedOnRequest(published publishedRef) publishedRef {
+	ref, cfg, _, ok := s.loadPublishedWorkspaceState(published)
+	if !ok || !cfg.Service.RefreshOnRequest {
+		return published
+	}
+	if !cacheExpired(published.CurrentPath, effectiveRefreshInterval(cfg)) {
+		return published
+	}
+	_, refreshed, err := s.refreshPublishedWorkspace(ref, "published subscription refresh")
+	if err != nil {
+		if errors.Is(err, ErrRefreshInProgress) {
+			s.appendLog("published subscription refresh skipped: publish=" + published.ID + " refresh already running")
+			s.appendWorkspaceLog(ref.Hash, "published subscription refresh skipped: refresh already running")
+			return published
+		}
+		s.appendLog("published subscription refresh failed: publish=" + published.ID + " error=" + err.Error())
+		s.appendWorkspaceLog(ref.Hash, "published subscription refresh failed: "+err.Error())
+		return published
+	}
+	return refreshed
 }
 
 func (s *Server) ensurePublishedSubscriptionUserinfo(published publishedRef) publishedRef {

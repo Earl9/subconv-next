@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1595,6 +1596,140 @@ func TestRefreshOverwritesCurrentYAMLAndKeepsSameToken(t *testing.T) {
 	}
 }
 
+func TestPublishedWorkspaceRefreshUpdatesExistingSubscriptionYAML(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Service.RefreshOnRequest = true
+	cfg.Service.RefreshInterval = 1
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczFAZXhhbXBsZS5jb206NDQz#old-node"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	workspaceCfg, err := server.loadWorkspaceConfig(ref)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	workspaceCfg.Inline[0].Content = strings.Join([]string{
+		"ss://YWVzLTI1Ni1nY206cGFzczFAZXhhbXBsZS5jb206NDQz#old-node",
+		"ss://YWVzLTI1Ni1nY206cGFzczJAZXhhbXBsZS5uZXQ6NDQz#new-node",
+	}, "\n")
+	workspaceCfg.Service.OutputPath = ref.OutputPath
+	if err := config.WriteJSON(ref.ConfigPath, workspaceCfg); err != nil {
+		t.Fatalf("WriteJSON(workspace config) error = %v", err)
+	}
+
+	server.refreshPublishedWorkspaces("test published refresh")
+	got, err := os.ReadFile(filepath.Join(server.publishedRootDir(), refreshBody.PublishID, "current.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(published current) error = %v", err)
+	}
+	if !bytes.Contains(got, []byte("old-node")) || !bytes.Contains(got, []byte("new-node")) {
+		t.Fatalf("published yaml = %s, want old and new nodes after automatic refresh", string(got))
+	}
+
+	published, err := server.loadPublishedByID(refreshBody.PublishID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	oldUpdatedAt := published.Meta.UpdatedAt
+	if err := os.Chtimes(published.CurrentPath, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes(published current) error = %v", err)
+	}
+	workspaceCfg.Inline[0].Content = strings.Join([]string{
+		"ss://YWVzLTI1Ni1nY206cGFzczFAZXhhbXBsZS5jb206NDQz#old-node",
+		"ss://YWVzLTI1Ni1nY206cGFzczJAZXhhbXBsZS5uZXQ6NDQz#new-node",
+		"ss://YWVzLTI1Ni1nY206cGFzczNAZXhhbXBsZS5vcmc6NDQz#request-node",
+	}, "\n")
+	workspaceCfg.Service.OutputPath = ref.OutputPath
+	if err := config.WriteJSON(ref.ConfigPath, workspaceCfg); err != nil {
+		t.Fatalf("WriteJSON(workspace config request refresh) error = %v", err)
+	}
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if !bytes.Contains(subRec.Body.Bytes(), []byte("request-node")) {
+		t.Fatalf("subscription body = %s, want request refresh to include request-node", subRec.Body.String())
+	}
+	refreshed, err := server.loadPublishedByID(refreshBody.PublishID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID(refreshed) error = %v", err)
+	}
+	if !refreshed.Meta.UpdatedAt.After(oldUpdatedAt) {
+		t.Fatalf("published UpdatedAt = %s, want after %s", refreshed.Meta.UpdatedAt, oldUpdatedAt)
+	}
+}
+
+func TestPublishedWorkspaceRefreshDoesNotRequireGlobalNodes(t *testing.T) {
+	base := model.DefaultConfig()
+	base.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	base.Inline = nil
+	server, base := newTestServer(t, base)
+
+	workspaceCfg := base
+	workspaceCfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczFAZXhhbXBsZS5jb206NDQz#workspace-old"},
+	}
+	workspaceID := createWorkspaceForTest(t, server, workspaceCfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+
+	ref, err := server.loadWorkspace(workspaceID)
+	if err != nil {
+		t.Fatalf("loadWorkspace() error = %v", err)
+	}
+	cfg, err := server.loadWorkspaceConfig(ref)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig() error = %v", err)
+	}
+	cfg.Inline[0].Content = strings.Join([]string{
+		"ss://YWVzLTI1Ni1nY206cGFzczFAZXhhbXBsZS5jb206NDQz#workspace-old",
+		"ss://YWVzLTI1Ni1nY206cGFzczJAZXhhbXBsZS5uZXQ6NDQz#workspace-new",
+	}, "\n")
+	cfg.Service.OutputPath = ref.OutputPath
+	if err := config.WriteJSON(ref.ConfigPath, cfg); err != nil {
+		t.Fatalf("WriteJSON(workspace config) error = %v", err)
+	}
+
+	if _, err := server.startRefresh("test global refresh"); !errors.Is(err, pipeline.ErrNoNodes) {
+		t.Fatalf("startRefresh(global) error = %v, want ErrNoNodes", err)
+	}
+	server.refreshPublishedWorkspaces("test published refresh")
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if !bytes.Contains(subRec.Body.Bytes(), []byte("workspace-new")) {
+		t.Fatalf("subscription body = %s, want published workspace refresh despite empty global config", subRec.Body.String())
+	}
+}
+
 func TestRefreshPostWriteValidationFailureDoesNotPublishCurrentYAML(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
@@ -2288,8 +2423,8 @@ func TestWorkspaceCleanupRemovesWorkspaceButKeepsPublished(t *testing.T) {
 	if err := server.cleanupExpiredWorkspaces(); err != nil {
 		t.Fatalf("cleanupExpiredWorkspaces() error = %v", err)
 	}
-	if _, err := os.Stat(ref.Dir); !os.IsNotExist(err) {
-		t.Fatalf("workspace dir still exists after cleanup: err=%v", err)
+	if _, err := os.Stat(ref.Dir); err != nil {
+		t.Fatalf("workspace dir was removed after cleanup: err=%v", err)
 	}
 
 	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
