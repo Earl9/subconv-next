@@ -5,6 +5,7 @@ WORKDIR /src
 ARG BUILDPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 COPY go.mod go.sum ./
 COPY cmd ./cmd
@@ -13,7 +14,7 @@ COPY static ./static
 COPY testdata ./testdata
 
 RUN go test ./...
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w" -o /out/subconv-next ./cmd/subconv-next
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/subconv-next ./cmd/subconv-next
 
 FROM --platform=$BUILDPLATFORM alpine:3.20 AS runtime-deps
 

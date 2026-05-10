@@ -46,10 +46,10 @@ var presetList = []Preset{
 		Key:            "cm_online",
 		Group:          "CM_Online 兼容",
 		Label:          "CM_Online 默认版",
-		Description:    "偏向日常分流，覆盖 Google、Telegram、苹果、微软和基础国际流量。",
+		Description:    "偏向日常分流，覆盖 Google、Telegram、苹果、微软、微软云盘和基础国际流量。",
 		Template:       "standard",
 		RuleMode:       "custom",
-		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "microsoft", "apple", "social", "non_cn"},
+		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "onedrive", "microsoft", "apple", "social", "non_cn"},
 		GroupProxyMode: "compact",
 	},
 	{
@@ -59,7 +59,7 @@ var presetList = []Preset{
 		Description:    "在默认分流基础上补充游戏平台和常见流媒体。",
 		Template:       "standard",
 		RuleMode:       "custom",
-		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "microsoft", "apple", "social", "streaming", "gaming", "non_cn"},
+		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "onedrive", "microsoft", "apple", "social", "streaming", "gaming", "non_cn"},
 		GroupProxyMode: "compact",
 	},
 	{
@@ -69,7 +69,7 @@ var presetList = []Preset{
 		Description:    "启用地区组，适合按国家快速切换节点来源。",
 		Template:       "standard",
 		RuleMode:       "custom",
-		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "microsoft", "apple", "github", "ai", "streaming", "social", "non_cn"},
+		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "onedrive", "microsoft", "apple", "github", "ai", "streaming", "social", "non_cn"},
 		GroupProxyMode: "regional",
 	},
 	{
@@ -79,7 +79,7 @@ var presetList = []Preset{
 		Description:    "多地区模板，额外补充云服务分流，适合 Worker / CDN 相关节点。",
 		Template:       "standard",
 		RuleMode:       "custom",
-		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "microsoft", "apple", "github", "ai", "streaming", "social", "cloud", "non_cn"},
+		EnabledRules:   []string{"private", "domestic", "google", "youtube", "telegram", "onedrive", "microsoft", "apple", "github", "ai", "streaming", "social", "cloud", "non_cn"},
 		GroupProxyMode: "regional",
 	},
 	{
@@ -98,7 +98,7 @@ var presetList = []Preset{
 		Description:    "完整规则集，附带云服务分流和全量节点选择。",
 		Template:       "full",
 		RuleMode:       "custom",
-		EnabledRules:   []string{"adblock", "microsoft", "ai", "apple", "bilibili", "social", "youtube", "streaming", "google", "gaming", "private", "education", "domestic", "finance", "telegram", "cloud", "github", "non_cn"},
+		EnabledRules:   []string{"adblock", "onedrive", "microsoft", "ai", "apple", "bilibili", "social", "youtube", "streaming", "google", "gaming", "private", "education", "domestic", "finance", "telegram", "cloud", "github", "non_cn"},
 		GroupProxyMode: "full",
 	},
 	{

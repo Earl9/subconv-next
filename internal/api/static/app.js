@@ -162,6 +162,7 @@ const TEMPLATE_OPTIONS = TEMPLATE_OPTION_GROUPS.flatMap((group) =>
 
 const BUILTIN_RULES = [
   { key: "adblock", label: "广告拦截" },
+  { key: "onedrive", label: "微软云盘" },
   { key: "microsoft", label: "微软服务" },
   { key: "ai", label: "AI 服务" },
   { key: "apple", label: "苹果服务" },
@@ -186,6 +187,7 @@ const RULE_PRESETS = {
   balanced: [
     "private",
     "domestic",
+    "onedrive",
     "microsoft",
     "apple",
     "google",
@@ -430,6 +432,7 @@ const ICONS = {
 
 const RULE_ICON_MAP = {
   adblock: "shield",
+  onedrive: "cloud",
   microsoft: "server",
   ai: "spark",
   apple: "target",

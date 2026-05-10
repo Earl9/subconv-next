@@ -77,6 +77,7 @@ proxy-groups:
   - {name: "🔒 国内服务", type: select, proxies: [DIRECT, REJECT, "🚀 节点选择", ⚡ 自动选择]}
   - {name: "📲 电报消息", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
   - {name: "🐱 代码托管", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
+  - {name: ☁️ 微软云盘, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
   - {name: Ⓜ️ 微软服务, type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
   - {name: "🍏 苹果服务", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
   - {name: "🎬 奈飞", type: select, proxies: ["🚀 节点选择", ⚡ 自动选择, DIRECT, REJECT, xhttp]}
@@ -102,8 +103,8 @@ rule-providers:
   github: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/github.mrs', path: ./ruleset/github.mrs, interval: 86400, format: mrs}
   gitlab: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/gitlab.mrs', path: ./ruleset/gitlab.mrs, interval: 86400, format: mrs}
   atlassian: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/atlassian.mrs', path: ./ruleset/atlassian.mrs, interval: 86400, format: mrs}
-  microsoft: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft.mrs', path: ./ruleset/microsoft.mrs, interval: 86400, format: mrs}
   onedrive: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/onedrive.mrs', path: ./ruleset/onedrive.mrs, interval: 86400, format: mrs}
+  microsoft: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft.mrs', path: ./ruleset/microsoft.mrs, interval: 86400, format: mrs}
   apple: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/apple.mrs', path: ./ruleset/apple.mrs, interval: 86400, format: mrs}
   icloud: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/icloud.mrs', path: ./ruleset/icloud.mrs, interval: 86400, format: mrs}
   netflix: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/netflix.mrs', path: ./ruleset/netflix.mrs, interval: 86400, format: mrs}
@@ -139,8 +140,8 @@ rules:
   - "RULE-SET,github,🐱 代码托管"
   - "RULE-SET,gitlab,🐱 代码托管"
   - "RULE-SET,atlassian,🐱 代码托管"
+  - RULE-SET,onedrive,☁️ 微软云盘
   - RULE-SET,microsoft,Ⓜ️ 微软服务
-  - RULE-SET,onedrive,Ⓜ️ 微软服务
   - "RULE-SET,apple,🍏 苹果服务"
   - "RULE-SET,icloud,🍏 苹果服务"
   - "RULE-SET,netflix,🎬 奈飞"

@@ -120,6 +120,34 @@ func TestRenderGoldenRuleProvidersBalanced(t *testing.T) {
 	}
 }
 
+func TestMicrosoftCloudDriveHasSeparateRuleGroup(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"microsoft", "onedrive"}
+	got := mustRender(t, nodes, opts)
+
+	text := string(got)
+	for _, needle := range []string{
+		"- {name: ☁️ 微软云盘, type: select",
+		"- {name: Ⓜ️ 微软服务, type: select",
+		"onedrive: {type: http",
+		"microsoft: {type: http",
+		"RULE-SET,onedrive,☁️ 微软云盘",
+		"RULE-SET,microsoft,Ⓜ️ 微软服务",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("microsoft split output missing %q:\n%s", needle, text)
+		}
+	}
+	if strings.Contains(text, "RULE-SET,onedrive,Ⓜ️ 微软服务") {
+		t.Fatalf("onedrive must not target microsoft service group:\n%s", text)
+	}
+	if strings.Index(text, "RULE-SET,onedrive,☁️ 微软云盘") > strings.Index(text, "RULE-SET,microsoft,Ⓜ️ 微软服务") {
+		t.Fatalf("onedrive rule must be emitted before microsoft rule:\n%s", text)
+	}
+}
+
 func TestRenderGoldenUIKeyExpansion(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()

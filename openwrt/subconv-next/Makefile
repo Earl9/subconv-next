@@ -106,8 +106,6 @@ if [ -x /etc/init.d/subconv-next ]; then
 fi
 rm -f /tmp/luci-indexcache
 rm -rf /tmp/luci-modulecache
-/etc/init.d/rpcd restart >/dev/null 2>&1 || true
-/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 exit 0
 endef
 

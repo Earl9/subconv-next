@@ -239,7 +239,7 @@ Description: Modern subscription converter for Mihomo / Clash Meta.
 
 The main package includes `postinst` and `prerm` scripts:
 
-- `postinst` enables `/etc/init.d/subconv-next` after install, starts it when `subconv-next.main.enabled` is unset or `1`, clears LuCI caches, and restarts `rpcd`/`uhttpd`.
+- `postinst` enables `/etc/init.d/subconv-next` after install, starts it when `subconv-next.main.enabled` is unset or `1`, and clears LuCI caches without restarting `rpcd` or `uhttpd`.
 - `prerm` stops and disables the service before package removal.
 - Both scripts exit immediately during image/rootfs builds when `IPKG_INSTROOT` is set.
 - Runtime data under `/etc/subconv-next/data` is never removed by package scripts.

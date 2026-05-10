@@ -36,6 +36,7 @@ var ruleOutputOrder = []string{
 	"domestic",
 	"telegram",
 	"github",
+	"onedrive",
 	"microsoft",
 	"apple",
 	"twitter",
@@ -60,7 +61,7 @@ var ruleOutputOrder = []string{
 
 var ruleModePresets = map[string][]string{
 	"minimal":  {"private", "domestic", "non_cn"},
-	"balanced": {"private", "domestic", "microsoft", "apple", "google", "github", "ai", "telegram", "streaming", "non_cn"},
+	"balanced": {"private", "domestic", "onedrive", "microsoft", "apple", "google", "github", "ai", "telegram", "streaming", "non_cn"},
 	"full":     ruleOutputOrder,
 }
 
@@ -212,16 +213,24 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "atlassian", TargetGroup: "🐱 代码托管"},
 		},
 	},
+	"onedrive": {
+		Key:       "onedrive",
+		GroupName: "☁️ 微软云盘",
+		Providers: []RuleProviderSpec{
+			geositeProvider("onedrive"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "onedrive", TargetGroup: "☁️ 微软云盘"},
+		},
+	},
 	"microsoft": {
 		Key:       "microsoft",
 		GroupName: "Ⓜ️ 微软服务",
 		Providers: []RuleProviderSpec{
 			geositeProvider("microsoft"),
-			geositeProvider("onedrive"),
 		},
 		Rules: []RuleSpec{
 			{Provider: "microsoft", TargetGroup: "Ⓜ️ 微软服务"},
-			{Provider: "onedrive", TargetGroup: "Ⓜ️ 微软服务"},
 		},
 	},
 	"apple": {

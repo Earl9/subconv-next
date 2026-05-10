@@ -18,7 +18,7 @@ subconv-next_1.0.0-3_aarch64_generic.ipk
 - `/usr/share/rpcd/acl.d/luci-app-subconv-next.json`
 - `/www/luci-static/resources/view/subconv-next/index.js`
 
-安装后 `postinst` 会自动 enable 服务，并在 UCI `enabled=1` 或未设置时自动 start。脚本会清理 LuCI 缓存并重启 `rpcd`/`uhttpd`，使 `Services / SubConv Next` 菜单尽快出现。
+安装后 `postinst` 会自动 enable 服务，并在 UCI `enabled=1` 或未设置时自动 start。脚本会清理 LuCI 缓存，但不会重启 `rpcd` 或 `uhttpd`，避免安装后打断当前 LuCI 登录会话。
 
 卸载前 `prerm` 会 stop/disable 服务，但不会删除 `/etc/subconv-next/data`。
 

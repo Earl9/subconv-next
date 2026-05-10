@@ -104,3 +104,23 @@ func TestEmojiSourceNamePreviewMatchesDefaultNaming(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinRulesExposeOneDriveSeparately(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		`{ key: "onedrive", label: "微软云盘" }`,
+		`onedrive: "cloud"`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing OneDrive rule UI marker %q", needle)
+		}
+	}
+
+	oneDrivePos := strings.Index(app, `"onedrive"`)
+	microsoftPos := strings.Index(app, `"microsoft"`)
+	if oneDrivePos < 0 || microsoftPos < 0 || oneDrivePos > microsoftPos {
+		t.Fatalf("OneDrive rule should be listed before Microsoft rule")
+	}
+}
