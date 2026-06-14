@@ -32,8 +32,9 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 		"security", "sni", "servername", "fp", "client-fingerprint",
 		"pbk", "publicKey", "public-key", "sid", "shortId", "short-id",
 		"spx", "spiderX", "spider-x", "type", "network", "path", "host",
-		"serviceName", "service-name", "flow", "packetEncoding", "packet-encoding",
+		"serviceName", "service-name", "flow", "packetEncoding", "packet-encoding", "packet_encoding",
 		"alpn", "encryption", "mode", "no-grpc-header", "noGrpcHeader",
+		"allowInsecure", "allow-insecure", "insecure", "skip-cert-verify",
 	}
 
 	security := strings.ToLower(firstQuery(q, "security"))
@@ -46,6 +47,7 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	}
 	node.TLS.ClientFingerprint = firstQuery(q, "fp", "client-fingerprint")
 	node.TLS.ALPN = parseCSV(firstQuery(q, "alpn"))
+	node.TLS.Insecure = parseBoolString(firstQuery(q, "allowInsecure", "allow-insecure", "insecure", "skip-cert-verify"))
 
 	publicKey := firstQuery(q, "pbk", "publicKey", "public-key")
 	shortID := firstQuery(q, "sid", "shortId", "short-id")
@@ -73,7 +75,7 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 
 	setRaw(&node, "flow", firstQuery(q, "flow"))
 	setRaw(&node, "encryption", firstNonEmpty(firstQuery(q, "encryption"), "none"))
-	setRaw(&node, "packetEncoding", firstQuery(q, "packetEncoding", "packet-encoding"))
+	setRaw(&node, "packetEncoding", normalizeVLESSPacketEncoding(firstQuery(q, "packetEncoding", "packet-encoding", "packet_encoding")))
 	setRaw(&node, "mode", firstQuery(q, "mode"))
 
 	if raw := unknownQueryParams(q, handled...); raw != nil {
@@ -87,6 +89,18 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 
 func parseVisionFlow(flow string) string {
 	return strings.TrimSpace(flow)
+}
+
+func normalizeVLESSPacketEncoding(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(value) {
+	case "xudp":
+		return "xudp"
+	case "packetaddr":
+		return "packetaddr"
+	default:
+		return value
+	}
 }
 
 func invalidVLESSError(message string) error {

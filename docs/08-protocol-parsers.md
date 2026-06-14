@@ -97,6 +97,7 @@ vless://uuid@host:port?encryption=none&security=reality&sni=example.com&fp=chrom
 | security=tls/reality | tls.enabled |
 | sni/servername | tls.sni |
 | fp | tls.clientFingerprint |
+| allowInsecure / allow-insecure / insecure / skip-cert-verify | tls.insecure |
 | pbk/publicKey | tls.reality.publicKey |
 | sid/shortId | tls.reality.shortId |
 | spx/spiderX | tls.reality.spiderX |
@@ -105,7 +106,7 @@ vless://uuid@host:port?encryption=none&security=reality&sni=example.com&fp=chrom
 | host | transport.host |
 | serviceName | transport.serviceName |
 | flow | raw.flow |
-| packetEncoding | raw.packetEncoding |
+| packetEncoding / packet-encoding / packet_encoding | raw.packetEncoding |
 
 ## Trojan `trojan://`
 

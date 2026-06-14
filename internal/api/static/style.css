@@ -2747,6 +2747,71 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.draft-manager-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+}
+
+.draft-empty-state {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-card-sm);
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.draft-empty-state strong {
+  color: var(--text-main);
+  font-size: 0.92rem;
+}
+
+.draft-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card-sm);
+  background: #fff;
+}
+
+.draft-item.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.draft-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.draft-name-input {
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+}
+
+.draft-item-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.draft-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .danger-dialog-head {
   align-items: center;
 }
@@ -2818,10 +2883,13 @@ button:disabled {
 
 .toast {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 40;
-  max-width: 360px;
+  left: 50%;
+  right: auto;
+  bottom: max(92px, calc(env(safe-area-inset-bottom, 0px) + 18px));
+  transform: translateX(-50%);
+  z-index: 4000;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
   padding: 12px 14px;
   border-radius: 12px;
   background: rgba(37, 99, 235, 0.12);
@@ -2829,6 +2897,10 @@ button:disabled {
   border: 1px solid rgba(37, 99, 235, 0.18);
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
   font-size: 0.82rem;
+  line-height: 1.45;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
 .toast.error {
@@ -3002,6 +3074,22 @@ button:disabled {
   .session-banner-text,
   .session-banner-meta {
     white-space: normal;
+  }
+
+  .draft-item {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .draft-item-actions {
+    justify-content: flex-start;
+  }
+
+  .toast {
+    bottom: max(236px, calc(env(safe-area-inset-bottom, 0px) + 16px));
+    max-width: calc(100vw - 24px);
+    padding: 10px 12px;
+    font-size: 12px;
   }
 
   .compact-base-grid,

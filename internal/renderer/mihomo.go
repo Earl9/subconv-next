@@ -544,7 +544,8 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.TLS = node.TLS.Enabled
 		proxy.ServerName = node.TLS.SNI
 		proxy.ClientFingerprint = node.TLS.ClientFingerprint
-		proxy.PacketEncoding = rawString(node.Raw, "packetEncoding")
+		proxy.PacketEncoding = normalizePacketEncoding(rawString(node.Raw, "packetEncoding"))
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		proxy.Flow = rawString(node.Raw, "flow")
 		if node.TLS.Reality != nil {
 			proxy.RealityOpts = &mihomoRealityOpts{
@@ -1381,6 +1382,18 @@ func rawString(raw map[string]interface{}, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func normalizePacketEncoding(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(value) {
+	case "xudp":
+		return "xudp"
+	case "packetaddr":
+		return "packetaddr"
+	default:
+		return value
+	}
 }
 
 func rawScalar(raw map[string]interface{}, key string) interface{} {

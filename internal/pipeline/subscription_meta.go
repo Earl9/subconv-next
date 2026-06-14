@@ -349,7 +349,7 @@ func BuildSubscriptionMetaSources(cfg model.Config, stored map[string]model.Subs
 			}
 		}
 		meta.SourceID = sourceID
-		meta.SourceName = firstNonEmptyString(meta.SourceName, sub.Name)
+		meta.SourceName = firstNonEmptyString(sub.Name, meta.SourceName)
 		sources = append(sources, model.NormalizeSubscriptionMeta(meta))
 		seen[sourceID] = struct{}{}
 	}

@@ -671,6 +671,31 @@ func publishedURL(origin, token string) string {
 	return origin + "/s/" + token + "/mihomo.yaml"
 }
 
+func publishedTokenFromSubscriptionURL(rawURL string) (string, bool) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false
+	}
+	path := strings.Trim(parsed.Path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[0] != "s" || parts[2] != "mihomo.yaml" {
+		return "", false
+	}
+	token, err := url.PathUnescape(parts[1])
+	if err != nil {
+		return "", false
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
 func firstNonZeroTime(values ...time.Time) time.Time {
 	for _, value := range values {
 		if !value.IsZero() {

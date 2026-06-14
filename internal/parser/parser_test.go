@@ -121,6 +121,39 @@ func TestParseContentVLESSXHTTP(t *testing.T) {
 	}
 }
 
+func TestParseContentVLESSPacketEncodingAlias(t *testing.T) {
+	content := []byte("vless://uuid-1@example.com:443?type=tcp&security=tls&sni=example.com&packet_encoding=XUDP#xudp")
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(result.Nodes))
+	}
+
+	node := result.Nodes[0]
+	if got, _ := node.Raw["packetEncoding"].(string); got != "xudp" {
+		t.Fatalf("raw packetEncoding = %#v, want xudp", node.Raw["packetEncoding"])
+	}
+	if _, ok := node.Raw["packet_encoding"]; ok {
+		t.Fatalf("raw packet_encoding should be normalized away: %#v", node.Raw)
+	}
+}
+
+func TestParseContentVLESSInsecure(t *testing.T) {
+	content := []byte("vless://uuid-1@example.com:443?type=tcp&security=tls&sni=example.com&allowInsecure=1#insecure")
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(result.Nodes))
+	}
+	if !result.Nodes[0].TLS.Insecure {
+		t.Fatalf("TLS.Insecure = false, want true")
+	}
+}
+
 func TestParseContentVMessCipher(t *testing.T) {
 	content := []byte("vmess://eyJ2IjoiMiIsInBzIjoidm1lc3Mtbm9kZSIsImFkZCI6ImV4YW1wbGUuY29tIiwicG9ydCI6IjQ0MyIsImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwIiwiYWlkIjoiMCIsInNjeSI6ImF1dG8iLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImNkbi5leGFtcGxlLmNvbSIsInBhdGgiOiIvd3MiLCJ0bHMiOiJ0bHMiLCJzbmkiOiJleGFtcGxlLmNvbSIsImZwIjoiY2hyb21lIn0=")
 	result := ParseContent(content, model.SourceInfo{Name: "vmess"})
@@ -214,6 +247,7 @@ proxies:
     tls: true
     servername: cas-bridge.xethub.hf.co
     client-fingerprint: chrome
+    skip-cert-verify: true
     encryption: none
     reality-opts:
       public-key: pub-key
@@ -251,6 +285,9 @@ proxies:
 	}
 	if vless.TLS.Reality == nil || vless.TLS.Reality.PublicKey != "pub-key" {
 		t.Fatalf("vless reality = %#v, want parsed reality", vless.TLS.Reality)
+	}
+	if !vless.TLS.Insecure {
+		t.Fatalf("vless TLS.Insecure = false, want true from skip-cert-verify")
 	}
 	if got := fmt.Sprint(vless.Raw["encryption"]); got != "none" {
 		t.Fatalf("vless raw encryption = %q, want none", got)

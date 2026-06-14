@@ -88,3 +88,38 @@ func TestParseSubscriptionUserinfoHeader(t *testing.T) {
 		t.Fatalf("meta.FetchedAt = %q, want %q", meta.FetchedAt, fetchedAt.Format(time.RFC3339))
 	}
 }
+
+func TestBuildSubscriptionMetaSourcesUsesCurrentConfigNames(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "source-1", Name: "主力机场", Enabled: true, URL: "https://example.com/a", UserAgent: model.DefaultUserAgent},
+		{ID: "source-2", Name: "备用机场", Enabled: true, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
+	}
+	stored := map[string]model.SubscriptionMeta{
+		"source-1": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+			SourceID:   "source-1",
+			SourceName: "旧名称",
+			Download:   1,
+			Total:      10,
+			FromHeader: true,
+		}),
+		"source-2": model.NormalizeSubscriptionMeta(model.SubscriptionMeta{
+			SourceID:   "source-2",
+			SourceName: "旧名称",
+			Download:   2,
+			Total:      20,
+			FromHeader: true,
+		}),
+	}
+
+	sources := BuildSubscriptionMetaSources(cfg, stored)
+	if len(sources) != 2 {
+		t.Fatalf("len(sources) = %d, want 2", len(sources))
+	}
+	if sources[0].SourceName != "主力机场" || sources[1].SourceName != "备用机场" {
+		t.Fatalf("source names = %#v, want current config names", sources)
+	}
+	if sources[0].Download != 1 || sources[1].Download != 2 {
+		t.Fatalf("source meta values = %#v, want stored usage preserved", sources)
+	}
+}

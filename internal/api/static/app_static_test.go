@@ -46,6 +46,119 @@ func TestLocalDraftDoesNotPersistFullSubscriptionTokenOrURL(t *testing.T) {
 	}
 }
 
+func TestRestoreFromPublishedLinkDoesNotPersistFullPublishedURL(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"restore-from-published",
+		"function restoreWorkspaceFromPublishedLink",
+		"function buildRestoredPublishedDraftPayload",
+		"draftPublishRefFromPublished(published)",
+		"restore-published-url-input",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing restore-from-published marker %q", needle)
+		}
+	}
+
+	payloadStart := strings.Index(app, "function buildRestoredPublishedDraftPayload")
+	payloadEnd := strings.Index(app[payloadStart:], "\n}\n")
+	if payloadStart < 0 || payloadEnd < 0 {
+		t.Fatalf("buildRestoredPublishedDraftPayload function not found")
+	}
+	payloadBody := app[payloadStart : payloadStart+payloadEnd]
+	for _, forbidden := range []string{"subscription_url", ".url", "publishedURL"} {
+		if strings.Contains(payloadBody, forbidden) {
+			t.Fatalf("buildRestoredPublishedDraftPayload persists forbidden %q:\n%s", forbidden, payloadBody)
+		}
+	}
+}
+
+func TestRestoreFromPublishedDoesNotUseBrowserConfirm(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"async function restoreWorkspaceFromPublishedLink",
+		"findLocalDraftByPublishID(response.publish?.publish_id)",
+		"已从订阅链接恢复为新的本机草稿。",
+		"已从订阅链接更新已有本机草稿。",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing restore confirm guard %q", needle)
+		}
+	}
+
+	restoreStart := strings.Index(app, "async function restoreWorkspaceFromPublishedLink")
+	restoreEnd := strings.Index(app[restoreStart:], "\n}\n")
+	if restoreStart < 0 || restoreEnd < 0 {
+		t.Fatalf("restoreWorkspaceFromPublishedLink function not found")
+	}
+	restoreBody := app[restoreStart : restoreStart+restoreEnd]
+	if strings.Contains(restoreBody, "window.confirm") {
+		t.Fatalf("restoreWorkspaceFromPublishedLink should not use browser confirm:\n%s", restoreBody)
+	}
+}
+
+func TestMultipleLocalDraftStorageHooksExist(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"const LOCAL_DRAFTS_STORAGE_KEY = \"SUBCONV_LOCAL_DRAFTS\"",
+		"function loadDraftStore",
+		"function saveLocalDraftPayload",
+		"function loadLocalDrafts",
+		"function renderDraftManager",
+		"draft-manager-dialog",
+		"localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY)",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing multiple-draft hook %q", needle)
+		}
+	}
+
+	if strings.Contains(app, "localStorage.setItem(LOCAL_DRAFT_STORAGE_KEY") {
+		t.Fatalf("app.js should not write new drafts to legacy single-draft key")
+	}
+}
+
+func TestRestoreFromPublishedDedupesByPublishID(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"function findLocalDraftByPublishID",
+		"existingDraft?.draft_id || createLocalDraftID()",
+		"preservedLocalDraftName(existingDraft)",
+		"draftID: existingDraft?.draft_id || draft.draft_id",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing published-link dedupe marker %q", needle)
+		}
+	}
+}
+
+func TestLocalDraftAutoNameFiltersDefaultSourceNames(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"function preservedLocalDraftName",
+		"function isGenericLocalDraftName",
+		"/^source-\\d+$/i.test(value)",
+		"function localDraftSubscriptionLabel",
+		"subscriptionURLHostLabel(item?.url)",
+		"function formatDraftNameTime",
+		"`${baseName} · ${timeLabel}`",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing local-draft naming marker %q", needle)
+		}
+	}
+}
+
 func TestSourceModeIsMutuallyExclusiveInGeneratedConfig(t *testing.T) {
 	app := readAppJS(t)
 
@@ -84,6 +197,23 @@ func TestManualNodeUIStateHooksExist(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {
 			t.Fatalf("app.js missing manual-node hook %q", needle)
+		}
+	}
+}
+
+func TestNodeEditorCacheInvalidatesAfterGenerate(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"nodeCacheStale: false",
+		"if (state.nodeCacheStale || !state.allNodes.length) loadNodes();",
+		"function markNodeCacheStale()",
+		"markNodeCacheStale();",
+		"state.nodeCacheStale = false;",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing node-cache invalidation marker %q", needle)
 		}
 	}
 }

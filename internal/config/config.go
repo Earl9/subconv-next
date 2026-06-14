@@ -159,6 +159,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 	}
 
 	seenSubNames := map[string]int{}
+	seenSubIDs := map[string]struct{}{}
 	for i := range cfg.Subscriptions {
 		sub := &cfg.Subscriptions[i]
 		if strings.TrimSpace(sub.Name) == "" {
@@ -170,6 +171,7 @@ func normalizeConfig(cfg model.Config) model.Config {
 		if strings.TrimSpace(sub.ID) == "" {
 			sub.ID = stableConfigID("sub", sub.Name, sub.URL, i)
 		}
+		sub.ID = uniqueConfigID(strings.TrimSpace(sub.ID), "sub", sub.Name, sub.URL, i, seenSubIDs)
 		if strings.TrimSpace(sub.UserAgent) == "" {
 			sub.UserAgent = model.DefaultUserAgent
 		}
@@ -228,10 +230,15 @@ func Validate(cfg model.Config) error {
 		return fmt.Errorf("service.cache_dir must be an absolute path")
 	}
 
+	seenSubIDs := map[string]struct{}{}
 	for i, sub := range cfg.Subscriptions {
 		if strings.TrimSpace(sub.ID) == "" {
 			return fmt.Errorf("subscriptions[%d].id is required", i)
 		}
+		if _, ok := seenSubIDs[strings.TrimSpace(sub.ID)]; ok {
+			return fmt.Errorf("subscriptions[%d].id must be unique", i)
+		}
+		seenSubIDs[strings.TrimSpace(sub.ID)] = struct{}{}
 		if strings.TrimSpace(sub.Name) == "" {
 			return fmt.Errorf("subscriptions[%d].name is required", i)
 		}
@@ -334,6 +341,26 @@ func stableConfigID(prefix, name, raw string, index int) string {
 		fmt.Sprintf("%d", index),
 	}, "|")))
 	return prefix + "-" + hex.EncodeToString(sum[:])[:12]
+}
+
+func uniqueConfigID(id, prefix, name, raw string, index int, seen map[string]struct{}) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = stableConfigID(prefix, name, raw, index)
+	}
+	if _, ok := seen[id]; !ok {
+		seen[id] = struct{}{}
+		return id
+	}
+
+	for attempt := 0; ; attempt++ {
+		candidate := stableConfigID(prefix, name, fmt.Sprintf("%s|%d", raw, attempt), index)
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		return candidate
+	}
 }
 
 func uniqueDisplayName(raw string, seen map[string]int) string {

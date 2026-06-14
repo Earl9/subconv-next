@@ -93,6 +93,21 @@ func TestRenderGoldenVLESSXHTTPReality(t *testing.T) {
 	}
 }
 
+func TestRenderVLESSXUDPPacketEncoding(t *testing.T) {
+	nodes := mustParseContent(t, []byte("vless://uuid-1@example.com:443?type=tcp&security=tls&sni=example.com&packet_encoding=XUDP&allowInsecure=1#xudp"))
+	got := mustRender(t, nodes, standardRenderOptions())
+	text := string(got)
+	if !strings.Contains(text, "packet-encoding: xudp") {
+		t.Fatalf("rendered output missing packet-encoding xudp:\n%s", text)
+	}
+	if !strings.Contains(text, "skip-cert-verify: true") {
+		t.Fatalf("rendered output missing vless skip-cert-verify:\n%s", text)
+	}
+	if strings.Contains(text, "packet_encoding") {
+		t.Fatalf("rendered output must not contain URI packet_encoding alias:\n%s", text)
+	}
+}
+
 func TestRenderGoldenRuleProvidersBalanced(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()

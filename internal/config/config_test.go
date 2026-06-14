@@ -271,6 +271,37 @@ func TestLoadJSONBytesAppliesEntryDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadJSONBytesDeduplicatesSubscriptionIDs(t *testing.T) {
+	data := []byte(`{
+  "subscriptions": [
+    {
+      "id": "source-1",
+      "name": "main",
+      "url": "https://example.com/a"
+    },
+    {
+      "id": "source-1",
+      "name": "backup",
+      "url": "https://example.com/b"
+    }
+  ]
+}`)
+
+	cfg, err := LoadJSONBytes(data)
+	if err != nil {
+		t.Fatalf("LoadJSONBytes() error = %v", err)
+	}
+	if len(cfg.Subscriptions) != 2 {
+		t.Fatalf("len(Subscriptions) = %d, want 2", len(cfg.Subscriptions))
+	}
+	if cfg.Subscriptions[0].ID != "source-1" {
+		t.Fatalf("Subscriptions[0].ID = %q, want source-1", cfg.Subscriptions[0].ID)
+	}
+	if cfg.Subscriptions[1].ID == "" || cfg.Subscriptions[1].ID == cfg.Subscriptions[0].ID {
+		t.Fatalf("subscription IDs were not deduplicated: %#v", cfg.Subscriptions)
+	}
+}
+
 func TestValidateSubscriptionNameAndURL(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg = Normalize(cfg)
@@ -286,5 +317,13 @@ func TestValidateSubscriptionNameAndURL(t *testing.T) {
 	}
 	if err := Validate(cfg); err == nil {
 		t.Fatalf("Validate() error = nil, want http/https restriction")
+	}
+
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{ID: "sub-1", Name: "main", Enabled: true, URL: "https://example.com/a", UserAgent: model.DefaultUserAgent},
+		{ID: "sub-1", Name: "backup", Enabled: true, URL: "https://example.com/b", UserAgent: model.DefaultUserAgent},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("Validate() error = nil, want duplicate subscription id restriction")
 	}
 }

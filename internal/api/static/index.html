@@ -688,6 +688,47 @@
         </form>
       </dialog>
 
+      <dialog id="draft-manager-dialog" class="modal-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head">
+            <div>
+              <h3>本机草稿</h3>
+              <p class="meta-text">草稿保存在当前浏览器，适合在私人设备上保存多套配置。</p>
+            </div>
+            <button class="icon-button" type="button" data-close-dialog="draft-manager-dialog">×</button>
+          </div>
+          <div id="draft-manager-list" class="draft-manager-list"></div>
+          <div class="modal-actions split-actions">
+            <div class="modal-actions-primary">
+              <button id="save-current-draft-copy-btn" class="secondary-button" type="button">当前配置另存为新草稿</button>
+            </div>
+            <div class="modal-actions-primary">
+              <button class="ghost-button" type="button" data-close-dialog="draft-manager-dialog">关闭</button>
+            </div>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="restore-published-dialog" class="modal-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head">
+            <div>
+              <h3>从订阅链接恢复草稿</h3>
+              <p class="meta-text">粘贴本工具生成的完整订阅链接，恢复后会保存为当前浏览器的本机草稿。</p>
+            </div>
+            <button class="icon-button" type="button" data-close-dialog="restore-published-dialog">×</button>
+          </div>
+          <div class="field">
+            <label for="restore-published-url-input">订阅链接</label>
+            <input id="restore-published-url-input" type="url" placeholder="https://example.com/s/xxxx/mihomo.yaml" autocomplete="off" spellcheck="false" />
+            <p class="field-help">只支持 SubConv Next 发布出的 /s/.../mihomo.yaml 链接，不支持上游机场原始订阅链接。</p>
+          </div>
+          <div class="modal-actions">
+            <button id="apply-restore-published-btn" class="primary-button" type="button">恢复到草稿</button>
+            <button class="ghost-button" type="button" data-close-dialog="restore-published-dialog">取消</button>
+          </div>
+        </form>
+      </dialog>
 
       <div id="toast" class="toast hidden"></div>
     </main>

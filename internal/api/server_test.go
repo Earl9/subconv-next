@@ -2318,6 +2318,145 @@ func TestRestoreDraftBindsPublishAndRefreshKeepsSameLink(t *testing.T) {
 	}
 }
 
+func TestRestoreWorkspaceFromPublishedURLRestoresEditableConfigAndBinding(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{
+			ID:        "source-a",
+			Name:      "private-source",
+			Enabled:   false,
+			URL:       "https://upstream.example/sub?token=secret-token&user=bob",
+			UserAgent: model.DefaultUserAgent,
+		},
+	}
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#restore-from-published"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	workspaceA := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceA), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh A status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	first := decodeRefreshResponse(t, refreshRec)
+
+	refA, err := server.loadWorkspace(workspaceA)
+	if err != nil {
+		t.Fatalf("loadWorkspace(A) error = %v", err)
+	}
+	cfgA, err := server.loadWorkspaceConfig(refA)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig(A) error = %v", err)
+	}
+	if err := pipeline.SaveNodeState(cfgA, model.NodeState{
+		DisabledNodes: []string{"disabled-node"},
+		SubscriptionMeta: map[string]model.SubscriptionMeta{
+			"source-a": {
+				SourceID:   "source-a",
+				SourceName: "private-source",
+				Download:   20,
+				Total:      100,
+				FromHeader: true,
+			},
+		},
+		LastAudit: model.AuditReport{RawCount: 3, FinalCount: 2, ExcludedCount: 1},
+	}); err != nil {
+		t.Fatalf("SaveNodeState(A) error = %v", err)
+	}
+
+	workspaceB := createWorkspaceForTest(t, server, cfg)
+	restoreReqBody, err := json.Marshal(restoreFromPublishedRequest{URL: first.SubscriptionURL})
+	if err != nil {
+		t.Fatalf("marshal restore from published request: %v", err)
+	}
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceB+"/restore-from-published", bytes.NewReader(restoreReqBody))
+	restoreReq.Header.Set("Content-Type", "application/json")
+	restoreRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore from published status code = %d; body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	var restoreBody restoreFromPublishedResponse
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreBody); err != nil {
+		t.Fatalf("decode restore from published response: %v", err)
+	}
+	if restoreBody.Config.Subscriptions[0].URL != cfg.Subscriptions[0].URL {
+		t.Fatalf("restored subscription URL = %q, want original editable URL", restoreBody.Config.Subscriptions[0].URL)
+	}
+	if restoreBody.Publish.PublishID != first.PublishID || restoreBody.Publish.SubscriptionURL != first.SubscriptionURL {
+		t.Fatalf("restore publish = %#v, want original published link", restoreBody.Publish)
+	}
+	if len(restoreBody.NodeState.SubscriptionMeta) != 0 {
+		t.Fatalf("response SubscriptionMeta = %#v, want empty", restoreBody.NodeState.SubscriptionMeta)
+	}
+	if restoreBody.NodeState.LastAudit.RawCount != 0 {
+		t.Fatalf("response LastAudit = %#v, want cleared", restoreBody.NodeState.LastAudit)
+	}
+	if strings.Contains(restoreRec.Body.String(), `"token"`) {
+		t.Fatalf("restore from published response leaked raw publish token field: %s", restoreRec.Body.String())
+	}
+
+	refB, err := server.loadWorkspace(workspaceB)
+	if err != nil {
+		t.Fatalf("loadWorkspace(B) error = %v", err)
+	}
+	if refB.Meta.PublishID != first.PublishID {
+		t.Fatalf("workspace B PublishID = %q, want %q", refB.Meta.PublishID, first.PublishID)
+	}
+	if restoreBody.Config.Service.OutputPath != refB.OutputPath || restoreBody.Config.Service.StatePath != refB.StatePath || restoreBody.Config.Service.CacheDir != refB.CacheDir {
+		t.Fatalf("response service paths = %#v, want workspace B paths", restoreBody.Config.Service)
+	}
+	cfgB, err := server.loadWorkspaceConfig(refB)
+	if err != nil {
+		t.Fatalf("loadWorkspaceConfig(B) error = %v", err)
+	}
+	if cfgB.Service.OutputPath != filepath.Join(server.publishedRootDir(), first.PublishID, "current.yaml") || cfgB.Service.StatePath != refB.StatePath || cfgB.Service.CacheDir != refB.CacheDir {
+		t.Fatalf("runtime service paths = %#v, want published output path and workspace B state/cache paths", cfgB.Service)
+	}
+	stateB, err := pipeline.LoadNodeState(cfgB)
+	if err != nil {
+		t.Fatalf("LoadNodeState(B) error = %v", err)
+	}
+	if len(stateB.SubscriptionMeta) != 0 || stateB.LastAudit.RawCount != 0 {
+		t.Fatalf("workspace B node state = %#v, want subscription metadata and audit cleared", stateB)
+	}
+	if got := strings.Join(stateB.DisabledNodes, ","); got != "disabled-node" {
+		t.Fatalf("workspace B disabled nodes = %q, want restored disabled-node", got)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceB), nil)
+	secondRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("refresh B status code = %d; body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	second := decodeRefreshResponse(t, secondRec)
+	if second.PublishID != first.PublishID || second.SubscriptionURL != first.SubscriptionURL {
+		t.Fatalf("refresh B publish = %#v, want original link %q", second, first.SubscriptionURL)
+	}
+}
+
+func TestRestoreWorkspaceFromPublishedURLRejectsInvalidURL(t *testing.T) {
+	cfg := model.DefaultConfig()
+	server, cfg := newTestServer(t, cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/restore-from-published", bytes.NewBufferString(`{"url":"https://upstream.example/api/v1/client/subscribe?token=abc"}`))
+	restoreReq.Header.Set("Content-Type", "application/json")
+	restoreRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusBadRequest {
+		t.Fatalf("restore invalid URL status code = %d; body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	if !strings.Contains(restoreRec.Body.String(), "INVALID_PUBLISHED_URL") {
+		t.Fatalf("restore invalid URL body = %s, want INVALID_PUBLISHED_URL", restoreRec.Body.String())
+	}
+}
+
 func TestRestoreDraftMissingPublishClearsBinding(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")

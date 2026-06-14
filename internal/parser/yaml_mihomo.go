@@ -164,6 +164,9 @@ func parseMihomoProxy(proxy mihomoYAMLProxy, source model.SourceInfo) (model.Nod
 		node.TLS.Enabled = proxy.TLS || proxy.RealityOpts != nil || strings.TrimSpace(proxy.SNI) != "" || strings.TrimSpace(proxy.ServerName) != ""
 		node.TLS.SNI = firstNonEmpty(strings.TrimSpace(proxy.ServerName), strings.TrimSpace(proxy.SNI))
 		node.TLS.ClientFingerprint = strings.TrimSpace(proxy.ClientFingerprint)
+		if proxy.SkipCertVerify != nil {
+			node.TLS.Insecure = *proxy.SkipCertVerify
+		}
 		setRaw(&node, "encryption", firstNonEmpty(strings.TrimSpace(proxy.Encryption), "none"))
 		setRaw(&node, "packetEncoding", strings.TrimSpace(proxy.PacketEncoding))
 		setRaw(&node, "flow", strings.TrimSpace(proxy.Flow))

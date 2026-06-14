@@ -126,6 +126,18 @@ type restoreDraftResponse struct {
 	Publish     restoreDraftPublishResponse `json:"publish"`
 }
 
+type restoreFromPublishedRequest struct {
+	URL string `json:"url"`
+}
+
+type restoreFromPublishedResponse struct {
+	OK          bool                        `json:"ok"`
+	WorkspaceID string                      `json:"workspace_id"`
+	Config      model.Config                `json:"config"`
+	NodeState   model.NodeState             `json:"node_state"`
+	Publish     restoreDraftPublishResponse `json:"publish"`
+}
+
 type subscriptionMetaSourceResponse struct {
 	SourceID     string  `json:"source_id,omitempty"`
 	SourceName   string  `json:"source_name,omitempty"`
@@ -523,6 +535,10 @@ func (s *Server) handleWorkspaceSubroutes(w http.ResponseWriter, r *http.Request
 		s.handleRestoreWorkspaceDraft(w, r, id)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "restore-from-published" {
+		s.handleRestoreWorkspaceFromPublished(w, r, id)
+		return
+	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
@@ -601,9 +617,7 @@ func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if req.NodeState != nil {
-		state := model.NormalizeNodeState(*req.NodeState)
-		state.SubscriptionMeta = nil
-		state.LastAudit = model.AuditReport{}
+		state := restorableDraftNodeState(*req.NodeState)
 		if err := pipeline.SaveNodeState(cfg, state); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 			return
@@ -634,6 +648,71 @@ func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Requ
 		OK:          true,
 		WorkspaceID: ref.ID,
 		Publish:     publishResp,
+	})
+}
+
+func (s *Server) handleRestoreWorkspaceFromPublished(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req restoreFromPublishedRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	token, ok := publishedTokenFromSubscriptionURL(req.URL)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_PUBLISHED_URL", "published subscription URL is required")
+		return
+	}
+	published, err := s.loadPublishedByToken(token)
+	if err != nil || !publishedRestorable(published) {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
+		return
+	}
+	sourceRef, cfg, nodeState, ok := s.loadPublishedWorkspaceState(published)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "PUBLISHED_WORKSPACE_NOT_FOUND", "published workspace state not found")
+		return
+	}
+	ref, err := s.loadWorkspace(workspaceID)
+	if err != nil {
+		handleWorkspaceError(w, err)
+		return
+	}
+	cfg = config.Normalize(cfg)
+	cfg.Service.OutputPath = ref.OutputPath
+	cfg.Service.StatePath = ref.StatePath
+	cfg.Service.CacheDir = ref.CacheDir
+	if err := config.Validate(cfg); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
+		return
+	}
+	if err := config.WriteJSON(ref.ConfigPath, cfg); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
+		return
+	}
+	nodeState = restorableDraftNodeState(nodeState)
+	if err := pipeline.SaveNodeState(cfg, nodeState); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+		return
+	}
+
+	ref.Meta.PublishID = published.ID
+	ref.Meta.LegacyPublishedToken = ""
+	ref.Meta.LegacyPublishedAt = time.Time{}
+	if err := s.saveWorkspaceMeta(ref); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "WORKSPACE_RESTORE_FAILED", err.Error())
+		return
+	}
+	s.appendWorkspaceLog(ref.Hash, "workspace restored from published subscription: publish="+published.ID+" source_workspace="+sourceRef.ID)
+	writeJSON(w, http.StatusOK, restoreFromPublishedResponse{
+		OK:          true,
+		WorkspaceID: ref.ID,
+		Config:      cfg,
+		NodeState:   nodeState,
+		Publish:     restoreDraftPublishedStatus(r, s.publishedStatus(r, published)),
 	})
 }
 
@@ -762,6 +841,13 @@ func publishedRestorable(published publishedRef) bool {
 		return false
 	}
 	return true
+}
+
+func restorableDraftNodeState(state model.NodeState) model.NodeState {
+	state = model.NormalizeNodeState(state)
+	state.SubscriptionMeta = nil
+	state.LastAudit = model.AuditReport{}
+	return state
 }
 
 func handleWorkspaceError(w http.ResponseWriter, err error) {

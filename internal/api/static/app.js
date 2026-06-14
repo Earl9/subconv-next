@@ -534,6 +534,7 @@ const MASKED_SECRET = "********";
 const YAML_PREVIEW_LINE_LIMIT = 500;
 const DEFAULT_SOURCE_USER_AGENT = "clash.meta";
 const LOCAL_DRAFT_STORAGE_KEY = "SUBCONV_LOCAL_DRAFT";
+const LOCAL_DRAFTS_STORAGE_KEY = "SUBCONV_LOCAL_DRAFTS";
 const SOURCE_EMOJI_OPTIONS = [
   "🦉",
   "🎶",
@@ -571,6 +572,7 @@ const state = {
   workspaceExpiresAt: "",
   draftMode: "privacy",
   hasLocalDraft: false,
+  activeLocalDraftId: "",
   localDraftMeta: null,
   localDraftPayload: null,
   generateStatus: "idle",
@@ -603,6 +605,7 @@ const state = {
   allNodes: [],
   filteredNodes: [],
   nodes: [],
+  nodeCacheStale: false,
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
   nodeSourceOptions: [],
   selectedNodeIds: new Set(),
@@ -652,6 +655,8 @@ function decorateButtons() {
     ["workspace-tab-diagnostics", "terminal"],
     ["add-subscription-btn", "link"],
     ["open-batch-import-btn", "import"],
+    ["apply-restore-published-btn", "import"],
+    ["save-current-draft-copy-btn", "save"],
     ["add-inline-btn", "nodes"],
     ["toggle-rule-chips-btn", "list"],
     ["open-node-editor-btn", "nodes"],
@@ -752,6 +757,22 @@ function bindEvents() {
   document
     .getElementById("apply-batch-import-btn")
     .addEventListener("click", applyBatchImport);
+  document
+    .getElementById("apply-restore-published-btn")
+    .addEventListener("click", restoreWorkspaceFromPublishedLink);
+  document
+    .getElementById("restore-published-url-input")
+    .addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      restoreWorkspaceFromPublishedLink();
+    });
+  document
+    .getElementById("draft-manager-list")
+    .addEventListener("click", handleDraftManagerAction);
+  document
+    .getElementById("save-current-draft-copy-btn")
+    .addEventListener("click", () => persistLocalDraft(false));
   document.getElementById("add-inline-btn").addEventListener("click", addInlineEntry);
   document
     .getElementById("manual-nodes-enabled")
@@ -1041,7 +1062,7 @@ function switchWorkspace(workspace) {
   if (workspace === "yaml") {
     loadYamlPreview();
   } else if (workspace === "nodes") {
-    if (!state.allNodes.length) loadNodes();
+    if (state.nodeCacheStale || !state.allNodes.length) loadNodes();
   } else if (workspace === "diagnostics") {
     refreshDiagnostics();
   }
@@ -1080,6 +1101,7 @@ function applyDefaultState() {
   state.workspaceExpiresAt = "";
   state.draftMode = "privacy";
   state.hasLocalDraft = false;
+  state.activeLocalDraftId = "";
   state.localDraftMeta = null;
   state.localDraftPayload = null;
   state.generateStatus = "idle";
@@ -1105,6 +1127,7 @@ function applyDefaultState() {
   state.manualNodesEnabled = true;
   state.allNodes = [];
   state.filteredNodes = [];
+  state.nodeCacheStale = false;
   state.subscriptionMeta = { aggregate: null, sources: [] };
   state.nodeFilters = {
     q: "",
@@ -1170,21 +1193,26 @@ function renderSessionBanner() {
 
   const mode = state.draftMode || "privacy";
   const meta = state.localDraftMeta;
+  const draftCount = loadLocalDrafts().length;
   let title = "当前模式：隐私会话";
   let description = "刷新页面后不会自动保留配置。";
   let metaLine = "默认不会自动保存或自动恢复配置。";
   let buttons = `
     <button id="save-local-draft-btn" class="ghost-button small-button" type="button">保存为本机草稿</button>
+    ${draftCount ? '<button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>' : ""}
+    <button id="restore-published-link-btn" class="secondary-button small-button" type="button">从订阅链接恢复</button>
     <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
   `;
 
   if (mode === "draft_detected") {
-    title = "发现本机草稿";
-    description = "这是之前手动保存到本机浏览器的配置，是否恢复？";
+    title = draftCount > 1 ? `发现 ${draftCount} 个本机草稿` : "发现本机草稿";
+    description = draftCount > 1 ? "可恢复最近更新的草稿，或打开管理器选择。" : "这是之前手动保存到本机浏览器的配置，是否恢复？";
     metaLine = formatDraftMetaLine(meta);
     buttons = `
-      <button id="restore-draft-btn" class="secondary-button small-button" type="button">恢复草稿</button>
-      <button id="discard-draft-btn" class="ghost-button small-button" type="button">丢弃草稿</button>
+      <button id="restore-draft-btn" class="secondary-button small-button" type="button">${draftCount > 1 ? "恢复最近草稿" : "恢复草稿"}</button>
+      <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
+      <button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>
+      <button id="discard-draft-btn" class="ghost-button small-button" type="button">删除当前草稿</button>
     `;
   } else if (mode === "local_draft") {
     title = "当前模式：本机草稿";
@@ -1192,6 +1220,9 @@ function renderSessionBanner() {
     metaLine = formatDraftMetaLine(meta);
     buttons = `
       <button id="update-local-draft-btn" class="secondary-button small-button" type="button">更新本机草稿</button>
+      <button id="save-local-draft-btn" class="ghost-button small-button" type="button">另存为新草稿</button>
+      <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
+      <button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>
       <button id="exit-draft-mode-btn" class="ghost-button small-button" type="button">退出草稿模式</button>
       <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
     `;
@@ -1216,11 +1247,17 @@ function renderSessionBanner() {
     .getElementById("update-local-draft-btn")
     ?.addEventListener("click", updateLocalDraft);
   document
+    .getElementById("manage-local-drafts-btn")
+    ?.addEventListener("click", openDraftManagerDialog);
+  document
     .getElementById("clear-session-btn")
     ?.addEventListener("click", clearCurrentSession);
   document
     .getElementById("restore-draft-btn")
     ?.addEventListener("click", restoreLocalDraft);
+  document
+    .getElementById("restore-published-link-btn")
+    ?.addEventListener("click", openRestorePublishedDialog);
   document
     .getElementById("discard-draft-btn")
     ?.addEventListener("click", discardLocalDraft);
@@ -1236,11 +1273,15 @@ function formatDraftMetaLine(meta) {
   const savedAt = formatDraftDateTime(meta.saved_at);
   const updatedAt = formatDraftDateTime(meta.updated_at);
   const sourceCount = Number.parseInt(meta.source_count, 10) || 0;
+  const draftName = String(meta.draft_name || "").trim();
+  const draftCount = Number.parseInt(meta.draft_count, 10) || 0;
+  const prefix = draftName ? `${draftName} · ` : "";
+  const suffix = draftCount > 1 ? ` · 共 ${draftCount} 个草稿` : "";
   if (savedAt && updatedAt && savedAt !== updatedAt) {
-    return `首次保存 ${savedAt} · 最近更新 ${updatedAt} · 来源 ${sourceCount} 个`;
+    return `${prefix}首次保存 ${savedAt} · 最近更新 ${updatedAt} · 来源 ${sourceCount} 个${suffix}`;
   }
   if (updatedAt) {
-    return `最近更新 ${updatedAt} · 来源 ${sourceCount} 个`;
+    return `${prefix}最近更新 ${updatedAt} · 来源 ${sourceCount} 个${suffix}`;
   }
   return `本机草稿会保存订阅地址，请仅在私人设备上使用。`;
 }
@@ -1281,6 +1322,7 @@ function snapshotDraftState() {
   return {
     draftMode: state.draftMode,
     hasLocalDraft: state.hasLocalDraft,
+    activeLocalDraftId: state.activeLocalDraftId,
     localDraftMeta: state.localDraftMeta
       ? deepClone(state.localDraftMeta)
       : null,
@@ -1294,6 +1336,7 @@ function restoreDraftState(snapshot) {
   if (!snapshot) return;
   state.draftMode = snapshot.draftMode || "privacy";
   state.hasLocalDraft = Boolean(snapshot.hasLocalDraft);
+  state.activeLocalDraftId = snapshot.activeLocalDraftId || "";
   state.localDraftMeta = snapshot.localDraftMeta
     ? deepClone(snapshot.localDraftMeta)
     : null;
@@ -1306,10 +1349,14 @@ function applyDraftState(mode, payload) {
   state.draftMode = mode;
   if (payload) {
     state.hasLocalDraft = true;
+    state.activeLocalDraftId = payload.draft_id || state.activeLocalDraftId || "";
     state.localDraftPayload = deepClone(payload);
     state.localDraftMeta = {
+      draft_id: payload.draft_id || "",
+      draft_name: payload.draft_name || "",
       saved_at: payload.saved_at || "",
       updated_at: payload.updated_at || payload.saved_at || "",
+      draft_count: loadLocalDrafts().length,
       source_count: Number(
         payload.source_count || countDraftSources(payload.config) || 0,
       ),
@@ -1317,8 +1364,114 @@ function applyDraftState(mode, payload) {
     return;
   }
   state.hasLocalDraft = false;
+  state.activeLocalDraftId = "";
   state.localDraftPayload = null;
   state.localDraftMeta = null;
+}
+
+function openDraftManagerDialog() {
+  renderDraftManager();
+  const dialog = document.getElementById("draft-manager-dialog");
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+}
+
+function renderDraftManager() {
+  const list = document.getElementById("draft-manager-list");
+  if (!list) return;
+  const drafts = loadLocalDrafts();
+  if (!drafts.length) {
+    list.innerHTML = `
+      <div class="draft-empty-state">
+        <strong>暂无本机草稿</strong>
+        <span>可将当前配置另存为新草稿，或从订阅链接恢复。</span>
+      </div>
+    `;
+    return;
+  }
+  list.innerHTML = drafts
+    .map((draft) => {
+      const isActive = draft.draft_id === state.activeLocalDraftId;
+      const sourceCount = Number.parseInt(draft.source_count, 10) || 0;
+      const updatedAt = formatDraftDateTime(draft.updated_at);
+      const publishHint = draft.publish_ref?.token_hint
+        ? ` · 发布 ${draft.publish_ref.token_hint}`
+        : "";
+      return `
+        <article class="draft-item ${isActive ? "active" : ""}">
+          <div class="draft-item-main">
+            <input class="draft-name-input" data-draft-name-input="${escapeHtml(draft.draft_id)}" value="${escapeHtml(draft.draft_name || "本机草稿")}" />
+            <div class="draft-item-meta">
+              ${escapeHtml(updatedAt || "未知时间")} · 来源 ${sourceCount} 个${escapeHtml(publishHint)}
+            </div>
+          </div>
+          <div class="draft-item-actions">
+            <button class="ghost-button tiny-button" type="button" data-draft-action="rename" data-draft-id="${escapeHtml(draft.draft_id)}">重命名</button>
+            <button class="secondary-button tiny-button" type="button" data-draft-action="restore" data-draft-id="${escapeHtml(draft.draft_id)}">${isActive ? "重新恢复" : "恢复"}</button>
+            <button class="danger-ghost-button tiny-button" type="button" data-draft-action="delete" data-draft-id="${escapeHtml(draft.draft_id)}">删除</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function handleDraftManagerAction(event) {
+  const button = event.target.closest("[data-draft-action]");
+  if (!button) return;
+  const draftID = String(button.dataset.draftId || "").trim();
+  if (!draftID) return;
+  const action = button.dataset.draftAction;
+  if (action === "restore") {
+    void restoreLocalDraft(draftID);
+    return;
+  }
+  if (action === "delete") {
+    deleteLocalDraftFromManager(draftID);
+    return;
+  }
+  if (action === "rename") {
+    const input = document.querySelector(
+      `[data-draft-name-input="${CSS.escape(draftID)}"]`,
+    );
+    renameLocalDraft(draftID, input?.value || "");
+  }
+}
+
+function deleteLocalDraftFromManager(draftID) {
+  const deletingActive = draftID === state.activeLocalDraftId;
+  const nextDraft = clearLocalDraft(draftID);
+  if (deletingActive) {
+    applyDraftState(nextDraft ? "draft_detected" : "privacy", nextDraft);
+  } else if (state.localDraftMeta) {
+    state.localDraftMeta.draft_count = loadLocalDrafts().length;
+  }
+  renderSessionBanner();
+  renderDraftManager();
+  showToast("本机草稿已删除。");
+}
+
+function renameLocalDraft(draftID, name) {
+  const draftName = String(name || "").trim();
+  if (!draftName) {
+    showToast("草稿名称不能为空。", true);
+    return;
+  }
+  const store = loadDraftStore();
+  const draft = store.drafts.find((item) => item.draft_id === draftID);
+  if (!draft) {
+    showToast("未找到要重命名的草稿。", true);
+    return;
+  }
+  draft.draft_name = draftName;
+  saveDraftStore(store);
+  if (state.activeLocalDraftId === draftID) {
+    state.localDraftPayload = { ...(state.localDraftPayload || {}), draft_name: draftName };
+    state.localDraftMeta = { ...(state.localDraftMeta || {}), draft_name: draftName };
+    renderSessionBanner();
+  }
+  renderDraftManager();
+  showToast("草稿名称已更新。");
 }
 
 function draftPublishRefFromPublished(published) {
@@ -1365,8 +1518,8 @@ function applyPublishedStatus(response) {
   return true;
 }
 
-async function restoreLocalDraft() {
-  const draft = loadLocalDraft();
+async function restoreLocalDraft(id = "") {
+  const draft = loadLocalDraft(id);
   if (!draft?.config) {
     applyDraftState("privacy", null);
     renderSessionBanner();
@@ -1387,8 +1540,10 @@ async function restoreLocalDraft() {
   if (!restoreResult?.ok) return;
   state.config = backendConfig;
   fillFormFromConfig(restoredConfig);
+  activateLocalDraft(draft.draft_id);
   applyDraftState("local_draft", draft);
   renderSessionBanner();
+  closeDialog("draft-manager-dialog");
   const restoredPublished = applyRestoreDraftPublish(restoreResult.publish);
   const missingPublished = Boolean(
     draft.publish_ref?.publish_id && !restoreResult.publish?.exists,
@@ -1411,6 +1566,134 @@ async function restoreLocalDraft() {
       ? "已恢复本机草稿。原订阅发布已不存在，需要重新生成订阅链接。"
       : "已恢复本机草稿。",
     missingPublished,
+  );
+}
+
+function openRestorePublishedDialog() {
+  setValue("restore-published-url-input", "");
+  const dialog = document.getElementById("restore-published-dialog");
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => {
+    document.getElementById("restore-published-url-input")?.focus();
+  });
+}
+
+async function restoreWorkspaceFromPublishedLink() {
+  const publishedURL = getValue("restore-published-url-input").trim();
+  if (!publishedURL) {
+    showToast("请粘贴本工具生成的完整订阅链接。", true);
+    return;
+  }
+
+  if (!state.workspaceId) {
+    const created = await createNewWorkspace({ preserveDraftState: true });
+    if (!created) return;
+  }
+
+  const button = document.getElementById("apply-restore-published-btn");
+  if (button) {
+    button.disabled = true;
+    setButtonIconText(button, "恢复中");
+  }
+
+  try {
+    const response = await fetchJSON(
+      `/api/workspaces/${encodeURIComponent(state.workspaceId)}/restore-from-published`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: publishedURL }),
+      },
+    );
+    if (!response?.ok || !response.config) {
+      showToast(
+        readAPIError(response) || "恢复失败，请确认链接是本工具生成的订阅链接。",
+        true,
+      );
+      return;
+    }
+
+    const restoredConfig = response.config;
+    const restoredNodeState = sanitizeLocalDraftNodeState(response.node_state);
+    state.config = restoredConfig;
+    fillFormFromConfig(restoredConfig);
+
+    const existingDraft = findLocalDraftByPublishID(response.publish?.publish_id);
+    const draft = buildRestoredPublishedDraftPayload(
+      restoredConfig,
+      restoredNodeState,
+      response.publish,
+      existingDraft,
+    );
+    const savedDraft = saveLocalDraftPayload(draft, {
+      draftID: existingDraft?.draft_id || draft.draft_id,
+    });
+    applyDraftState("local_draft", savedDraft || draft);
+    renderSessionBanner();
+    applyRestoreDraftPublish(response.publish);
+    markNodeCacheStale();
+    closeDialog("restore-published-dialog");
+    setValue("restore-published-url-input", "");
+
+    await Promise.all([loadStatus(), loadSubscriptionMeta(), loadAudit()]);
+    await loadNodes();
+    updateSummary();
+    renderDiagnostics();
+    showToast(
+      existingDraft
+        ? "已从订阅链接更新已有本机草稿。"
+        : "已从订阅链接恢复为新的本机草稿。",
+    );
+  } finally {
+    if (button) {
+      button.disabled = false;
+      setButtonIconText(button, "恢复到草稿");
+    }
+  }
+}
+
+function buildRestoredPublishedDraftPayload(
+  config,
+  nodeState,
+  published,
+  existingDraft = null,
+) {
+  const now = new Date().toISOString();
+  const draftConfig = sanitizeLocalDraftConfig(config);
+  draftConfig.client_type = getValue("client-type") || "mihomo";
+  draftConfig.backend_url = normalizeBackendOrigin(
+    getValue("backend-origin") || window.location.origin,
+  );
+  const payload = {
+    version: 2,
+    draft_id: existingDraft?.draft_id || createLocalDraftID(),
+    draft_name:
+      preservedLocalDraftName(existingDraft) ||
+      defaultLocalDraftName(draftConfig, "订阅链接恢复", { time: now }),
+    saved_at: existingDraft?.saved_at || now,
+    updated_at: now,
+    source_count: countDraftSources(draftConfig),
+    config: draftConfig,
+  };
+  if (nodeState) {
+    payload.node_state = nodeState;
+  }
+  const publishRef = draftPublishRefFromPublished(published);
+  if (publishRef) {
+    payload.publish_ref = publishRef;
+  }
+  return payload;
+}
+
+function findLocalDraftByPublishID(publishID) {
+  const targetPublishID = String(publishID || "").trim();
+  if (!targetPublishID) return null;
+  return (
+    loadLocalDrafts().find(
+      (draft) =>
+        String(draft.publish_ref?.publish_id || "").trim() === targetPublishID,
+    ) || null
   );
 }
 
@@ -1463,14 +1746,15 @@ function applyRestoreDraftPublish(publish) {
 }
 
 async function discardLocalDraft() {
-  clearLocalDraft();
+  const nextDraft = clearLocalDraft();
   await deleteCurrentWorkspace();
   const created = await createNewWorkspace({ preserveDraftState: false });
   if (!created) return;
-  applyDraftState("privacy", null);
+  applyDraftState(nextDraft ? "draft_detected" : "privacy", nextDraft);
   renderSessionBanner();
   await reloadWorkspaceData();
-  showToast("已丢弃本机草稿。");
+  renderDraftManager();
+  showToast(nextDraft ? "已删除当前草稿，可继续恢复其它草稿。" : "已删除本机草稿。");
 }
 
 function saveLocalDraft() {
@@ -1486,7 +1770,7 @@ async function persistLocalDraft(isUpdate, options = {}) {
     showToast("当前没有可保存的会话。", true);
     return;
   }
-  const existing = loadLocalDraft();
+  const existing = isUpdate ? loadLocalDraft() : null;
   const now = new Date().toISOString();
   const config = sanitizeLocalDraftConfig(buildConfigFromForm());
   config.client_type = getValue("client-type") || "mihomo";
@@ -1496,6 +1780,14 @@ async function persistLocalDraft(isUpdate, options = {}) {
   const nodeState = await loadNodeStateDraft();
   const payload = {
     version: 2,
+    draft_id:
+      isUpdate && existing?.draft_id
+        ? existing.draft_id
+        : createLocalDraftID(),
+    draft_name:
+      options.name ||
+      (isUpdate ? preservedLocalDraftName(existing) : "") ||
+      defaultLocalDraftName(config, "本机草稿", { time: now }),
     saved_at: existing?.saved_at || now,
     updated_at: now,
     source_count: countDraftSources(config),
@@ -1509,41 +1801,26 @@ async function persistLocalDraft(isUpdate, options = {}) {
   if (publishRef) {
     payload.publish_ref = publishRef;
   }
-  localStorage.setItem(LOCAL_DRAFT_STORAGE_KEY, JSON.stringify(payload));
-  applyDraftState("local_draft", payload);
+  const savedDraft = saveLocalDraftPayload(payload, {
+    draftID: isUpdate ? payload.draft_id : "",
+  });
+  applyDraftState("local_draft", savedDraft || payload);
   renderSessionBanner();
+  renderDraftManager();
   if (!options.silent) {
     showToast(
       isUpdate
         ? "本机草稿已更新。"
-        : "已保存为本机草稿。草稿会保存当前配置，但不会保存完整私密订阅 token。",
+        : "已另存为新的本机草稿。草稿会保存当前配置，但不会保存完整私密订阅 token。",
     );
   }
 }
 
 async function exitDraftMode() {
-  let keepDraft = true;
-  if (state.hasLocalDraft) {
-    const shouldDeleteDraft = window.confirm(
-      "是否删除本机草稿？\n选择“确定”将删除，选择“取消”则保留。",
-    );
-    if (shouldDeleteDraft) {
-      clearLocalDraft();
-      keepDraft = false;
-    }
-  }
-  if (keepDraft) {
-    const payload = loadLocalDraft();
-    applyDraftState("privacy", payload);
-  } else {
-    applyDraftState("privacy", null);
-  }
+  const payload = loadLocalDraft();
+  applyDraftState("privacy", payload);
   renderSessionBanner();
-  showToast(
-    keepDraft
-      ? "已退出草稿模式，本机草稿已保留。"
-      : "已退出草稿模式，并删除本机草稿。",
-  );
+  showToast("已退出草稿模式，本机草稿已保留。");
 }
 
 async function clearCurrentSession() {
@@ -1552,16 +1829,7 @@ async function clearCurrentSession() {
     currentMode === "draft_detected" ? "draft_detected" : "privacy";
   let nextDraftPayload = loadLocalDraft();
   if (currentMode === "local_draft" && state.hasLocalDraft) {
-    const shouldDeleteDraft = window.confirm(
-      "是否同时删除本机草稿？\n选择“确定”将删除草稿，选择“取消”则仅清空当前会话。",
-    );
-    if (shouldDeleteDraft) {
-      clearLocalDraft();
-      nextDraftPayload = null;
-      nextMode = "privacy";
-    } else {
-      nextMode = nextDraftPayload ? "draft_detected" : "privacy";
-    }
+    nextMode = nextDraftPayload ? "draft_detected" : "privacy";
   }
   await deleteCurrentWorkspace();
   sessionStorage.clear();
@@ -1592,44 +1860,324 @@ async function reloadWorkspaceData() {
   renderDiagnostics();
 }
 
-function loadLocalDraft() {
+function loadLocalDraft(id = "") {
+  const store = loadDraftStore();
+  const draftID = String(id || state.activeLocalDraftId || store.active_id || "").trim();
+  let draft = draftID
+    ? store.drafts.find((item) => item.draft_id === draftID)
+    : null;
+  if (!draft) {
+    draft = latestLocalDraft(store);
+  }
+  return draft ? deepClone(draft) : null;
+}
+
+function loadLocalDrafts() {
+  return sortedLocalDrafts(loadDraftStore().drafts).map((item) =>
+    deepClone(item),
+  );
+}
+
+function loadDraftStore() {
+  let store = readDraftStore();
+  const legacyDraft = loadLegacyLocalDraft();
+  if (legacyDraft && !store.drafts.length) {
+    const migrated = normalizeLocalDraftPayload({
+      ...legacyDraft,
+      draft_id: legacyDraft.draft_id || createLocalDraftID(),
+      draft_name:
+        legacyDraft.draft_name ||
+        defaultLocalDraftName(legacyDraft.config, "迁移草稿"),
+    });
+    if (migrated) {
+      store = {
+        version: 1,
+        active_id: migrated.draft_id,
+        drafts: [migrated],
+      };
+      saveDraftStore(store);
+    }
+  }
+  if (legacyDraft) {
+    localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+  }
+  return store;
+}
+
+function readDraftStore() {
+  const fallback = { version: 1, active_id: "", drafts: [] };
+  const raw = localStorage.getItem(LOCAL_DRAFTS_STORAGE_KEY);
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    const drafts = (Array.isArray(parsed?.drafts) ? parsed.drafts : [])
+      .map((item) => normalizeLocalDraftPayload(item))
+      .filter(Boolean);
+    const activeID = String(parsed?.active_id || "").trim();
+    return {
+      version: 1,
+      active_id: drafts.some((item) => item.draft_id === activeID)
+        ? activeID
+        : latestLocalDraft({ drafts })?.draft_id || "",
+      drafts,
+    };
+  } catch (error) {
+    localStorage.removeItem(LOCAL_DRAFTS_STORAGE_KEY);
+    return fallback;
+  }
+}
+
+function loadLegacyLocalDraft() {
   const raw = localStorage.getItem(LOCAL_DRAFT_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      !parsed.config ||
-      typeof parsed.config !== "object"
-    ) {
-      throw new Error("invalid local draft");
-    }
-    return parsed;
+    return normalizeLocalDraftPayload(JSON.parse(raw));
   } catch (error) {
     localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
     return null;
   }
 }
 
-function clearLocalDraft() {
+function saveDraftStore(store) {
+  const drafts = (Array.isArray(store?.drafts) ? store.drafts : [])
+    .map((item) => normalizeLocalDraftPayload(item))
+    .filter(Boolean);
+  const activeID = String(store?.active_id || "").trim();
+  const nextStore = {
+    version: 1,
+    active_id: drafts.some((item) => item.draft_id === activeID)
+      ? activeID
+      : latestLocalDraft({ drafts })?.draft_id || "",
+    drafts: sortedLocalDrafts(drafts),
+  };
+  localStorage.setItem(LOCAL_DRAFTS_STORAGE_KEY, JSON.stringify(nextStore));
   localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+  return nextStore;
+}
+
+function saveLocalDraftPayload(payload, options = {}) {
+  const store = loadDraftStore();
+  const existingID = String(options.draftID || payload?.draft_id || "").trim();
+  const draftID = existingID || createLocalDraftID();
+  const existing = store.drafts.find((item) => item.draft_id === draftID);
+  const draft = normalizeLocalDraftPayload({
+    ...payload,
+    draft_id: draftID,
+    draft_name:
+      options.name ||
+      preservedLocalDraftName(payload) ||
+      preservedLocalDraftName(existing) ||
+      defaultLocalDraftName(payload?.config, "本机草稿", {
+        time: payload?.updated_at || payload?.saved_at,
+      }),
+    saved_at: payload?.saved_at || existing?.saved_at || new Date().toISOString(),
+  });
+  if (!draft) return null;
+  const index = store.drafts.findIndex((item) => item.draft_id === draft.draft_id);
+  if (index >= 0) {
+    store.drafts[index] = draft;
+  } else {
+    store.drafts.push(draft);
+  }
+  if (options.activate !== false) {
+    store.active_id = draft.draft_id;
+  }
+  saveDraftStore(store);
+  return deepClone(draft);
+}
+
+function clearLocalDraft(id = "") {
+  const store = loadDraftStore();
+  const draftID = String(id || state.activeLocalDraftId || store.active_id || "").trim();
+  if (!draftID) return null;
+  const nextDrafts = store.drafts.filter((item) => item.draft_id !== draftID);
+  const nextStore = saveDraftStore({
+    version: 1,
+    active_id:
+      store.active_id === draftID
+        ? latestLocalDraft({ drafts: nextDrafts })?.draft_id || ""
+        : store.active_id,
+    drafts: nextDrafts,
+  });
+  return latestLocalDraft(nextStore);
+}
+
+function activateLocalDraft(id) {
+  const draftID = String(id || "").trim();
+  if (!draftID) return null;
+  const store = loadDraftStore();
+  const draft = store.drafts.find((item) => item.draft_id === draftID);
+  if (!draft) return null;
+  saveDraftStore({ ...store, active_id: draftID });
+  state.activeLocalDraftId = draftID;
+  return deepClone(draft);
 }
 
 function removeLocalDraftPublishRef(publishID) {
-  const draft = loadLocalDraft();
-  if (!draft?.publish_ref) return;
+  const targetPublishID = String(publishID || "").trim();
+  const store = loadDraftStore();
+  let changed = false;
+  const drafts = store.drafts.map((draft) => {
+    const draftPublishID = String(draft.publish_ref?.publish_id || "").trim();
+    if (!draft.publish_ref || (targetPublishID && draftPublishID !== targetPublishID)) {
+      return draft;
+    }
+    changed = true;
+    const next = deepClone(draft);
+    delete next.publish_ref;
+    next.updated_at = new Date().toISOString();
+    return next;
+  });
+  if (!changed) return;
+  saveDraftStore({ ...store, drafts });
   if (
-    publishID &&
-    String(draft.publish_ref.publish_id || "").trim() !== String(publishID).trim()
+    state.localDraftPayload?.publish_ref &&
+    (!targetPublishID ||
+      String(state.localDraftPayload.publish_ref.publish_id || "").trim() ===
+        targetPublishID)
   ) {
-    return;
-  }
-  delete draft.publish_ref;
-  draft.updated_at = new Date().toISOString();
-  localStorage.setItem(LOCAL_DRAFT_STORAGE_KEY, JSON.stringify(draft));
-  if (state.localDraftPayload) {
     delete state.localDraftPayload.publish_ref;
+  }
+}
+
+function normalizeLocalDraftPayload(payload) {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !payload.config ||
+    typeof payload.config !== "object"
+  ) {
+    return null;
+  }
+  const now = new Date().toISOString();
+  const draft = deepClone(payload);
+  draft.version = Number.parseInt(draft.version, 10) || 2;
+  draft.draft_id = String(draft.draft_id || "").trim() || createLocalDraftID();
+  draft.draft_name =
+    preservedLocalDraftName(draft) ||
+    defaultLocalDraftName(draft.config, "本机草稿", {
+      time: draft.updated_at || draft.saved_at,
+    });
+  draft.saved_at = String(draft.saved_at || draft.updated_at || now);
+  draft.updated_at = String(draft.updated_at || draft.saved_at || now);
+  draft.source_count = Number(
+    draft.source_count || countDraftSources(draft.config) || 0,
+  );
+  return draft;
+}
+
+function sortedLocalDrafts(drafts) {
+  return [...(Array.isArray(drafts) ? drafts : [])].sort((a, b) => {
+    const at = new Date(a?.updated_at || a?.saved_at || 0).getTime() || 0;
+    const bt = new Date(b?.updated_at || b?.saved_at || 0).getTime() || 0;
+    return bt - at;
+  });
+}
+
+function latestLocalDraft(store) {
+  return sortedLocalDrafts(store?.drafts || [])[0] || null;
+}
+
+function createLocalDraftID() {
+  if (window.crypto?.randomUUID) {
+    return `draft_${window.crypto.randomUUID()}`;
+  }
+  return `draft_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
+function defaultLocalDraftName(config, fallback = "本机草稿", options = {}) {
+  const baseName = localDraftSourceLabel(config, fallback);
+  if (options.includeTime === false) return baseName;
+  const timeLabel = formatDraftNameTime(options.time || new Date());
+  return timeLabel ? `${baseName} · ${timeLabel}` : baseName;
+}
+
+function preservedLocalDraftName(draft) {
+  const name = String(draft?.draft_name || "").trim();
+  if (!name || isGenericLocalDraftName(name)) return "";
+  return name;
+}
+
+function isGenericLocalDraftName(name) {
+  const value = String(name || "").trim();
+  return (
+    !value ||
+    /^source-\d+$/i.test(value) ||
+    /^manual-\d+$/i.test(value) ||
+    /^手动节点\s*\d*$/i.test(value) ||
+    ["本机草稿", "订阅链接恢复", "迁移草稿"].includes(value)
+  );
+}
+
+function localDraftSourceLabel(config, fallback) {
+  const subscriptions = Array.isArray(config?.subscriptions)
+    ? config.subscriptions
+    : [];
+  const subscriptionLabels = subscriptions
+    .map((item) => localDraftSubscriptionLabel(item))
+    .filter(Boolean);
+  if (subscriptionLabels.length > 1) {
+    return `${subscriptionLabels.slice(0, 2).join(" + ")} 等 ${subscriptionLabels.length} 个订阅源`;
+  }
+  if (subscriptionLabels.length === 1) {
+    const inlineCount = countInlineDraftSources(config);
+    return inlineCount > 0
+      ? `${subscriptionLabels[0]} + ${inlineCount} 个手动节点`
+      : subscriptionLabels[0];
+  }
+
+  const inlineEntries = Array.isArray(config?.inline) ? config.inline : [];
+  const inlineLabels = inlineEntries
+    .map((item) => localDraftInlineLabel(item))
+    .filter(Boolean);
+  if (inlineLabels.length > 1) {
+    return `${inlineLabels[0]} 等 ${inlineLabels.length} 个手动节点`;
+  }
+  if (inlineLabels.length === 1) {
+    return inlineLabels[0];
+  }
+  return fallback;
+}
+
+function localDraftSubscriptionLabel(item) {
+  const name = meaningfulDraftLabel(item?.name);
+  if (name) return name;
+  const host = subscriptionURLHostLabel(item?.url);
+  if (host) return host;
+  return meaningfulDraftLabel(item?.id);
+}
+
+function localDraftInlineLabel(item) {
+  return (
+    meaningfulDraftLabel(item?.name) ||
+    meaningfulDraftLabel(item?.id) ||
+    "手动节点草稿"
+  );
+}
+
+function meaningfulDraftLabel(value) {
+  const label = String(value || "").trim();
+  return isGenericLocalDraftName(label) ? "" : label;
+}
+
+function countInlineDraftSources(config) {
+  return Array.isArray(config?.inline)
+    ? config.inline.filter((item) => String(item?.content || "").trim()).length
+    : 0;
+}
+
+function formatDraftNameTime(value) {
+  const formatted = formatChinaDateTime(value, { seconds: false, fallback: "" });
+  return formatted.length > 5 ? formatted.slice(5) : formatted;
+}
+
+function subscriptionURLHostLabel(rawURL) {
+  try {
+    return new URL(String(rawURL || "")).hostname || "";
+  } catch {
+    return "";
   }
 }
 
@@ -2519,11 +3067,44 @@ async function ensureSubscriptionLogos() {
   await Promise.all(tasks);
 }
 
+function normalizeSourceID(value) {
+  return String(value || "").trim();
+}
+
+function nextSubscriptionIDFromSet(used, start = 1) {
+  let index = Math.max(1, start);
+  while (used.has(`source-${index}`)) {
+    index += 1;
+  }
+  return `source-${index}`;
+}
+
+function nextSubscriptionID(existing = state.subscriptions) {
+  const used = new Set(
+    (Array.isArray(existing) ? existing : [])
+      .map((item) => normalizeSourceID(item?.id))
+      .filter(Boolean),
+  );
+  return nextSubscriptionIDFromSet(used);
+}
+
+function uniqueSubscriptionID(value, used, start = 1) {
+  const current = normalizeSourceID(value);
+  if (current && !used.has(current)) {
+    used.add(current);
+    return current;
+  }
+  const next = nextSubscriptionIDFromSet(used, start);
+  used.add(next);
+  return next;
+}
+
 function createSubscriptionEntry(values = {}) {
+  const id = normalizeSourceID(values.id) || nextSubscriptionID();
   const index = state.subscriptions.length + 1;
   return {
-    id: values.id || `source-${index}`,
-    name: values.name || `source-${index}`,
+    id,
+    name: values.name || id,
     emoji:
       values.emoji !== undefined
         ? normalizeSourceEmoji(values.emoji)
@@ -2651,17 +3232,21 @@ function createInlineEntry(values = {}) {
 }
 
 function normalizeSubscriptionEntries(items) {
-  return (Array.isArray(items) ? items : []).map((item, index) =>
-    createSubscriptionEntry({
-      id: item.id || `source-${index + 1}`,
-      name: item.name || `source-${index + 1}`,
-      emoji: item.emoji !== undefined ? item.emoji : defaultSourceEmoji(index),
-      source_logo: item.source_logo || "",
-      enabled: item.enabled !== false,
-      url: item.url || "",
-      user_agent: item.user_agent || DEFAULT_SOURCE_USER_AGENT,
-    }),
-  );
+  const usedIDs = new Set();
+  return (Array.isArray(items) ? items : []).map((item, index) => {
+    const source = item || {};
+    const id = uniqueSubscriptionID(source.id, usedIDs, index + 1);
+    return createSubscriptionEntry({
+      id,
+      name: source.name || id,
+      emoji:
+        source.emoji !== undefined ? source.emoji : defaultSourceEmoji(index),
+      source_logo: source.source_logo || "",
+      enabled: source.enabled !== false,
+      url: source.url || "",
+      user_agent: source.user_agent || DEFAULT_SOURCE_USER_AGENT,
+    });
+  });
 }
 
 function normalizeInlineEntries(items) {
@@ -3130,11 +3715,15 @@ function applyBatchImport() {
   }
 
   const nextEntries = [...state.subscriptions];
-  parsed.forEach((item, index) => {
+  const usedIDs = new Set(
+    nextEntries.map((item) => normalizeSourceID(item?.id)).filter(Boolean),
+  );
+  parsed.forEach((item) => {
+    const id = uniqueSubscriptionID("", usedIDs, nextEntries.length + 1);
     nextEntries.push(
       createSubscriptionEntry({
-        id: `source-${nextEntries.length + 1}`,
-        name: item.name || `source-${nextEntries.length + 1 + index}`,
+        id,
+        name: item.name || id,
         emoji: defaultSourceEmoji(nextEntries.length),
         url: item.url,
         enabled: true,
@@ -3197,6 +3786,7 @@ function parseBatchImportEntries(rawText) {
 
 function normalizeImportedSubscriptionNames(items) {
   const seen = {};
+  const usedIDs = new Set();
   return items.map((item, index) => {
     const baseName =
       (item.name || `source-${index + 1}`).trim() || `source-${index + 1}`;
@@ -3205,7 +3795,7 @@ function normalizeImportedSubscriptionNames(items) {
       seen[baseName] === 1 ? baseName : `${baseName} ${seen[baseName]}`;
     return {
       ...item,
-      id: item.id || `source-${index + 1}`,
+      id: uniqueSubscriptionID(item.id, usedIDs, index + 1),
       name,
     };
   });
@@ -3256,7 +3846,7 @@ function updateSummary() {
 
 function renderConfigNodeSummary() {
   const sources = new Set(state.nodeSourceOptions);
-  const hasNodeCache = state.allNodes.length > 0;
+  const hasNodeCache = state.allNodes.length > 0 && !state.nodeCacheStale;
   const items = [
     [
       "总节点数",
@@ -3268,7 +3858,7 @@ function renderConfigNodeSummary() {
     ["已禁用", hasNodeCache ? state.nodeSummary.disabled || 0 : "-"],
     ["已修改", hasNodeCache ? state.nodeSummary.modified || 0 : "-"],
     ["有警告", hasNodeCache ? state.nodeSummary.warnings || 0 : "-"],
-    ["来源数量", sources.size],
+    ["来源数量", hasNodeCache ? sources.size : "-"],
     ["上次刷新", formatChinaDateTime(state.statusPayload?.last_success_at)],
     ["下次刷新", formatChinaDateTime(state.statusPayload?.next_refresh_at)],
     ["刷新状态", summarizeRefreshState()],
@@ -3283,6 +3873,11 @@ function renderConfigNodeSummary() {
     `,
     )
     .join("");
+}
+
+function markNodeCacheStale() {
+  state.nodeCacheStale = true;
+  renderConfigNodeSummary();
 }
 
 async function loadSubscriptionMeta() {
@@ -3338,7 +3933,8 @@ function renderSubscriptionMeta() {
       const severity = subscriptionMetaSeverity(meta);
       const sourceLabel = subscriptionMetaOrigin(meta);
       const subscription = state.subscriptions.find(
-        (item) => item.id === meta.source_id || item.name === meta.source_name,
+        (item) =>
+          normalizeSourceID(item.id) === normalizeSourceID(meta.source_id),
       );
       const displaySourceName =
         subscription?.name ||
@@ -3547,18 +4143,22 @@ function buildConfigFromForm(options = {}) {
     custom_rules: !activeOnly || activeMode === "rules" ? state.customRules : [],
   };
 
+  const usedSubscriptionIDs = new Set();
   base.subscriptions = state.subscriptions
     .filter((item) => item.url.trim())
-    .map((item, index) => ({
-      id: item.id || `source-${index + 1}`,
-      name: item.name.trim() || `source-${index + 1}`,
-      emoji: normalizeSourceEmoji(item.emoji),
-      source_logo: item.source_logo?.trim() || "",
-      enabled: item.enabled !== false,
-      url: item.url.trim(),
-      user_agent: item.user_agent?.trim() || DEFAULT_SOURCE_USER_AGENT,
-      insecure_skip_verify: getChecked("opt-skip-tls"),
-    }));
+    .map((item, index) => {
+      const id = uniqueSubscriptionID(item.id, usedSubscriptionIDs, index + 1);
+      return {
+        id,
+        name: item.name.trim() || id,
+        emoji: normalizeSourceEmoji(item.emoji),
+        source_logo: item.source_logo?.trim() || "",
+        enabled: item.enabled !== false,
+        url: item.url.trim(),
+        user_agent: item.user_agent?.trim() || DEFAULT_SOURCE_USER_AGENT,
+        insecure_skip_verify: getChecked("opt-skip-tls"),
+      };
+    });
 
   base.manual_nodes_enabled = Boolean(state.manualNodesEnabled);
   base.inline = state.inlineEntries
@@ -3601,6 +4201,7 @@ async function generateSubscription() {
       renderResult();
       return;
     }
+    markNodeCacheStale();
 
     const refreshResult = await refreshNow();
     if (!refreshResult) {
@@ -4043,6 +4644,7 @@ async function loadNodes() {
   }
 
   state.allNodes = Array.isArray(response.nodes) ? response.nodes : [];
+  state.nodeCacheStale = false;
   state.nodeSourceOptions = uniqueOrdered(
     state.allNodes.map((node) => node.source?.name).filter(Boolean),
   );
@@ -5535,6 +6137,12 @@ function escapeHtml(value) {
 
 function showToast(message, isError = false) {
   const toast = document.getElementById("toast");
+  const openDialog = document.querySelector("dialog[open]");
+  if (openDialog && toast.parentElement !== openDialog) {
+    openDialog.appendChild(toast);
+  } else if (!openDialog && toast.parentElement !== document.body) {
+    document.body.appendChild(toast);
+  }
   toast.textContent = message;
   toast.classList.remove("hidden", "error");
   if (isError) toast.classList.add("error");
