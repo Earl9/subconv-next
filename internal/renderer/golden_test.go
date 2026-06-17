@@ -108,6 +108,27 @@ func TestRenderVLESSXUDPPacketEncoding(t *testing.T) {
 	}
 }
 
+func TestRenderMieru(t *testing.T) {
+	nodes := mustParseContent(t, []byte("mieru://user:secret@example.com?port-range=2090-2099&transport=udp&udp=1&multiplexing=MULTIPLEXING_HIGH&handshake-mode=HANDSHAKE_STANDARD#mieru-node"))
+	got := mustRender(t, nodes, standardRenderOptions())
+	text := string(got)
+	for _, needle := range []string{
+		"type: mieru",
+		"server: example.com",
+		"port-range: 2090-2099",
+		"transport: UDP",
+		"udp: true",
+		"username: user",
+		"password: secret",
+		"multiplexing: MULTIPLEXING_HIGH",
+		"handshake-mode: HANDSHAKE_STANDARD",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mieru output missing %q:\n%s", needle, text)
+		}
+	}
+}
+
 func TestRenderGoldenRuleProvidersBalanced(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()

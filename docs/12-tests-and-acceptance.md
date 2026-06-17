@@ -129,13 +129,13 @@ logread | grep subconv
 3. 文档说明。
 
 
-## AnyTLS / WireGuard V1 强制验收
+## AnyTLS / WireGuard / Mieru V1 强制验收
 
-V1 不能把 AnyTLS 或 WireGuard 标记为 experimental。以下测试必须通过：
+V1 不能把 AnyTLS、WireGuard 或 Mieru 标记为 experimental。以下测试必须通过：
 
 ```sh
-go test ./internal/parser -run 'AnyTLS|WireGuard'
-go test ./internal/renderer -run 'AnyTLS|WireGuard|Golden'
+go test ./internal/parser -run 'AnyTLS|WireGuard|Mieru'
+go test ./internal/renderer -run 'AnyTLS|WireGuard|Mieru|Golden'
 ```
 
 验收点：
@@ -146,3 +146,5 @@ go test ./internal/renderer -run 'AnyTLS|WireGuard|Golden'
 - `wireguard://` 能解析为 `type=wireguard`。
 - WireGuard 标准 `[Interface]` / `[Peer]` 配置能解析。
 - WireGuard renderer 输出 `private-key`、`public-key`、`ip`、`allowed-ips`、`udp`。
+- `mieru://` 能解析为 `type=mieru`。
+- Mieru renderer 输出 `server`、`port` 或 `port-range`、`transport`、`username`、`password`、`udp`。

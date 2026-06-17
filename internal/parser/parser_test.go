@@ -96,6 +96,47 @@ func TestParseContentWireGuardURI(t *testing.T) {
 	}
 }
 
+func TestParseContentMieruURI(t *testing.T) {
+	content := []byte("mieru://user:secret@example.com:2999?transport=tcp&udp=1&multiplexing=MULTIPLEXING_LOW&handshake-mode=HANDSHAKE_STANDARD#mieru-node")
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(result.Nodes))
+	}
+
+	node := result.Nodes[0]
+	if node.Type != model.ProtocolMieru {
+		t.Fatalf("Type = %q, want %q", node.Type, model.ProtocolMieru)
+	}
+	if node.Auth.Username != "user" || node.Auth.Password != "secret" {
+		t.Fatalf("auth = %#v, want username/password", node.Auth)
+	}
+	if got := fmt.Sprint(node.Raw["transport"]); got != "TCP" {
+		t.Fatalf("transport = %q, want TCP", got)
+	}
+	if node.UDP == nil || !*node.UDP {
+		t.Fatalf("UDP = %#v, want true", node.UDP)
+	}
+}
+
+func TestParseContentMieruPortRange(t *testing.T) {
+	content := []byte("mieru://example.com?username=user&password=secret&port-range=2090-2099&transport=UDP#mieru-range")
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+
+	node := result.Nodes[0]
+	if node.Port != 0 {
+		t.Fatalf("Port = %d, want 0 for port-range", node.Port)
+	}
+	if got := fmt.Sprint(node.Raw["portRange"]); got != "2090-2099" {
+		t.Fatalf("portRange = %q, want 2090-2099", got)
+	}
+}
+
 func TestParseContentVLESSXHTTP(t *testing.T) {
 	content := []byte("vless://uuid-1@example.com:443?type=xhttp&security=reality&sni=example.com&fp=chrome&pbk=pub&sid=abcd&path=%2Fdemo&mode=auto&no-grpc-header=false#xhttp")
 	result := ParseContent(content, model.SourceInfo{Name: "manual"})
@@ -256,13 +297,22 @@ proxies:
     xhttp-opts:
       path: /NevernessToEverness
       mode: auto
+  - name: "mieru yaml"
+    type: mieru
+    server: mieru.example.com
+    port-range: 2090-2099
+    transport: TCP
+    udp: true
+    username: user
+    password: secret
+    multiplexing: MULTIPLEXING_LOW
 `)
 	result := ParseContent(content, model.SourceInfo{Name: "yaml", Kind: "file"})
 	if len(result.Errors) != 0 {
 		t.Fatalf("Errors = %#v, want none", result.Errors)
 	}
-	if len(result.Nodes) != 2 {
-		t.Fatalf("len(Nodes) = %d, want 2", len(result.Nodes))
+	if len(result.Nodes) != 3 {
+		t.Fatalf("len(Nodes) = %d, want 3", len(result.Nodes))
 	}
 
 	anytls := result.Nodes[0]
@@ -291,6 +341,17 @@ proxies:
 	}
 	if got := fmt.Sprint(vless.Raw["encryption"]); got != "none" {
 		t.Fatalf("vless raw encryption = %q, want none", got)
+	}
+
+	mieru := result.Nodes[2]
+	if mieru.Type != model.ProtocolMieru {
+		t.Fatalf("third Type = %q, want %q", mieru.Type, model.ProtocolMieru)
+	}
+	if mieru.Auth.Username != "user" || mieru.Auth.Password != "secret" {
+		t.Fatalf("mieru auth = %#v, want username/password", mieru.Auth)
+	}
+	if got := fmt.Sprint(mieru.Raw["portRange"]); got != "2090-2099" {
+		t.Fatalf("mieru portRange = %q, want 2090-2099", got)
 	}
 }
 

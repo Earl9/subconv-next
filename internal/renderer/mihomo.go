@@ -114,6 +114,8 @@ type mihomoProxy struct {
 	Type                     string                 `yaml:"type"`
 	Server                   string                 `yaml:"server,omitempty"`
 	Port                     int                    `yaml:"port,omitempty"`
+	PortRange                string                 `yaml:"port-range,omitempty"`
+	Transport                string                 `yaml:"transport,omitempty"`
 	Encryption               string                 `yaml:"encryption,omitempty"`
 	Cipher                   string                 `yaml:"cipher,omitempty"`
 	Password                 string                 `yaml:"password,omitempty"`
@@ -146,6 +148,9 @@ type mihomoProxy struct {
 	IdleSessionCheckInterval interface{}            `yaml:"idle-session-check-interval,omitempty"`
 	IdleSessionTimeout       interface{}            `yaml:"idle-session-timeout,omitempty"`
 	MinIdleSession           interface{}            `yaml:"min-idle-session,omitempty"`
+	Multiplexing             string                 `yaml:"multiplexing,omitempty"`
+	HandshakeMode            string                 `yaml:"handshake-mode,omitempty"`
+	TrafficPattern           string                 `yaml:"traffic-pattern,omitempty"`
 	IP                       string                 `yaml:"ip,omitempty"`
 	IPv6                     string                 `yaml:"ipv6,omitempty"`
 	PrivateKey               string                 `yaml:"private-key,omitempty"`
@@ -588,6 +593,17 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.IdleSessionCheckInterval = rawScalar(node.Raw, "idleSessionCheckInterval")
 		proxy.IdleSessionTimeout = rawScalar(node.Raw, "idleSessionTimeout")
 		proxy.MinIdleSession = rawScalar(node.Raw, "minIdleSession")
+	case model.ProtocolMieru:
+		proxy.Username = node.Auth.Username
+		proxy.Password = node.Auth.Password
+		proxy.PortRange = rawString(node.Raw, "portRange")
+		proxy.Transport = normalizeMieruTransport(rawString(node.Raw, "transport"))
+		if proxy.Transport == "" {
+			proxy.Transport = "TCP"
+		}
+		proxy.Multiplexing = rawString(node.Raw, "multiplexing")
+		proxy.HandshakeMode = rawString(node.Raw, "handshakeMode")
+		proxy.TrafficPattern = rawString(node.Raw, "trafficPattern")
 	case model.ProtocolWireGuard:
 		if node.WireGuard == nil {
 			return mihomoProxy{}, fmt.Errorf("wireguard node %q missing wireguard settings", node.Name)
@@ -1396,6 +1412,17 @@ func normalizePacketEncoding(value string) string {
 	}
 }
 
+func normalizeMieruTransport(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "tcp":
+		return "TCP"
+	case "udp":
+		return "UDP"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
 func rawScalar(raw map[string]interface{}, key string) interface{} {
 	value := rawString(raw, key)
 	if value == "" {
@@ -1445,7 +1472,7 @@ func udpOrDefault(node model.NodeIR) *bool {
 		return node.UDP
 	}
 	switch node.Type {
-	case model.ProtocolSS, model.ProtocolSSR, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard:
+	case model.ProtocolSS, model.ProtocolSSR, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard, model.ProtocolMieru:
 		return model.Bool(true)
 	default:
 		return nil
@@ -1781,6 +1808,12 @@ func buildProxyNode(proxy mihomoProxy) *yaml.Node {
 	if proxy.Port != 0 {
 		appendMap(node, "port", scalarNode(proxy.Port))
 	}
+	if proxy.PortRange != "" {
+		appendMap(node, "port-range", scalarNode(proxy.PortRange))
+	}
+	if proxy.Transport != "" {
+		appendMap(node, "transport", scalarNode(proxy.Transport))
+	}
 	if proxy.Encryption != "" {
 		appendMap(node, "encryption", scalarNode(proxy.Encryption))
 	}
@@ -1907,6 +1940,15 @@ func buildProxyNode(proxy mihomoProxy) *yaml.Node {
 	}
 	if proxy.MinIdleSession != nil {
 		appendMap(node, "min-idle-session", nodeFromAny(proxy.MinIdleSession))
+	}
+	if proxy.Multiplexing != "" {
+		appendMap(node, "multiplexing", scalarNode(proxy.Multiplexing))
+	}
+	if proxy.HandshakeMode != "" {
+		appendMap(node, "handshake-mode", scalarNode(proxy.HandshakeMode))
+	}
+	if proxy.TrafficPattern != "" {
+		appendMap(node, "traffic-pattern", scalarNode(proxy.TrafficPattern))
 	}
 	if proxy.IP != "" {
 		appendMap(node, "ip", scalarNode(proxy.IP))
@@ -2268,6 +2310,12 @@ func renderProxy(w *yamlWriter, indent int, proxy mihomoProxy) {
 	if proxy.Port != 0 {
 		w.scalar(indent+2, "port", proxy.Port)
 	}
+	if proxy.PortRange != "" {
+		w.scalar(indent+2, "port-range", proxy.PortRange)
+	}
+	if proxy.Transport != "" {
+		w.scalar(indent+2, "transport", proxy.Transport)
+	}
 	if proxy.Encryption != "" {
 		w.scalar(indent+2, "encryption", proxy.Encryption)
 	}
@@ -2389,6 +2437,15 @@ func renderProxy(w *yamlWriter, indent int, proxy mihomoProxy) {
 	}
 	if proxy.MinIdleSession != nil {
 		w.scalar(indent+2, "min-idle-session", proxy.MinIdleSession)
+	}
+	if proxy.Multiplexing != "" {
+		w.scalar(indent+2, "multiplexing", proxy.Multiplexing)
+	}
+	if proxy.HandshakeMode != "" {
+		w.scalar(indent+2, "handshake-mode", proxy.HandshakeMode)
+	}
+	if proxy.TrafficPattern != "" {
+		w.scalar(indent+2, "traffic-pattern", proxy.TrafficPattern)
 	}
 	if proxy.IP != "" {
 		w.scalar(indent+2, "ip", proxy.IP)

@@ -2293,6 +2293,7 @@ button:disabled {
 .type-tuic { background: #4f46e5; }
 .type-anytls { background: #7c3aed; }
 .type-wireguard { background: #64748b; }
+.type-mieru { background: #be123c; }
 .type-http { background: #0f766e; }
 .type-socks5 { background: #52525b; }
 

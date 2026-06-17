@@ -171,7 +171,8 @@ func validateNodes(nodes []model.NodeIR) ([]model.NodeIR, []NodeValidationWarnin
 			nodeWarnings = append(nodeWarnings, message)
 			warnings = append(warnings, NodeValidationWarning{NodeID: node.ID, Level: "warning", Message: message})
 		}
-		if strings.TrimSpace(node.Server) == "" || node.Port <= 0 {
+		hasMieruPortRange := node.Type == model.ProtocolMieru && strings.TrimSpace(rawNodeString(node.Raw, "portRange")) != ""
+		if strings.TrimSpace(node.Server) == "" || (node.Port <= 0 && !hasMieruPortRange) {
 			message := fmt.Sprintf("%s 缺少有效 server/port", node.Type)
 			nodeWarnings = append(nodeWarnings, message)
 			warnings = append(warnings, NodeValidationWarning{NodeID: node.ID, Level: "warning", Message: message})

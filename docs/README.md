@@ -9,7 +9,7 @@
 1. 在 OpenWrt 上运行一个本地 HTTP daemon。
 2. 通过 UCI 保存订阅源、模板、刷新策略和输出配置。
 3. 通过 LuCI 页面管理订阅源、手动刷新、查看日志、下载 Mihomo YAML。
-4. 支持现代节点解析：`ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://` / `hy2://`、`tuic://`。
+4. 支持现代节点解析：`ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://` / `hy2://`、`tuic://`、`anytls://`、`wireguard://`、`mieru://`。
 5. 支持导入 Clash/Mihomo YAML 和 Base64 订阅。
 6. 输出 Mihomo YAML。
 7. 不依赖 subconverter。

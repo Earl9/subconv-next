@@ -17,6 +17,8 @@ type mihomoYAMLProxy struct {
 	Type                     string                 `yaml:"type"`
 	Server                   string                 `yaml:"server,omitempty"`
 	Port                     int                    `yaml:"port,omitempty"`
+	PortRange                string                 `yaml:"port-range,omitempty"`
+	Transport                string                 `yaml:"transport,omitempty"`
 	Encryption               string                 `yaml:"encryption,omitempty"`
 	Cipher                   string                 `yaml:"cipher,omitempty"`
 	Password                 string                 `yaml:"password,omitempty"`
@@ -49,6 +51,9 @@ type mihomoYAMLProxy struct {
 	IdleSessionCheckInterval interface{}            `yaml:"idle-session-check-interval,omitempty"`
 	IdleSessionTimeout       interface{}            `yaml:"idle-session-timeout,omitempty"`
 	MinIdleSession           interface{}            `yaml:"min-idle-session,omitempty"`
+	Multiplexing             string                 `yaml:"multiplexing,omitempty"`
+	HandshakeMode            string                 `yaml:"handshake-mode,omitempty"`
+	TrafficPattern           string                 `yaml:"traffic-pattern,omitempty"`
 	IP                       string                 `yaml:"ip,omitempty"`
 	IPv6                     string                 `yaml:"ipv6,omitempty"`
 	PrivateKey               string                 `yaml:"private-key,omitempty"`
@@ -223,6 +228,14 @@ func parseMihomoProxy(proxy mihomoYAMLProxy, source model.SourceInfo) (model.Nod
 		setRaw(&node, "idleSessionCheckInterval", proxy.IdleSessionCheckInterval)
 		setRaw(&node, "idleSessionTimeout", proxy.IdleSessionTimeout)
 		setRaw(&node, "minIdleSession", proxy.MinIdleSession)
+	case model.ProtocolMieru:
+		node.Auth.Username = strings.TrimSpace(proxy.Username)
+		node.Auth.Password = strings.TrimSpace(proxy.Password)
+		setRaw(&node, "portRange", strings.TrimSpace(proxy.PortRange))
+		setRaw(&node, "transport", normalizeMieruTransport(proxy.Transport))
+		setRaw(&node, "multiplexing", strings.TrimSpace(proxy.Multiplexing))
+		setRaw(&node, "handshakeMode", strings.TrimSpace(proxy.HandshakeMode))
+		setRaw(&node, "trafficPattern", strings.TrimSpace(proxy.TrafficPattern))
 	case model.ProtocolWireGuard:
 		node.Auth.PrivateKey = strings.TrimSpace(proxy.PrivateKey)
 		node.Auth.PublicKey = strings.TrimSpace(proxy.PublicKey)

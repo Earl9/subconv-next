@@ -54,8 +54,9 @@ V1 必须支持：
 - TUIC v5：`tuic://`
 - AnyTLS：`anytls://`
 - WireGuard：`wireguard://` 以及 WireGuard 标准配置片段
+- Mieru：`mieru://`
 
-注意：AnyTLS 和 WireGuard 是 V1 强制支持项，不允许标记为 experimental，不允许只在 Raw 中保留而不输出 Mihomo 可用配置。
+注意：AnyTLS、WireGuard 和 Mieru 是 V1 强制支持项，不允许标记为 experimental，不允许只在 Raw 中保留而不输出 Mihomo 可用配置。
 
 ### 输出格式
 

@@ -202,6 +202,41 @@ anytls://password@host:443?sni=example.com&insecure=1&alpn=h2,http/1.1&client-fi
 - Mihomo 不支持 AnyTLS + Reality 组合，因此 parser 如遇 `security=reality`、`pbk`、`sid` 等 Reality 参数，必须加入 warning，并且 renderer 不输出 `reality-opts`。
 - 未知 query 参数保留在 Raw。
 
+## Mieru `mieru://`
+
+典型：
+
+```text
+mieru://username:password@host:2999?transport=TCP&udp=1&multiplexing=MULTIPLEXING_LOW#name
+```
+
+`port-range` 形式：
+
+```text
+mieru://host?username=user&password=pass&port-range=2090-2099&transport=UDP#name
+```
+
+字段映射：
+
+| Query / URL | NodeIR |
+|---|---|
+| URL username / username / user | auth.username |
+| URL password / password / passwd / pwd | auth.password |
+| URL port / port | port |
+| port-range / port_range | raw.portRange |
+| transport | raw.transport |
+| udp | udp |
+| multiplexing | raw.multiplexing |
+| handshake-mode / handshake_mode | raw.handshakeMode |
+| traffic-pattern / traffic_pattern | raw.trafficPattern |
+
+要求：
+
+- `transport` 输出为 Mihomo 要求的 `TCP` 或 `UDP`；URI 里小写值会规范化。
+- 未传 `transport` 时默认使用 `TCP`。
+- `port` 和 `port-range` 二选一；`port-range` 节点不能因为 `port=0` 被过滤。
+- renderer 输出 Mihomo 字段：`type: mieru`、`server`、`port` 或 `port-range`、`transport`、`udp`、`username`、`password`。
+
 ## WireGuard `wireguard://`
 
 V1 必须支持两种输入：

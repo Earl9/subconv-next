@@ -3535,7 +3535,7 @@ function renderManualEmptyState() {
     <div class="manual-empty-state">
       <div class="manual-empty-icon">${icon("terminal")}</div>
       <div class="manual-empty-title">暂无手动节点</div>
-      <div class="manual-empty-desc">可添加 ss://、vless://、trojan://、anytls://、wireguard:// 或 WireGuard 配置片段。</div>
+      <div class="manual-empty-desc">可添加 ss://、vless://、trojan://、anytls://、mieru://、wireguard:// 或 WireGuard 配置片段。</div>
       <button class="secondary-button small-button" type="button" data-inline-action="add">添加手动节点</button>
     </div>
   `;
@@ -3561,7 +3561,7 @@ function renderInlineCard(item, index, disabled) {
       </div>
       <div class="manual-node-field">
         <label>节点内容</label>
-        <textarea class="manual-node-textarea" data-inline-field="content" data-inline-index="${index}" placeholder="粘贴 ss://、vless://、anytls://、wireguard:// 或 WireGuard 配置片段">${escapeHtml(item.content)}</textarea>
+        <textarea class="manual-node-textarea" data-inline-field="content" data-inline-index="${index}" placeholder="粘贴 ss://、vless://、anytls://、mieru://、wireguard:// 或 WireGuard 配置片段">${escapeHtml(item.content)}</textarea>
       </div>
       <div class="manual-node-actions">
         <button class="secondary-button small-button" type="button" data-inline-action="preview" data-inline-index="${index}">解析预览</button>

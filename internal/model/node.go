@@ -22,6 +22,7 @@ const (
 	ProtocolTUIC      Protocol = "tuic"
 	ProtocolAnyTLS    Protocol = "anytls"
 	ProtocolWireGuard Protocol = "wireguard"
+	ProtocolMieru     Protocol = "mieru"
 	ProtocolHTTP      Protocol = "http"
 	ProtocolSOCKS5    Protocol = "socks5"
 )
@@ -233,7 +234,27 @@ func transportFingerprint(node NodeIR) string {
 		)
 		parts = append(parts, append([]string(nil), node.WireGuard.AllowedIPs...)...)
 	}
+	if node.Type == ProtocolMieru {
+		parts = append(parts,
+			rawFingerprintValue(node.Raw, "portRange"),
+			rawFingerprintValue(node.Raw, "transport"),
+			rawFingerprintValue(node.Raw, "multiplexing"),
+			rawFingerprintValue(node.Raw, "handshakeMode"),
+			rawFingerprintValue(node.Raw, "trafficPattern"),
+		)
+	}
 	return strings.Join(parts, "|")
+}
+
+func rawFingerprintValue(raw map[string]interface{}, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func sha256Hex(value string) string {
@@ -357,6 +378,16 @@ func dedupeKey(node NodeIR, scope string, originalIndex int) string {
 		node.Transport.Host,
 		node.Transport.ServiceName,
 	}, "|")
+	if node.Type == ProtocolMieru {
+		transport = strings.Join([]string{
+			transport,
+			rawFingerprintValue(node.Raw, "portRange"),
+			rawFingerprintValue(node.Raw, "transport"),
+			rawFingerprintValue(node.Raw, "multiplexing"),
+			rawFingerprintValue(node.Raw, "handshakeMode"),
+			rawFingerprintValue(node.Raw, "trafficPattern"),
+		}, "|")
+	}
 
 	authKey := firstNonEmpty(
 		node.Auth.UUID,

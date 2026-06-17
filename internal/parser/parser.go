@@ -124,6 +124,8 @@ func parseURI(raw string, source model.SourceInfo) (model.NodeIR, error) {
 		return parseAnyTLS(raw, source)
 	case string(model.ProtocolWireGuard):
 		return parseWireGuardURI(raw, source)
+	case string(model.ProtocolMieru):
+		return parseMieru(raw, source)
 	default:
 		return model.NodeIR{}, fmt.Errorf("unsupported scheme %q", raw[:schemeEnd])
 	}

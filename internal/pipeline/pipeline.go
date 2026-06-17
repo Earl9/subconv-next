@@ -389,7 +389,8 @@ func isRenderableNode(node model.NodeIR) bool {
 	if node.Type == model.ProtocolWireGuard && node.WireGuard != nil && len(node.WireGuard.Peers) > 0 {
 		return true
 	}
-	if strings.TrimSpace(node.Server) == "" || node.Port <= 0 {
+	hasMieruPortRange := node.Type == model.ProtocolMieru && strings.TrimSpace(rawNodeString(node.Raw, "portRange")) != ""
+	if strings.TrimSpace(node.Server) == "" || (node.Port <= 0 && !hasMieruPortRange) {
 		return false
 	}
 
@@ -406,6 +407,8 @@ func isRenderableNode(node model.NodeIR) bool {
 		return strings.TrimSpace(node.Auth.Password) != ""
 	case model.ProtocolTUIC:
 		return strings.TrimSpace(node.Auth.UUID) != "" && strings.TrimSpace(node.Auth.Password) != ""
+	case model.ProtocolMieru:
+		return strings.TrimSpace(node.Auth.Username) != "" && strings.TrimSpace(node.Auth.Password) != "" && strings.TrimSpace(rawNodeString(node.Raw, "transport")) != ""
 	case model.ProtocolWireGuard:
 		return strings.TrimSpace(node.Auth.PrivateKey) != ""
 	default:

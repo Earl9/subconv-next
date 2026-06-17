@@ -26,6 +26,7 @@ const (
     ProtocolTUIC      Protocol = "tuic"
     ProtocolAnyTLS    Protocol = "anytls"
     ProtocolWireGuard Protocol = "wireguard"
+    ProtocolMieru     Protocol = "mieru"
     ProtocolHTTP      Protocol = "http"
     ProtocolSOCKS5    Protocol = "socks5"
 )
