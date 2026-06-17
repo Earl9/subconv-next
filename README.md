@@ -19,7 +19,7 @@ V1 重点面向自托管部署：Docker 运行形态、OpenWrt / Kwrt all-in-one
 - Docker 镜像支持 `/data` 持久化，以及 `linux/amd64`、`linux/arm64`。
 - OpenWrt / Kwrt all-in-one IPK 包含后端服务、init.d、UCI 配置、procd、数据目录、LuCI 菜单和 LuCI 管理页。
 
-支持协议包括 `ss`、`ssr`、`vmess`、`vless`、`trojan`、`hysteria2`、`tuic`、`anytls` 和 `wireguard`。其中 `anytls` 和 `wireguard` 在 V1 中仍按实验性支持处理。
+支持协议包括 `ss`、`ssr`、`vmess`、`vless`、`trojan`、`hysteria2`、`tuic`、`anytls`、`wireguard` 和 `mieru`。`anytls`、`wireguard` 和 `mieru` 在 V1 中输出 Mihomo 可用配置，不按实验性功能处理。
 
 ## Screenshots
 
@@ -63,14 +63,14 @@ curl -fsS http://127.0.0.1:9876/healthz
 http://127.0.0.1:9876/
 ```
 
-固定版本建议使用 `ghcr.io/earl9/subconv-next:v1.0.0`；跟随最新发布版可使用 `ghcr.io/earl9/subconv-next:latest`。
+固定版本建议使用 `ghcr.io/earl9/subconv-next:v1.0.0-9`；跟随最新发布版可使用 `ghcr.io/earl9/subconv-next:latest`。
 
 ### OpenWrt / Kwrt
 
 OpenWrt / Kwrt 支持以 all-in-one IPK 提供。`aarch64_generic` 已在 Kwrt 25.12.2 `rockchip/armv8` 上验证；其它 IPK 是实验性包。
 
 ```sh
-opkg install /tmp/subconv-next_1.0.0-5_aarch64_generic.ipk
+opkg install /tmp/subconv-next_1.0.0-9_aarch64_generic.ipk
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
@@ -97,7 +97,7 @@ Release Assets 中的多架构 IPK 是静态 Go 交叉编译二进制通过 `ipk
 - GitHub Releases: <https://github.com/Earl9/subconv-next/releases>
 - `subconv-next-linux-amd64`
 - `subconv-next-linux-arm64`
-- Verified IPK: `subconv-next_1.0.0-5_aarch64_generic.ipk`
+- Verified IPK: `subconv-next_1.0.0-9_aarch64_generic.ipk`
 - Experimental IPK: `subconv-next_1.0.0-5_x86_64.ipk`
 - Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a7_neon-vfpv4.ipk`
 - Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a9_vfpv3-d16.ipk`
