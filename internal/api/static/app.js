@@ -623,6 +623,11 @@ const state = {
     pageSize: 25,
     total: 0,
   },
+  updateCheck: {
+    checking: false,
+    updateAvailable: false,
+    releaseUrl: "",
+  },
   editingNode: null,
   nodeValidationWarnings: [],
   addNodeMode: "uri",
@@ -709,6 +714,7 @@ async function init() {
   renderResult(false);
   renderYamlViewer();
   renderDiagnostics();
+  void refreshVersionStatus();
   await initializeWorkspaceSession();
 }
 
@@ -744,6 +750,11 @@ function bindEvents() {
   document
     .getElementById("delete-published-btn")
     .addEventListener("click", deletePublishedLink);
+  document.getElementById("version-badge").addEventListener("click", () => {
+    if (state.updateCheck.updateAvailable && state.updateCheck.releaseUrl) {
+      openUrl(state.updateCheck.releaseUrl);
+    }
+  });
 
   document
     .getElementById("add-subscription-btn")
@@ -5600,6 +5611,69 @@ async function copyYAML() {
   showToast("已复制完整 YAML。");
 }
 
+async function loadBuildVersion() {
+  const response = await fetchJSON("/healthz");
+  if (!response?.ok || !response.version) return;
+  setVersionBadge(response.version);
+}
+
+async function refreshVersionStatus() {
+  await loadBuildVersion();
+  await checkForUpdates();
+}
+
+async function checkForUpdates() {
+  const badge = document.getElementById("version-badge");
+  if (!badge || state.updateCheck.checking) return;
+
+  state.updateCheck.checking = true;
+  badge.classList.add("checking");
+  badge.title = "正在检查版本更新";
+
+  const response = await fetchJSON("/api/update-check");
+
+  state.updateCheck.checking = false;
+  badge.classList.remove("checking");
+
+  if (!response?.ok) {
+    badge.title = readAPIError(response) || "检查版本更新失败";
+    return;
+  }
+
+  const current = formatVersionLabel(response.current_version || "");
+  const latest = formatVersionLabel(response.latest_version || "");
+  if (current) setVersionBadge(current);
+
+  state.updateCheck.releaseUrl = response.release_url || "";
+  state.updateCheck.updateAvailable = Boolean(response.update_available);
+  badge.classList.toggle("update-available", state.updateCheck.updateAvailable);
+
+  if (!response.comparable) {
+    badge.title = latest
+      ? `当前版本无法比较，最新发布 ${latest}`
+      : "当前版本无法比较";
+    return;
+  }
+
+  if (response.update_available) {
+    badge.title = `发现新版本 ${latest}，点击打开发布页`;
+    return;
+  }
+
+  badge.title = `当前已是最新版本 ${current || latest}`;
+}
+
+function setVersionBadge(value) {
+  const label = document.getElementById("version-label");
+  if (label) label.textContent = formatVersionLabel(value);
+}
+
+function formatVersionLabel(value) {
+  const version = String(value || "").trim();
+  if (!version) return "";
+  return /^\d/.test(version) ? `v${version}` : version;
+}
+
 async function loadStatus() {
   const response = await fetchJSON("/api/status");
   state.backendOnline = Boolean(response && !response.error);
@@ -6057,7 +6131,8 @@ function withWorkspace(rawUrl) {
   if (
     url.startsWith("/api/workspaces") ||
     url.startsWith("/api/site-logo") ||
-    url.startsWith("/api/parse")
+    url.startsWith("/api/parse") ||
+    url.startsWith("/api/update-check")
   )
     return url;
   const separator = url.includes("?") ? "&" : "?";

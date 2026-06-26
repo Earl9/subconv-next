@@ -103,35 +103,46 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 				Listen:         "127.0.0.1:5335",
 				UseSystemHosts: false,
 				EnhancedMode:   "fake-ip",
-				FakeIPRange:    "198.18.0.1/16",
+				FakeIPRange:    "198.18.0.0/16",
 				DefaultNameserver: []string{
-					"180.76.76.76",
-					"182.254.118.118",
-					"8.8.8.8",
-					"180.184.2.2",
+					"119.29.29.29",
+					"223.5.5.5",
 				},
 				Nameserver: []string{
-					"180.76.76.76",
-					"119.29.29.29",
-					"180.184.1.1",
-					"223.5.5.5",
-					"8.8.8.8",
-					"https://223.6.6.6/dns-query#h3=true",
-					"https://dns.alidns.com/dns-query",
-					"https://cloudflare-dns.com/dns-query",
-					"https://doh.pub/dns-query",
+					"https://1.1.1.1/dns-query#RULES",
+					"https://8.8.8.8/dns-query#RULES",
 				},
-				Fallback: []string{
-					"https://000000.dns.nextdns.io/dns-query#h3=true",
-					"https://dns.alidns.com/dns-query",
+				ProxyNameserver: []string{
+					"119.29.29.29",
+					"223.5.5.5",
+				},
+				DirectNameserver: []string{
 					"https://doh.pub/dns-query",
-					"https://public.dns.iij.jp/dns-query",
-					"https://101.101.101.101/dns-query",
-					"https://208.67.220.220/dns-query",
-					"tls://8.8.4.4",
-					"tls://1.0.0.1:853",
-					"https://cloudflare-dns.com/dns-query",
-					"https://dns.google/dns-query",
+					"https://dns.alidns.com/dns-query",
+				},
+				DirectFollowPolicy: true,
+				NameserverPolicy: map[string][]string{
+					"geosite:cn,private,apple": {
+						"https://doh.pub/dns-query",
+						"https://dns.alidns.com/dns-query",
+					},
+					"*.linux.do": {
+						"https://xxx.ddd.oaifree.com/query-dns",
+					},
+					"linux.do": {
+						"https://xxx.ddd.oaifree.com/query-dns",
+					},
+				},
+				FakeIPFilter: []string{
+					"*.lan",
+					"*.local",
+					"*.arpa",
+					"time.*.com",
+					"ntp.*.com",
+					"+.market.xiaomi.com",
+					"localhost.ptlogin2.qq.com",
+					"*.msftncsi.com",
+					"www.msftconnecttest.com",
 				},
 			},
 			Profile: &model.ProfileConfig{
@@ -299,6 +310,55 @@ func TestLoadJSONBytesDeduplicatesSubscriptionIDs(t *testing.T) {
 	}
 	if cfg.Subscriptions[1].ID == "" || cfg.Subscriptions[1].ID == cfg.Subscriptions[0].ID {
 		t.Fatalf("subscription IDs were not deduplicated: %#v", cfg.Subscriptions)
+	}
+}
+
+func TestNormalizeMigratesLegacyComplexDefaultDNS(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.DNS = &model.DNSConfig{
+		Enable:         true,
+		Listen:         "127.0.0.1:5335",
+		UseSystemHosts: false,
+		EnhancedMode:   "fake-ip",
+		FakeIPRange:    "198.18.0.1/16",
+		DefaultNameserver: []string{
+			"180.76.76.76",
+			"182.254.118.118",
+			"8.8.8.8",
+			"180.184.2.2",
+		},
+		Nameserver: []string{
+			"180.76.76.76",
+			"119.29.29.29",
+			"180.184.1.1",
+			"223.5.5.5",
+			"8.8.8.8",
+			"https://223.6.6.6/dns-query#h3=true",
+			"https://dns.alidns.com/dns-query",
+			"https://cloudflare-dns.com/dns-query",
+			"https://doh.pub/dns-query",
+		},
+		Fallback: []string{
+			"https://dns.google/dns-query",
+		},
+		FallbackFilter: &model.DNSFallbackFilter{GeoIP: true},
+	}
+
+	got := Normalize(cfg)
+	if got.Render.DNS == nil {
+		t.Fatalf("Render.DNS = nil")
+	}
+	if len(got.Render.DNS.Fallback) != 0 || got.Render.DNS.FallbackFilter != nil {
+		t.Fatalf("legacy DNS was not migrated: %+v", got.Render.DNS)
+	}
+	if !reflect.DeepEqual(got.Render.DNS.DefaultNameserver, []string{"119.29.29.29", "223.5.5.5"}) {
+		t.Fatalf("DefaultNameserver = %#v, want compact defaults", got.Render.DNS.DefaultNameserver)
+	}
+	if !got.Render.DNS.DirectFollowPolicy || !reflect.DeepEqual(got.Render.DNS.ProxyNameserver, []string{"119.29.29.29", "223.5.5.5"}) {
+		t.Fatalf("DNS policy defaults missing after migration: %+v", got.Render.DNS)
+	}
+	if !reflect.DeepEqual(got.Render.DNS.NameserverPolicy["geosite:cn,private,apple"], []string{"https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"}) {
+		t.Fatalf("domestic DNS policy = %#v", got.Render.DNS.NameserverPolicy["geosite:cn,private,apple"])
 	}
 }
 

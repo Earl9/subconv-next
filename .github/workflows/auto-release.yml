@@ -1,0 +1,181 @@
+name: auto-release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: auto-release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="1.0.${GITHUB_RUN_NUMBER}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: |
+          test -z "$(gofmt -l $(find . -path './.git' -prune -o -path './.tmpinspect' -prune -o -path './vendor' -prune -o -name '*.go' -print))"
+          node --check internal/api/static/app.js
+          go test ./...
+          go vet ./...
+
+      - name: Build release binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          build() {
+            local name="$1"
+            shift
+            env CGO_ENABLED=0 GOOS=linux "$@" go build \
+              -trimpath \
+              -ldflags="-s -w -X main.version=${VERSION}" \
+              -o "dist/${name}" ./cmd/subconv-next
+          }
+
+          build subconv-next-linux-amd64 GOARCH=amd64
+          build subconv-next-linux-arm64 GOARCH=arm64
+          build subconv-next-linux-armv7 GOARCH=arm GOARM=7
+          build subconv-next-linux-mips-softfloat GOARCH=mips GOMIPS=softfloat
+          build subconv-next-linux-mipsle-softfloat GOARCH=mipsle GOMIPS=softfloat
+
+      - name: Build OpenWrt IPK
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OPENWRT_SDK_URL: ${{ vars.OPENWRT_SDK_URL || secrets.OPENWRT_SDK_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENWRT_SDK_URL:-}" ]; then
+            echo "OPENWRT_SDK_URL repository variable or secret is required to build the OpenWrt IPK." >&2
+            exit 1
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+          mkdir -p /tmp/openwrt-sdk dist/openwrt-arm64
+          curl -fL "${OPENWRT_SDK_URL}" -o /tmp/openwrt-sdk/sdk.tar
+          tar -xf /tmp/openwrt-sdk/sdk.tar -C /tmp/openwrt-sdk
+          sdk_dir="$(find /tmp/openwrt-sdk -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          if [ -z "${sdk_dir}" ] || [ ! -x "${sdk_dir}/scripts/ipkg-build" ]; then
+            echo "Downloaded SDK does not contain scripts/ipkg-build." >&2
+            exit 1
+          fi
+
+          install -m0755 dist/subconv-next-linux-arm64 dist/openwrt-arm64/subconv-next
+          SDK_DIR="${sdk_dir}" VERSION="${VERSION}" RELEASE=1 ARCH=aarch64_generic \
+            ./scripts/package-openwrt-ipk-sdk.sh dist/openwrt-arm64/subconv-next
+
+      - name: Generate checksums
+        run: |
+          (cd dist && sha256sum subconv-next-* > checksums.txt)
+
+      - name: Create release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          IMAGE: ${{ steps.version.outputs.image }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<EOF_NOTES
+          # SubConv Next ${TAG}
+
+          Automated release from \`${GITHUB_SHA}\`.
+
+          Docker image:
+
+          - \`${IMAGE}:latest\`
+          - \`${IMAGE}:${VERSION}\`
+
+          Assets:
+
+          - \`subconv-next-linux-amd64\`
+          - \`subconv-next-linux-arm64\`
+          - \`subconv-next-linux-armv7\`
+          - \`subconv-next-linux-mips-softfloat\`
+          - \`subconv-next-linux-mipsle-softfloat\`
+          - \`subconv-next_${VERSION}-1_aarch64_generic.ipk\`
+          - \`checksums.txt\`
+          EOF_NOTES
+
+      - name: Publish Docker image
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ steps.version.outputs.image }}:latest
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+
+      - name: Create Git tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --title "SubConv Next ${TAG}" \
+            --notes-file release-notes.md \
+            dist/subconv-next-linux-amd64 \
+            dist/subconv-next-linux-arm64 \
+            dist/subconv-next-linux-armv7 \
+            dist/subconv-next-linux-mips-softfloat \
+            dist/subconv-next-linux-mipsle-softfloat \
+            "dist/subconv-next_${{ steps.version.outputs.version }}-1_aarch64_generic.ipk" \
+            dist/checksums.txt

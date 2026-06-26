@@ -187,6 +187,114 @@ func TestHandleHealthz(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateCheck(t *testing.T) {
+	releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/latest" {
+			t.Fatalf("release API path = %q, want /latest", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","name":"v0.2.0","html_url":"https://github.com/Earl9/subconv-next/releases/tag/v0.2.0","published_at":"2026-06-26T00:00:00Z"}`))
+	}))
+	defer releaseServer.Close()
+
+	oldReleaseURL := latestReleaseURL
+	latestReleaseURL = releaseServer.URL + "/latest"
+	defer func() { latestReleaseURL = oldReleaseURL }()
+
+	cfg := model.DefaultConfig()
+	server, _ := newTestServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/update-check", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body updateCheckResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.OK || !body.UpdateAvailable || !body.Comparable {
+		t.Fatalf("unexpected update response: %+v", body)
+	}
+	if body.CurrentVersion != "0.1.0-test" || body.LatestVersion != "v0.2.0" {
+		t.Fatalf("versions = current %q latest %q", body.CurrentVersion, body.LatestVersion)
+	}
+	if body.ReleaseURL == "" || body.CheckedAt == "" {
+		t.Fatalf("release metadata missing: %+v", body)
+	}
+}
+
+func TestHandleUpdateCheckFallsBackToLatestRedirect(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer apiServer.Close()
+
+	pageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			http.Redirect(w, r, "/Earl9/subconv-next/releases/tag/v0.2.0", http.StatusFound)
+		case "/Earl9/subconv-next/releases/tag/v0.2.0":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			t.Fatalf("release page path = %q", r.URL.Path)
+		}
+	}))
+	defer pageServer.Close()
+
+	oldReleaseURL := latestReleaseURL
+	oldReleasePageURL := latestReleasePageURL
+	latestReleaseURL = apiServer.URL
+	latestReleasePageURL = pageServer.URL + "/latest"
+	defer func() {
+		latestReleaseURL = oldReleaseURL
+		latestReleasePageURL = oldReleasePageURL
+	}()
+
+	cfg := model.DefaultConfig()
+	server, _ := newTestServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/update-check", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body updateCheckResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.LatestVersion != "v0.2.0" || !body.UpdateAvailable || body.ReleaseURL == "" {
+		t.Fatalf("unexpected update response: %+v", body)
+	}
+}
+
+func TestCompareVersionStrings(t *testing.T) {
+	tests := []struct {
+		current string
+		latest  string
+		want    int
+		ok      bool
+	}{
+		{current: "1.0.0-10", latest: "v1.0.0-11", want: -1, ok: true},
+		{current: "v1.0.1", latest: "1.0.0-11", want: 1, ok: true},
+		{current: "1.0.0", latest: "v1.0.0", want: 0, ok: true},
+		{current: "dev", latest: "v1.0.0", want: 0, ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := compareVersionStrings(tt.current, tt.latest)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("compareVersionStrings(%q, %q) = (%d, %v), want (%d, %v)", tt.current, tt.latest, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestRandomPublishedIdentifiersAreStrongAndURLSafe(t *testing.T) {
 	seenTokens := map[string]struct{}{}
 	seenPublishIDs := map[string]struct{}{}

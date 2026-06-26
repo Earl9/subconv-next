@@ -163,17 +163,21 @@ func NormalizeGroupOptions(opt GroupOptions) GroupOptions {
 }
 
 type DNSConfig struct {
-	Enable            bool                `json:"enable"`
-	Listen            string              `json:"listen,omitempty"`
-	UseSystemHosts    bool                `json:"use_system_hosts"`
-	EnhancedMode      string              `json:"enhanced_mode,omitempty"`
-	FakeIPRange       string              `json:"fake_ip_range,omitempty"`
-	DefaultNameserver []string            `json:"default_nameserver,omitempty"`
-	Nameserver        []string            `json:"nameserver,omitempty"`
-	Fallback          []string            `json:"fallback,omitempty"`
-	FallbackFilter    *DNSFallbackFilter  `json:"fallback_filter,omitempty"`
-	FakeIPFilter      []string            `json:"fake_ip_filter,omitempty"`
-	NameserverPolicy  map[string][]string `json:"nameserver_policy,omitempty"`
+	Enable             bool                `json:"enable"`
+	Listen             string              `json:"listen,omitempty"`
+	UseSystemHosts     bool                `json:"use_system_hosts"`
+	RespectRules       bool                `json:"respect_rules,omitempty"`
+	EnhancedMode       string              `json:"enhanced_mode,omitempty"`
+	FakeIPRange        string              `json:"fake_ip_range,omitempty"`
+	DefaultNameserver  []string            `json:"default_nameserver,omitempty"`
+	Nameserver         []string            `json:"nameserver,omitempty"`
+	ProxyNameserver    []string            `json:"proxy_server_nameserver,omitempty"`
+	DirectNameserver   []string            `json:"direct_nameserver,omitempty"`
+	DirectFollowPolicy bool                `json:"direct_nameserver_follow_policy,omitempty"`
+	Fallback           []string            `json:"fallback,omitempty"`
+	FallbackFilter     *DNSFallbackFilter  `json:"fallback_filter,omitempty"`
+	FakeIPFilter       []string            `json:"fake_ip_filter,omitempty"`
+	NameserverPolicy   map[string][]string `json:"nameserver_policy,omitempty"`
 }
 
 type DNSFallbackFilter struct {
@@ -340,134 +344,7 @@ func DefaultRenderConfig() RenderConfig {
 			MMDB:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
 			ASN:     "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
 		},
-		DNS: &DNSConfig{
-			Enable:         true,
-			Listen:         "127.0.0.1:5335",
-			UseSystemHosts: false,
-			EnhancedMode:   "fake-ip",
-			FakeIPRange:    "198.18.0.1/16",
-			DefaultNameserver: []string{
-				"180.76.76.76",
-				"182.254.118.118",
-				"8.8.8.8",
-				"180.184.2.2",
-			},
-			Nameserver: []string{
-				"180.76.76.76",
-				"119.29.29.29",
-				"180.184.1.1",
-				"223.5.5.5",
-				"8.8.8.8",
-				"https://223.6.6.6/dns-query#h3=true",
-				"https://dns.alidns.com/dns-query",
-				"https://cloudflare-dns.com/dns-query",
-				"https://doh.pub/dns-query",
-			},
-			Fallback: []string{
-				"https://000000.dns.nextdns.io/dns-query#h3=true",
-				"https://dns.alidns.com/dns-query",
-				"https://doh.pub/dns-query",
-				"https://public.dns.iij.jp/dns-query",
-				"https://101.101.101.101/dns-query",
-				"https://208.67.220.220/dns-query",
-				"tls://8.8.4.4",
-				"tls://1.0.0.1:853",
-				"https://cloudflare-dns.com/dns-query",
-				"https://dns.google/dns-query",
-			},
-			FallbackFilter: &DNSFallbackFilter{
-				GeoIP: true,
-				IPCIDR: []string{
-					"240.0.0.0/4",
-					"0.0.0.0/32",
-					"127.0.0.1/32",
-				},
-				Domain: []string{
-					"+.google.com",
-					"+.facebook.com",
-					"+.twitter.com",
-					"+.youtube.com",
-					"+.xn--ngstr-lra8j.com",
-					"+.google.cn",
-					"+.googleapis.cn",
-					"+.googleapis.com",
-					"+.gvt1.com",
-				},
-			},
-			FakeIPFilter: []string{
-				"*.lan",
-				"stun.*.*.*",
-				"stun.*.*",
-				"time.windows.com",
-				"time.nist.gov",
-				"time.apple.com",
-				"time.asia.apple.com",
-				"*.ntp.org.cn",
-				"*.openwrt.pool.ntp.org",
-				"time1.cloud.tencent.com",
-				"time.ustc.edu.cn",
-				"pool.ntp.org",
-				"ntp.ubuntu.com",
-				"ntp.aliyun.com",
-				"ntp1.aliyun.com",
-				"ntp2.aliyun.com",
-				"ntp3.aliyun.com",
-				"ntp4.aliyun.com",
-				"ntp5.aliyun.com",
-				"ntp6.aliyun.com",
-				"ntp7.aliyun.com",
-				"time1.aliyun.com",
-				"time2.aliyun.com",
-				"time3.aliyun.com",
-				"time4.aliyun.com",
-				"time5.aliyun.com",
-				"time6.aliyun.com",
-				"time7.aliyun.com",
-				"*.time.edu.cn",
-				"time1.apple.com",
-				"time2.apple.com",
-				"time3.apple.com",
-				"time4.apple.com",
-				"time5.apple.com",
-				"time6.apple.com",
-				"time7.apple.com",
-				"time1.google.com",
-				"time2.google.com",
-				"time3.google.com",
-				"time4.google.com",
-				"music.163.com",
-				"*.music.163.com",
-				"*.126.net",
-				"musicapi.taihe.com",
-				"music.taihe.com",
-				"songsearch.kugou.com",
-				"trackercdn.kugou.com",
-				"*.kuwo.cn",
-				"api-jooxtt.sanook.com",
-				"api.joox.com",
-				"joox.com",
-				"y.qq.com",
-				"*.y.qq.com",
-				"streamoc.music.tc.qq.com",
-				"mobileoc.music.tc.qq.com",
-				"isure.stream.qqmusic.qq.com",
-				"dl.stream.qqmusic.qq.com",
-				"aqqmusic.tc.qq.com",
-				"amobile.music.tc.qq.com",
-				"*.xiami.com",
-				"*.music.migu.cn",
-				"music.migu.cn",
-				"*.msftconnecttest.com",
-				"*.msftncsi.com",
-				"localhost.ptlogin2.qq.com",
-				"*.*.*.srv.nintendo.net",
-				"*.*.stun.playstation.net",
-				"xbox.*.*.microsoft.com",
-				"*.ipv6.microsoft.com",
-				"*.*.xboxlive.com",
-				"speedtest.cros.wr.pvp.net",
-			},
-		},
+		DNS: DefaultDNSConfig(),
 		Profile: &ProfileConfig{
 			StoreSelected: true,
 			StoreFakeIP:   false,
@@ -502,6 +379,56 @@ func DefaultRenderConfig() RenderConfig {
 		RuleProviders:           []RuleProviderConfig{},
 		CustomProxyGroups:       []CustomProxyGroupConfig{},
 		SubscriptionInfo:        DefaultSubscriptionInfoConfig(),
+	}
+}
+
+func DefaultDNSConfig() *DNSConfig {
+	return &DNSConfig{
+		Enable:         true,
+		Listen:         "127.0.0.1:5335",
+		UseSystemHosts: false,
+		EnhancedMode:   "fake-ip",
+		FakeIPRange:    "198.18.0.0/16",
+		DefaultNameserver: []string{
+			"119.29.29.29",
+			"223.5.5.5",
+		},
+		Nameserver: []string{
+			"https://1.1.1.1/dns-query#RULES",
+			"https://8.8.8.8/dns-query#RULES",
+		},
+		ProxyNameserver: []string{
+			"119.29.29.29",
+			"223.5.5.5",
+		},
+		DirectNameserver: []string{
+			"https://doh.pub/dns-query",
+			"https://dns.alidns.com/dns-query",
+		},
+		DirectFollowPolicy: true,
+		NameserverPolicy: map[string][]string{
+			"geosite:cn,private,apple": {
+				"https://doh.pub/dns-query",
+				"https://dns.alidns.com/dns-query",
+			},
+			"*.linux.do": {
+				"https://xxx.ddd.oaifree.com/query-dns",
+			},
+			"linux.do": {
+				"https://xxx.ddd.oaifree.com/query-dns",
+			},
+		},
+		FakeIPFilter: []string{
+			"*.lan",
+			"*.local",
+			"*.arpa",
+			"time.*.com",
+			"ntp.*.com",
+			"+.market.xiaomi.com",
+			"localhost.ptlogin2.qq.com",
+			"*.msftncsi.com",
+			"www.msftconnecttest.com",
+		},
 	}
 }
 

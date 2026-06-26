@@ -127,3 +127,29 @@ services:
 ```
 
 See [docker.md](docker.md) for Docker-specific deployment, health check, backup, and multi-arch build steps.
+
+## DNS Defaults
+
+The default rendered DNS block is intentionally scoped for OpenClash compatibility:
+
+```yaml
+dns:
+  enable: true
+  listen: 127.0.0.1:5335
+  enhanced-mode: fake-ip
+  default-nameserver: [119.29.29.29, 223.5.5.5]
+  nameserver-policy:
+    '*.linux.do': https://xxx.ddd.oaifree.com/query-dns
+    geosite:cn,private,apple:
+      - https://doh.pub/dns-query
+      - https://dns.alidns.com/dns-query
+    linux.do: https://xxx.ddd.oaifree.com/query-dns
+  nameserver: ['https://1.1.1.1/dns-query#RULES', 'https://8.8.8.8/dns-query#RULES']
+  proxy-server-nameserver: [119.29.29.29, 223.5.5.5]
+  direct-nameserver: ['https://doh.pub/dns-query', 'https://dns.alidns.com/dns-query']
+  direct-nameserver-follow-policy: true
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter: ['*.lan', '*.local', '*.arpa', time.*.com, ntp.*.com, +.market.xiaomi.com, localhost.ptlogin2.qq.com, '*.msftncsi.com', www.msftconnecttest.com]
+```
+
+SubConv Next does not emit `fallback`, `fallback-filter`, or DoT servers by default. `default-nameserver` and `proxy-server-nameserver` use domestic plain DNS for bootstrap and node domains, while the global `nameserver` entries include `#RULES`.

@@ -45,7 +45,7 @@ func TestRenderGoldenFullFormatTopLevelOrder(t *testing.T) {
 	}
 	last := -1
 	for _, needle := range orderedNeedles {
-		pos := strings.Index(text, needle)
+		pos := topLevelKeyIndex(text, needle)
 		if pos == -1 {
 			t.Fatalf("missing top-level key %q:\n%s", needle, text)
 		}
@@ -54,6 +54,17 @@ func TestRenderGoldenFullFormatTopLevelOrder(t *testing.T) {
 		}
 		last = pos
 	}
+}
+
+func topLevelKeyIndex(text, key string) int {
+	if strings.HasPrefix(text, key) {
+		return 0
+	}
+	pos := strings.Index(text, "\n"+key)
+	if pos == -1 {
+		return -1
+	}
+	return pos + 1
 }
 
 func TestRenderGoldenDNSSnifferGeodata(t *testing.T) {
@@ -288,12 +299,24 @@ func TestRenderCompactDNS(t *testing.T) {
 	for _, needle := range []string{
 		"default-nameserver: [",
 		"nameserver: [",
-		"fallback: [",
-		"fallback-filter: {geoip: true",
+		"proxy-server-nameserver: [",
+		"direct-nameserver: [",
+		"direct-nameserver-follow-policy: true",
+		"nameserver-policy:",
+		"https://1.1.1.1/dns-query#RULES",
 		"fake-ip-filter: [",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("compact dns output missing %q:\n%s", needle, text)
+		}
+	}
+	for _, needle := range []string{
+		"fallback:",
+		"fallback-filter:",
+		"tls://",
+	} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("compact dns output should not include %q by default:\n%s", needle, text)
 		}
 	}
 }

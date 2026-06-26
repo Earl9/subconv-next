@@ -66,18 +66,22 @@ type mihomoConfig struct {
 }
 
 type mihomoDNS struct {
-	Enable            bool                     `yaml:"enable"`
-	Listen            string                   `yaml:"listen,omitempty"`
-	UseSystemHosts    *bool                    `yaml:"use-system-hosts,omitempty"`
-	IPv6              bool                     `yaml:"ipv6"`
-	EnhancedMode      string                   `yaml:"enhanced-mode,omitempty"`
-	FakeIPRange       string                   `yaml:"fake-ip-range,omitempty"`
-	DefaultNameserver []string                 `yaml:"default-nameserver,omitempty"`
-	Nameserver        []string                 `yaml:"nameserver,omitempty"`
-	Fallback          []string                 `yaml:"fallback,omitempty"`
-	FallbackFilter    *mihomoDNSFallbackFilter `yaml:"fallback-filter,omitempty"`
-	FakeIPFilter      []string                 `yaml:"fake-ip-filter,omitempty"`
-	NameserverPolicy  map[string][]string      `yaml:"nameserver-policy,omitempty"`
+	Enable             bool                     `yaml:"enable"`
+	Listen             string                   `yaml:"listen,omitempty"`
+	UseSystemHosts     *bool                    `yaml:"use-system-hosts,omitempty"`
+	IPv6               bool                     `yaml:"ipv6"`
+	RespectRules       bool                     `yaml:"respect-rules,omitempty"`
+	EnhancedMode       string                   `yaml:"enhanced-mode,omitempty"`
+	FakeIPRange        string                   `yaml:"fake-ip-range,omitempty"`
+	DefaultNameserver  []string                 `yaml:"default-nameserver,omitempty"`
+	Nameserver         []string                 `yaml:"nameserver,omitempty"`
+	ProxyNameserver    []string                 `yaml:"proxy-server-nameserver,omitempty"`
+	DirectNameserver   []string                 `yaml:"direct-nameserver,omitempty"`
+	DirectFollowPolicy bool                     `yaml:"direct-nameserver-follow-policy,omitempty"`
+	Fallback           []string                 `yaml:"fallback,omitempty"`
+	FallbackFilter     *mihomoDNSFallbackFilter `yaml:"fallback-filter,omitempty"`
+	FakeIPFilter       []string                 `yaml:"fake-ip-filter,omitempty"`
+	NameserverPolicy   map[string][]string      `yaml:"nameserver-policy,omitempty"`
 }
 
 type mihomoDNSFallbackFilter struct {
@@ -418,17 +422,21 @@ func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
 	}
 
 	dns := &mihomoDNS{
-		Enable:            cfg.Enable,
-		Listen:            strings.TrimSpace(cfg.Listen),
-		UseSystemHosts:    model.Bool(cfg.UseSystemHosts),
-		IPv6:              opts.IPv6,
-		EnhancedMode:      firstNonEmptyString(strings.TrimSpace(cfg.EnhancedMode), strings.TrimSpace(opts.EnhancedMode)),
-		FakeIPRange:       strings.TrimSpace(cfg.FakeIPRange),
-		DefaultNameserver: cloneStrings(cfg.DefaultNameserver),
-		Nameserver:        cloneStrings(cfg.Nameserver),
-		Fallback:          cloneStrings(cfg.Fallback),
-		FakeIPFilter:      cloneStrings(cfg.FakeIPFilter),
-		NameserverPolicy:  cloneStringSliceMap(cfg.NameserverPolicy),
+		Enable:             cfg.Enable,
+		Listen:             strings.TrimSpace(cfg.Listen),
+		UseSystemHosts:     model.Bool(cfg.UseSystemHosts),
+		IPv6:               opts.IPv6,
+		RespectRules:       cfg.RespectRules,
+		EnhancedMode:       firstNonEmptyString(strings.TrimSpace(cfg.EnhancedMode), strings.TrimSpace(opts.EnhancedMode)),
+		FakeIPRange:        strings.TrimSpace(cfg.FakeIPRange),
+		DefaultNameserver:  cloneStrings(cfg.DefaultNameserver),
+		Nameserver:         cloneStrings(cfg.Nameserver),
+		ProxyNameserver:    cloneStrings(cfg.ProxyNameserver),
+		DirectNameserver:   cloneStrings(cfg.DirectNameserver),
+		DirectFollowPolicy: cfg.DirectFollowPolicy,
+		Fallback:           cloneStrings(cfg.Fallback),
+		FakeIPFilter:       cloneStrings(cfg.FakeIPFilter),
+		NameserverPolicy:   cloneStringSliceMap(cfg.NameserverPolicy),
 	}
 	if cfg.FallbackFilter != nil {
 		dns.FallbackFilter = &mihomoDNSFallbackFilter{
@@ -1696,17 +1704,41 @@ func buildDNSNode(dns mihomoDNS) *yaml.Node {
 		appendMap(node, "use-system-hosts", scalarNode(*dns.UseSystemHosts))
 	}
 	appendMap(node, "ipv6", scalarNode(dns.IPv6))
+	if dns.RespectRules {
+		appendMap(node, "respect-rules", scalarNode(dns.RespectRules))
+	}
 	if dns.EnhancedMode != "" {
 		appendMap(node, "enhanced-mode", scalarNode(dns.EnhancedMode))
-	}
-	if dns.FakeIPRange != "" {
-		appendMap(node, "fake-ip-range", scalarNode(dns.FakeIPRange))
 	}
 	if len(dns.DefaultNameserver) > 0 {
 		appendMap(node, "default-nameserver", flowStringSeqNode(dns.DefaultNameserver))
 	}
+	if len(dns.NameserverPolicy) > 0 {
+		policy := mappingNode()
+		keys := make([]string, 0, len(dns.NameserverPolicy))
+		for key := range dns.NameserverPolicy {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			appendMap(policy, key, dnsPolicyValueNode(dns.NameserverPolicy[key]))
+		}
+		appendMap(node, "nameserver-policy", policy)
+	}
 	if len(dns.Nameserver) > 0 {
 		appendMap(node, "nameserver", flowStringSeqNode(dns.Nameserver))
+	}
+	if len(dns.ProxyNameserver) > 0 {
+		appendMap(node, "proxy-server-nameserver", flowStringSeqNode(dns.ProxyNameserver))
+	}
+	if len(dns.DirectNameserver) > 0 {
+		appendMap(node, "direct-nameserver", flowStringSeqNode(dns.DirectNameserver))
+	}
+	if dns.DirectFollowPolicy {
+		appendMap(node, "direct-nameserver-follow-policy", scalarNode(dns.DirectFollowPolicy))
+	}
+	if dns.FakeIPRange != "" {
+		appendMap(node, "fake-ip-range", scalarNode(dns.FakeIPRange))
 	}
 	if len(dns.Fallback) > 0 {
 		appendMap(node, "fallback", flowStringSeqNode(dns.Fallback))
@@ -1725,19 +1757,14 @@ func buildDNSNode(dns mihomoDNS) *yaml.Node {
 	if len(dns.FakeIPFilter) > 0 {
 		appendMap(node, "fake-ip-filter", flowStringSeqNode(dns.FakeIPFilter))
 	}
-	if len(dns.NameserverPolicy) > 0 {
-		policy := mappingNode()
-		keys := make([]string, 0, len(dns.NameserverPolicy))
-		for key := range dns.NameserverPolicy {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			appendMap(policy, key, stringSeqNode(dns.NameserverPolicy[key]))
-		}
-		appendMap(node, "nameserver-policy", policy)
-	}
 	return node
+}
+
+func dnsPolicyValueNode(values []string) *yaml.Node {
+	if len(values) == 1 {
+		return scalarNode(values[0])
+	}
+	return stringSeqNode(values)
 }
 
 func buildGeoxURLNode(cfg mihomoGeoxURL) *yaml.Node {
@@ -2195,11 +2222,11 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 		w.scalar(indent, "use-system-hosts", *dns.UseSystemHosts)
 	}
 	w.scalar(indent, "ipv6", dns.IPv6)
+	if dns.RespectRules {
+		w.scalar(indent, "respect-rules", dns.RespectRules)
+	}
 	if dns.EnhancedMode != "" {
 		w.scalar(indent, "enhanced-mode", dns.EnhancedMode)
-	}
-	if dns.FakeIPRange != "" {
-		w.scalar(indent, "fake-ip-range", dns.FakeIPRange)
 	}
 	if len(dns.DefaultNameserver) > 0 {
 		w.line(indent, "default-nameserver:")
@@ -2207,11 +2234,49 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 			w.listScalar(indent+4, item)
 		}
 	}
+	if len(dns.NameserverPolicy) > 0 {
+		keys := make([]string, 0, len(dns.NameserverPolicy))
+		for key := range dns.NameserverPolicy {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		w.line(indent, "nameserver-policy:")
+		for _, key := range keys {
+			values := dns.NameserverPolicy[key]
+			if len(values) == 1 {
+				w.line(indent+4, fmt.Sprintf("%s: %s", yamlString(key), yamlString(values[0])))
+				continue
+			}
+			w.line(indent+4, fmt.Sprintf("%s:", yamlString(key)))
+			for _, item := range values {
+				w.listScalar(indent+8, item)
+			}
+		}
+	}
 	if len(dns.Nameserver) > 0 {
 		w.line(indent, "nameserver:")
 		for _, item := range dns.Nameserver {
 			w.listScalar(indent+4, item)
 		}
+	}
+	if len(dns.ProxyNameserver) > 0 {
+		w.line(indent, "proxy-server-nameserver:")
+		for _, item := range dns.ProxyNameserver {
+			w.listScalar(indent+4, item)
+		}
+	}
+	if len(dns.DirectNameserver) > 0 {
+		w.line(indent, "direct-nameserver:")
+		for _, item := range dns.DirectNameserver {
+			w.listScalar(indent+4, item)
+		}
+	}
+	if dns.DirectFollowPolicy {
+		w.scalar(indent, "direct-nameserver-follow-policy", dns.DirectFollowPolicy)
+	}
+	if dns.FakeIPRange != "" {
+		w.scalar(indent, "fake-ip-range", dns.FakeIPRange)
 	}
 	if len(dns.Fallback) > 0 {
 		w.line(indent, "fallback:")
@@ -2239,21 +2304,6 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 		w.line(indent, "fake-ip-filter:")
 		for _, item := range dns.FakeIPFilter {
 			w.listScalar(indent+4, item)
-		}
-	}
-	if len(dns.NameserverPolicy) > 0 {
-		keys := make([]string, 0, len(dns.NameserverPolicy))
-		for key := range dns.NameserverPolicy {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-
-		w.line(indent, "nameserver-policy:")
-		for _, key := range keys {
-			w.line(indent+4, fmt.Sprintf("%s:", yamlString(key)))
-			for _, item := range dns.NameserverPolicy[key] {
-				w.listScalar(indent+8, item)
-			}
 		}
 	}
 }

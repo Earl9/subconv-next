@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/generate", s.handleGenerate)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/update-check", s.handleUpdateCheck)
 	mux.HandleFunc("/s/", s.handlePublishedSubscriptionYAML)
 	mux.HandleFunc("/sub/mihomo.yaml", s.handleDeprecatedSubscriptionYAML)
 	mux.HandleFunc("/favicon.svg", serveEmbeddedAsset("favicon.svg", "image/svg+xml"))

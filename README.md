@@ -16,6 +16,7 @@ V1 重点面向自托管部署：Docker 运行形态、OpenWrt / Kwrt all-in-one
 - 使用 `/s/{token}/mihomo.yaml` 随机私密订阅链接。
 - 支持本机浏览器草稿，且不保存完整发布 token。
 - 最终 YAML 校验覆盖 proxy-group 引用、过滤节点、自动选择组内容和 `MATCH` 顺序。
+- 默认 DNS 使用 OpenClash 兼容的 fake-ip + nameserver-policy 配置，默认 nameserver 走 `#RULES`，直连 DNS 和节点域名 DNS 分开处理。
 - Docker 镜像支持 `/data` 持久化，以及 `linux/amd64`、`linux/arm64`。
 - OpenWrt / Kwrt all-in-one IPK 包含后端服务、init.d、UCI 配置、procd、数据目录、LuCI 菜单和 LuCI 管理页。
 

@@ -65,7 +65,17 @@ Codex 优先保证路线 B 可用。
 - build linux amd64/arm64/armv7/mipsle
 - upload artifacts
 
-OpenWrt IPK 构建可后续单独 workflow。
+### Auto Release
+
+`.github/workflows/auto-release.yml` 会在 `main` 每次更新后自动发布 GitHub Release：
+
+- 自动生成版本号：`1.0.<run number>`，Git tag 为 `v1.0.<run number>`。
+- 用该版本号构建 Linux 多架构二进制。
+- 下载 `OPENWRT_SDK_URL` 指向的 OpenWrt/Kwrt SDK，用 `scripts/ipkg-build` 打包 `aarch64_generic` all-in-one IPK。
+- 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。
+- 创建 Git tag 和 GitHub Release，并上传二进制、OpenWrt IPK 与 `checksums.txt`。
+
+仓库需要配置 `OPENWRT_SDK_URL` repository variable 或 secret，例如指向 `openwrt-sdk-25.12.2-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst`。提交信息包含 `[skip release]` 时，只保留普通 CI，不自动发版。
 
 ## Release Artifacts
 
@@ -76,7 +86,7 @@ subconv-next_linux_amd64.tar.gz
 subconv-next_linux_arm64.tar.gz
 subconv-next_linux_armv7.tar.gz
 subconv-next_linux_mipsle_softfloat.tar.gz
-subconv-next-openwrt-packages.tar.gz
+subconv-next_<version>-1_aarch64_generic.ipk
 checksums.txt
 ```
 

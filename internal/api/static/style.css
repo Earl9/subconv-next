@@ -177,6 +177,34 @@ button {
   font-size: 0.85rem;
 }
 
+.version-badge {
+  position: relative;
+}
+
+.version-badge.update-available {
+  color: #b45309;
+  border-color: #fcd34d;
+  background: var(--warning-soft);
+  cursor: pointer;
+}
+
+.version-badge.checking {
+  color: var(--text-muted);
+}
+
+.version-update-dot {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+}
+
+.version-badge.update-available .version-update-dot {
+  display: inline-block;
+}
+
 .status-badge.online {
   color: var(--success);
 }

@@ -80,6 +80,9 @@ func normalizeConfig(cfg model.Config) model.Config {
 		defaults := model.DefaultRenderConfig()
 		cfg.Render.GeoxURL = defaults.GeoxURL
 	}
+	if cfg.Render.DNS != nil && isLegacyComplexDefaultDNS(*cfg.Render.DNS) {
+		cfg.Render.DNS = model.DefaultDNSConfig()
+	}
 	if cfg.Render.RuleProviders == nil {
 		cfg.Render.RuleProviders = []model.RuleProviderConfig{}
 	}
@@ -193,6 +196,38 @@ func normalizeConfig(cfg model.Config) model.Config {
 
 func Normalize(cfg model.Config) model.Config {
 	return normalizeConfig(cfg)
+}
+
+func isLegacyComplexDefaultDNS(dns model.DNSConfig) bool {
+	if !stringSlicesEqual(dns.DefaultNameserver, []string{"180.76.76.76", "182.254.118.118", "8.8.8.8", "180.184.2.2"}) {
+		return false
+	}
+	if !stringSlicesEqual(dns.Nameserver, []string{
+		"180.76.76.76",
+		"119.29.29.29",
+		"180.184.1.1",
+		"223.5.5.5",
+		"8.8.8.8",
+		"https://223.6.6.6/dns-query#h3=true",
+		"https://dns.alidns.com/dns-query",
+		"https://cloudflare-dns.com/dns-query",
+		"https://doh.pub/dns-query",
+	}) {
+		return false
+	}
+	return len(dns.Fallback) > 0 || dns.FallbackFilter != nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i]) != strings.TrimSpace(b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func Validate(cfg model.Config) error {
