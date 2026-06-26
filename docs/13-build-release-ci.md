@@ -69,7 +69,7 @@ Codex 优先保证路线 B 可用。
 
 `.github/workflows/auto-release.yml` 会在 `main` 每次更新后自动发布 GitHub Release：
 
-- 自动生成版本号：`1.0.<run number>`，Git tag 为 `v1.0.<run number>`。
+- 自动生成版本号：读取远端最新 `v1.0.x` tag 并递增 patch，Git tag 为 `v<version>`。失败的 workflow 不会消耗版本号。
 - 用该版本号构建 Linux 多架构二进制。
 - 使用仓库内 portable `ipkg-build` 打包 `aarch64_generic` all-in-one OpenWrt IPK，不需要配置 OpenWrt SDK URL。
 - 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。GHCR 推送失败不会阻断 GitHub Release 和 OpenWrt IPK 上传。

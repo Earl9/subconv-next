@@ -37,7 +37,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="1.0.${GITHUB_RUN_NUMBER}"
+          git fetch --force --tags origin 'refs/tags/v1.0.*:refs/tags/v1.0.*'
+          latest_patch="$(
+            git tag --list 'v1.0.*' |
+              sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1/p' |
+              sort -n |
+              tail -n 1
+          )"
+          if [ -z "${latest_patch}" ]; then
+            latest_patch=0
+          fi
+          version="1.0.$((latest_patch + 1))"
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
@@ -167,6 +177,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists. Refusing to overwrite an existing release tag." >&2
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Release ${TAG}"
