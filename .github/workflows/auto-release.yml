@@ -76,34 +76,17 @@ jobs:
       - name: Build OpenWrt IPK
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          OPENWRT_SDK_URL: ${{ vars.OPENWRT_SDK_URL || secrets.OPENWRT_SDK_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${OPENWRT_SDK_URL:-}" ]; then
-            echo "OPENWRT_SDK_URL repository variable or secret is required to build the OpenWrt IPK." >&2
-            exit 1
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y zstd
-
-          mkdir -p /tmp/openwrt-sdk dist/openwrt-arm64
-          curl -fL "${OPENWRT_SDK_URL}" -o /tmp/openwrt-sdk/sdk.tar
-          tar -xf /tmp/openwrt-sdk/sdk.tar -C /tmp/openwrt-sdk
-          sdk_dir="$(find /tmp/openwrt-sdk -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-          if [ -z "${sdk_dir}" ] || [ ! -x "${sdk_dir}/scripts/ipkg-build" ]; then
-            echo "Downloaded SDK does not contain scripts/ipkg-build." >&2
-            exit 1
-          fi
-
+          mkdir -p dist/openwrt-arm64
           install -m0755 dist/subconv-next-linux-arm64 dist/openwrt-arm64/subconv-next
-          SDK_DIR="${sdk_dir}" VERSION="${VERSION}" RELEASE=1 ARCH=aarch64_generic \
-            ./scripts/package-openwrt-ipk-sdk.sh dist/openwrt-arm64/subconv-next
+          VERSION="${VERSION}" RELEASE=1 ARCH=aarch64_generic \
+            ./scripts/package-openwrt-ipk-portable.sh dist/openwrt-arm64/subconv-next
 
       - name: Generate checksums
         run: |
-          (cd dist && sha256sum subconv-next-* > checksums.txt)
+          (cd dist && sha256sum subconv-next-* subconv-next_*.ipk > checksums.txt)
 
       - name: Create release notes
         env:
