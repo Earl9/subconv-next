@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      reset_v1_versions:
+        description: Delete v1.0.1+ releases/tags before publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -32,7 +38,8 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Delete stale failed release tags
+      - name: Reset v1 release versions
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_v1_versions }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash

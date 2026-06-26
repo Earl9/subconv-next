@@ -80,6 +80,8 @@ GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontain
 - `GHCR_USERNAME`：PAT 所属 GitHub 用户名，可省略并默认使用 `github.actor`。
 - `GHCR_TOKEN`：classic PAT，至少包含 `write:packages` 权限。
 
+手动触发 `workflow_dispatch` 时可以勾选 `reset_v1_versions`，发布前会尝试删除 `v1.0.1+` 的 Release/tag，再从 `v1.0.1` 重新生成。已经被 GitHub 标记为 immutable 的 Release 可能需要先在 GitHub 页面手动删除。
+
 提交信息包含 `[skip release]` 时，只保留普通 CI，不自动发版。
 
 ## Release Artifacts
