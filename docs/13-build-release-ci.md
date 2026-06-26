@@ -72,10 +72,10 @@ Codex 优先保证路线 B 可用。
 - 自动生成版本号：`1.0.<run number>`，Git tag 为 `v1.0.<run number>`。
 - 用该版本号构建 Linux 多架构二进制。
 - 使用仓库内 portable `ipkg-build` 打包 `aarch64_generic` all-in-one OpenWrt IPK，不需要配置 OpenWrt SDK URL。
-- 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。
+- 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。GHCR 推送失败不会阻断 GitHub Release 和 OpenWrt IPK 上传。
 - 创建 Git tag 和 GitHub Release，并上传二进制、OpenWrt IPK 与 `checksums.txt`。
 
-GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontainers.image.source` 以关联当前仓库。如果 GHCR 返回 `permission_denied: write_package`，需要在 package 设置中给当前仓库 Actions 写入权限，或配置 repository secrets：
+GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontainers.image.source` 以关联当前仓库。如果 GHCR 返回 `permission_denied: write_package`，需要在 package 设置中给当前仓库 Actions 写入权限，或配置 repository secrets。配置前自动发布仍会继续创建 Git tag、GitHub Release 和上传 OpenWrt IPK。
 
 - `GHCR_USERNAME`：PAT 所属 GitHub 用户名，可省略并默认使用 `github.actor`。
 - `GHCR_TOKEN`：classic PAT，至少包含 `write:packages` 权限。
