@@ -120,8 +120,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || github.token }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -132,6 +132,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
+            SOURCE_REPOSITORY=https://github.com/${{ github.repository }}
           tags: |
             ${{ steps.version.outputs.image }}:latest
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}

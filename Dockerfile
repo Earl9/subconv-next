@@ -22,6 +22,15 @@ RUN apk add --no-cache ca-certificates tzdata
 
 FROM alpine:3.20
 
+ARG VERSION=dev
+ARG SOURCE_REPOSITORY=""
+
+LABEL org.opencontainers.image.title="SubConv Next" \
+	org.opencontainers.image.description="Modern subscription converter for Mihomo / Clash Meta" \
+	org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
+	org.opencontainers.image.version="${VERSION}" \
+	org.opencontainers.image.licenses="MIT"
+
 COPY --from=runtime-deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=runtime-deps /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /out/subconv-next /usr/bin/subconv-next

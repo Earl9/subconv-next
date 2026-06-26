@@ -75,6 +75,11 @@ Codex 优先保证路线 B 可用。
 - 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。
 - 创建 Git tag 和 GitHub Release，并上传二进制、OpenWrt IPK 与 `checksums.txt`。
 
+GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontainers.image.source` 以关联当前仓库。如果 GHCR 返回 `permission_denied: write_package`，需要在 package 设置中给当前仓库 Actions 写入权限，或配置 repository secrets：
+
+- `GHCR_USERNAME`：PAT 所属 GitHub 用户名，可省略并默认使用 `github.actor`。
+- `GHCR_TOKEN`：classic PAT，至少包含 `write:packages` 权限。
+
 提交信息包含 `[skip release]` 时，只保留普通 CI，不自动发版。
 
 ## Release Artifacts
