@@ -101,6 +101,7 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 					UserAgent:          sub.UserAgent,
 					Enabled:            sub.Enabled,
 					InsecureSkipVerify: sub.InsecureSkipVerify,
+					AllowPrivateHosts:  sub.AllowLAN,
 				})
 				collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, warnings...)
 				if err != nil {
@@ -352,12 +353,7 @@ func applyRenderPreferences(nodes []model.NodeIR, render model.RenderConfig) []m
 		if excludeMatcher != nil && excludeMatcher(node.Name) {
 			continue
 		}
-		if render.SkipTLSVerify {
-			node.TLS.Insecure = true
-		}
-		if render.UDP {
-			node.UDP = model.Bool(true)
-		}
+		node = applyNodeRenderFlags(node, render)
 		node.Name = model.BuildYamlNodeName(node.Name, node.Source, model.EffectiveNameOptions(render))
 		out = append(out, node)
 	}
@@ -403,7 +399,7 @@ func isRenderableNode(node model.NodeIR) bool {
 		return strings.TrimSpace(node.Auth.UUID) != ""
 	case model.ProtocolVLESS:
 		return strings.TrimSpace(node.Auth.UUID) != ""
-	case model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolAnyTLS:
+	case model.ProtocolTrojan, model.ProtocolHysteria, model.ProtocolHysteria2, model.ProtocolAnyTLS:
 		return strings.TrimSpace(node.Auth.Password) != ""
 	case model.ProtocolTUIC:
 		return strings.TrimSpace(node.Auth.UUID) != "" && strings.TrimSpace(node.Auth.Password) != ""

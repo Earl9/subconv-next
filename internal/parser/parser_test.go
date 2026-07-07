@@ -137,6 +137,39 @@ func TestParseContentMieruPortRange(t *testing.T) {
 	}
 }
 
+func TestParseContentHTTPAndSOCKS5URI(t *testing.T) {
+	content := []byte(strings.Join([]string{
+		"http://user:secret@example.com:8080#http-node",
+		"https://secure:pass@example.org:8443?sni=proxy.example.org&skip-cert-verify=1#https-node",
+		"socks5://sock:s3cr3t@socks.example.net:1080?udp=0#socks-node",
+	}, "\n"))
+	result := ParseContent(content, model.SourceInfo{Name: "manual"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 3 {
+		t.Fatalf("len(Nodes) = %d, want 3", len(result.Nodes))
+	}
+
+	httpNode := result.Nodes[0]
+	if httpNode.Type != model.ProtocolHTTP || httpNode.Auth.Username != "user" || httpNode.Auth.Password != "secret" {
+		t.Fatalf("http node = %#v, want http with username/password", httpNode)
+	}
+	if httpNode.TLS.Enabled {
+		t.Fatalf("http TLS.Enabled = true, want false")
+	}
+
+	httpsNode := result.Nodes[1]
+	if httpsNode.Type != model.ProtocolHTTP || !httpsNode.TLS.Enabled || !httpsNode.TLS.Insecure || httpsNode.TLS.SNI != "proxy.example.org" {
+		t.Fatalf("https node = %#v, want http type with TLS/SNI/insecure", httpsNode)
+	}
+
+	socksNode := result.Nodes[2]
+	if socksNode.Type != model.ProtocolSOCKS5 || socksNode.UDP == nil || *socksNode.UDP {
+		t.Fatalf("socks5 node = %#v, want socks5 with udp false", socksNode)
+	}
+}
+
 func TestParseContentVLESSXHTTP(t *testing.T) {
 	content := []byte("vless://uuid-1@example.com:443?type=xhttp&security=reality&sni=example.com&fp=chrome&pbk=pub&sid=abcd&path=%2Fdemo&mode=auto&no-grpc-header=false#xhttp")
 	result := ParseContent(content, model.SourceInfo{Name: "manual"})
@@ -306,13 +339,53 @@ proxies:
     username: user
     password: secret
     multiplexing: MULTIPLEXING_LOW
+  - name: "http yaml"
+    type: http
+    server: http.example.com
+    port: 8080
+    username: http-user
+    password: http-pass
+    tls: true
+    sni: http.example.com
+    skip-cert-verify: true
+  - name: "socks yaml"
+    type: socks5
+    server: socks.example.com
+    port: 1080
+    username: socks-user
+    password: socks-pass
+    udp: false
+  - name: "hysteria yaml"
+    type: hysteria
+    server: hysteria.example.com
+    port: 443
+    auth-str: hy-secret
+    protocol: udp
+    obfs: salamander
+    obfs-param: obfs-secret
+    up: 100
+    down: 100
+    sni: hysteria.example.com
+    skip-cert-verify: true
+    custom-hy-flag: keep-v1
+  - name: "hy2 yaml"
+    type: hysteria2
+    server: hkt03ddns.poke-mon.xyz
+    port: 20000
+    ports: 20000-50000
+    mport: 20000-50000
+    udp: true
+    password: hy2-secret
+    sni: www.bing.com
+    skip-cert-verify: false
+    custom-hy2-flag: keep-me
 `)
 	result := ParseContent(content, model.SourceInfo{Name: "yaml", Kind: "file"})
 	if len(result.Errors) != 0 {
 		t.Fatalf("Errors = %#v, want none", result.Errors)
 	}
-	if len(result.Nodes) != 3 {
-		t.Fatalf("len(Nodes) = %d, want 3", len(result.Nodes))
+	if len(result.Nodes) != 7 {
+		t.Fatalf("len(Nodes) = %d, want 7", len(result.Nodes))
 	}
 
 	anytls := result.Nodes[0]
@@ -352,6 +425,148 @@ proxies:
 	}
 	if got := fmt.Sprint(mieru.Raw["portRange"]); got != "2090-2099" {
 		t.Fatalf("mieru portRange = %q, want 2090-2099", got)
+	}
+
+	httpNode := result.Nodes[3]
+	if httpNode.Type != model.ProtocolHTTP || httpNode.Auth.Username != "http-user" || !httpNode.TLS.Enabled || !httpNode.TLS.Insecure {
+		t.Fatalf("http yaml node = %#v, want auth and TLS parsed", httpNode)
+	}
+
+	socksNode := result.Nodes[4]
+	if socksNode.Type != model.ProtocolSOCKS5 || socksNode.Auth.Password != "socks-pass" || socksNode.UDP == nil || *socksNode.UDP {
+		t.Fatalf("socks yaml node = %#v, want socks5 auth and udp false", socksNode)
+	}
+
+	hy := result.Nodes[5]
+	if hy.Type != model.ProtocolHysteria {
+		t.Fatalf("sixth Type = %q, want %q", hy.Type, model.ProtocolHysteria)
+	}
+	if hy.Auth.Password != "hy-secret" || !hy.TLS.Insecure || hy.TLS.SNI != "hysteria.example.com" {
+		t.Fatalf("hysteria yaml node = %#v, want auth and TLS parsed", hy)
+	}
+	hyFields, ok := hy.Raw["_mihomoProxyFields"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("hysteria raw mihomo fields = %#v, want map", hy.Raw["_mihomoProxyFields"])
+	}
+	for key, want := range map[string]string{
+		"auth-str":       "hy-secret",
+		"protocol":       "udp",
+		"obfs-param":     "obfs-secret",
+		"up":             "100",
+		"down":           "100",
+		"custom-hy-flag": "keep-v1",
+	} {
+		if got := fmt.Sprint(hyFields[key]); got != want {
+			t.Fatalf("hysteria original field %s = %q, want %q", key, got, want)
+		}
+	}
+
+	hy2 := result.Nodes[6]
+	if hy2.Type != model.ProtocolHysteria2 {
+		t.Fatalf("seventh Type = %q, want %q", hy2.Type, model.ProtocolHysteria2)
+	}
+	fields, ok := hy2.Raw["_mihomoProxyFields"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("hy2 raw mihomo fields = %#v, want map", hy2.Raw["_mihomoProxyFields"])
+	}
+	for key, want := range map[string]string{
+		"ports":           "20000-50000",
+		"mport":           "20000-50000",
+		"custom-hy2-flag": "keep-me",
+	} {
+		if got := fmt.Sprint(fields[key]); got != want {
+			t.Fatalf("hy2 original field %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestParseContentMihomoYAMLFlexibleScalarTypes(t *testing.T) {
+	content := []byte(`
+proxies:
+  - name: "http string fields"
+    type: http
+    server: http.example.com
+    port: "8200"
+    username: user
+    password: pass
+    tls: "true"
+    skip-cert-verify: "true"
+    alpn: h2,http/1.1
+  - name: "vless scalar transport"
+    type: vless
+    server: vless.example.com
+    port: "443"
+    uuid: uuid-1
+    tls: "true"
+    network: ws
+    ws-opts:
+      path: /ws
+      headers: vless.example.com
+  - name: "h2 scalar host"
+    type: trojan
+    server: trojan.example.com
+    port: "443"
+    password: secret
+    network: h2
+    h2-opts:
+      host: trojan.example.com
+      path: /h2
+  - name: "wg string fields"
+    type: wireguard
+    server: wg.example.com
+    port: "51820"
+    private-key: private
+    public-key: public
+    allowed-ips: 0.0.0.0/0,::/0
+    dns: 1.1.1.1,8.8.8.8
+    mtu: "1280"
+    persistent-keepalive: "25"
+    remote-dns-resolve: "true"
+    peers:
+      - server: peer.example.com
+        port: "51821"
+        public-key: peer-public
+        allowed-ips: 10.0.0.0/8
+`)
+
+	result := ParseContent(content, model.SourceInfo{Name: "yaml", Kind: "file"})
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want none", result.Errors)
+	}
+	if len(result.Nodes) != 4 {
+		t.Fatalf("len(Nodes) = %d, want 4", len(result.Nodes))
+	}
+
+	httpNode := result.Nodes[0]
+	if httpNode.Port != 8200 || !httpNode.TLS.Enabled || !httpNode.TLS.Insecure {
+		t.Fatalf("http node = %#v, want string port/bool parsed", httpNode)
+	}
+	if got := strings.Join(httpNode.TLS.ALPN, ","); got != "h2,http/1.1" {
+		t.Fatalf("http ALPN = %q, want h2,http/1.1", got)
+	}
+
+	vless := result.Nodes[1]
+	if vless.Transport.Host != "vless.example.com" {
+		t.Fatalf("vless ws host = %q, want scalar headers host", vless.Transport.Host)
+	}
+
+	trojan := result.Nodes[2]
+	if got := strings.Join(trojan.Transport.H2Hosts, ","); got != "trojan.example.com" {
+		t.Fatalf("trojan h2 hosts = %q, want scalar host", got)
+	}
+
+	wg := result.Nodes[3]
+	if wg.Port != 0 || wg.WireGuard == nil || len(wg.WireGuard.Peers) != 1 {
+		t.Fatalf("wireguard node = %#v, want parsed peer form", wg)
+	}
+	if wg.WireGuard.MTU != 1280 || wg.WireGuard.PersistentKeepalive != 25 || !wg.WireGuard.RemoteDNSResolve {
+		t.Fatalf("wireguard options = %#v, want string numeric/bool parsed", wg.WireGuard)
+	}
+	if got := strings.Join(wg.WireGuard.DNS, ","); got != "1.1.1.1,8.8.8.8" {
+		t.Fatalf("wireguard DNS = %q, want parsed csv", got)
+	}
+	if wg.WireGuard.Peers[0].Port != 51821 || strings.Join(wg.WireGuard.Peers[0].AllowedIPs, ",") != "10.0.0.0/8" {
+		t.Fatalf("wireguard peer = %#v, want string fields parsed", wg.WireGuard.Peers[0])
 	}
 }
 

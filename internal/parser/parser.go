@@ -126,6 +126,12 @@ func parseURI(raw string, source model.SourceInfo) (model.NodeIR, error) {
 		return parseWireGuardURI(raw, source)
 	case string(model.ProtocolMieru):
 		return parseMieru(raw, source)
+	case string(model.ProtocolHTTP):
+		return parseHTTPProxy(raw, source)
+	case "https":
+		return parseHTTPSProxy(raw, source)
+	case string(model.ProtocolSOCKS5):
+		return parseSOCKS5Proxy(raw, source)
 	default:
 		return model.NodeIR{}, fmt.Errorf("unsupported scheme %q", raw[:schemeEnd])
 	}

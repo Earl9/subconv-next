@@ -29,6 +29,7 @@ type publishedMeta struct {
 	Revoked          bool                           `json:"revoked"`
 	WorkspaceHash    string                         `json:"workspace_hash,omitempty"`
 	RotatedAt        time.Time                      `json:"rotated_at,omitempty"`
+	OutputFilename   string                         `json:"output_filename,omitempty"`
 	SubscriptionInfo *publishedSubscriptionUserinfo `json:"subscription_userinfo,omitempty"`
 	SourceUserinfo   []publishedSourceUserinfo      `json:"source_userinfo,omitempty"`
 }
@@ -275,6 +276,7 @@ func (s *Server) finalizePublishedRefresh(ref *workspaceRef, published *publishe
 	now := time.Now().UTC()
 	published.Meta.WorkspaceHash = firstNonEmptyString(ref.Hash, published.Meta.WorkspaceHash)
 	published.Meta.UpdatedAt = now
+	published.Meta.OutputFilename = publishedOutputFilenameFromConfig(cfg)
 	published.Meta.SubscriptionInfo, published.Meta.SourceUserinfo = buildPublishedSubscriptionUserinfo(cfg, result.SubscriptionMeta, now)
 	if err := s.savePublishedMeta(*published); err != nil {
 		return err
@@ -662,13 +664,17 @@ func publishedTokenHint(token string) string {
 	return token[:4] + "..." + token[len(token)-4:]
 }
 
-func publishedURL(origin, token string) string {
+func publishedURL(origin, token string, filenames ...string) string {
 	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
 	token = strings.TrimSpace(token)
 	if origin == "" || token == "" {
 		return ""
 	}
-	return origin + "/s/" + token + "/mihomo.yaml"
+	filename := "mihomo.yaml"
+	if len(filenames) > 0 {
+		filename = publishedOutputFilename(filenames[0])
+	}
+	return origin + "/s/" + url.PathEscape(token) + "/" + url.PathEscape(filename)
 }
 
 func publishedTokenFromSubscriptionURL(rawURL string) (string, bool) {
@@ -682,7 +688,7 @@ func publishedTokenFromSubscriptionURL(rawURL string) (string, bool) {
 	}
 	path := strings.Trim(parsed.Path, "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 3 || parts[0] != "s" || parts[2] != "mihomo.yaml" {
+	if len(parts) != 3 || parts[0] != "s" || strings.TrimSpace(parts[2]) == "" {
 		return "", false
 	}
 	token, err := url.PathUnescape(parts[1])
@@ -694,6 +700,14 @@ func publishedTokenFromSubscriptionURL(rawURL string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+func publishedOutputFilenameFromConfig(cfg model.Config) string {
+	return publishedOutputFilename(cfg.Render.OutputFilename)
+}
+
+func publishedOutputFilename(value string) string {
+	return subscriptionOutputFilename(value)
 }
 
 func firstNonZeroTime(values ...time.Time) time.Time {

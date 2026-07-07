@@ -158,12 +158,7 @@ func mergeNodeSources(existing, duplicate model.NodeIR) []model.SourceInfo {
 func applyNodeDecorations(nodes []model.NodeIR, render model.RenderConfig) []model.NodeIR {
 	out := make([]model.NodeIR, 0, len(nodes))
 	for _, node := range nodes {
-		if render.SkipTLSVerify {
-			node.TLS.Insecure = true
-		}
-		if render.UDP {
-			node.UDP = model.Bool(true)
-		}
+		node = applyNodeRenderFlags(node, render)
 		node.Name = model.BuildYamlNodeName(node.Name, node.Source, model.EffectiveNameOptions(render))
 		out = append(out, node)
 	}
@@ -173,6 +168,16 @@ func applyNodeDecorations(nodes []model.NodeIR, render model.RenderConfig) []mod
 		})
 	}
 	return out
+}
+
+func applyNodeRenderFlags(node model.NodeIR, render model.RenderConfig) model.NodeIR {
+	if render.SkipTLSVerify {
+		node.TLS.Insecure = true
+	}
+	if render.UDP && node.UDP == nil {
+		node.UDP = model.Bool(true)
+	}
+	return node
 }
 
 func ensureUniqueFinalNodeNames(nodes []model.NodeIR, render model.RenderConfig) []model.NodeIR {

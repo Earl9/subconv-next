@@ -336,6 +336,111 @@
                 </div>
               </div>
             </section>
+
+            <section class="panel card" id="dns-settings-panel">
+              <div class="panel-head">
+                <span class="section-badge" data-icon-name="globe"></span>
+                <div>
+                  <h2>DNS 设置</h2>
+                  <p class="panel-subtitle">默认使用内置稳定 DNS；开启后按下方配置生成。</p>
+                </div>
+              </div>
+
+              <div class="dns-settings">
+                <label class="option-item dns-toggle-item" title="开启后保留并输出自定义 DNS 配置">
+                  <div class="option-icon" data-icon-name="globe"></div>
+                  <div class="setting-body">
+                    <div class="option-title-row">
+                      <div class="option-title">自定义 DNS</div>
+                    </div>
+                    <div class="option-desc">关闭时使用内置稳定 DNS。</div>
+                  </div>
+                  <span class="switch">
+                    <input id="custom-dns-enabled" type="checkbox" />
+                    <span class="switch-track"></span>
+                  </span>
+                </label>
+
+                <div id="custom-dns-fields" class="dns-custom-fields hidden">
+                  <div class="dns-basic-grid">
+                    <div class="field">
+                      <label for="dns-listen">监听地址</label>
+                      <input id="dns-listen" type="text" value="127.0.0.1:5335" placeholder="127.0.0.1:5335" />
+                    </div>
+                    <div class="field">
+                      <label for="dns-enhanced-mode">增强模式</label>
+                      <select id="dns-enhanced-mode">
+                        <option value="fake-ip" selected>fake-ip</option>
+                        <option value="redir-host">redir-host</option>
+                        <option value="normal">normal</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="dns-fake-ip-range">Fake IP 网段</label>
+                      <input id="dns-fake-ip-range" type="text" value="198.18.0.1/16" placeholder="198.18.0.1/16" />
+                    </div>
+                    <label class="checkbox-line compact-check">
+                      <input id="dns-use-hosts" type="checkbox" checked />
+                      <span>use-hosts</span>
+                    </label>
+                    <label class="checkbox-line compact-check">
+                      <input id="dns-use-system-hosts" type="checkbox" />
+                      <span>use-system-hosts</span>
+                    </label>
+                    <label class="checkbox-line compact-check">
+                      <input id="dns-respect-rules" type="checkbox" />
+                      <span>respect-rules</span>
+                    </label>
+                    <label class="checkbox-line compact-check">
+                      <input id="dns-direct-follow-policy" type="checkbox" />
+                      <span>direct-nameserver-follow-policy</span>
+                    </label>
+                  </div>
+
+                  <div class="dns-list-grid">
+                    <div class="field">
+                      <label for="dns-default-nameserver">default-nameserver</label>
+                      <textarea id="dns-default-nameserver" spellcheck="false" placeholder="223.5.5.5&#10;119.29.29.29">223.5.5.5
+119.29.29.29</textarea>
+                    </div>
+                    <div class="field">
+                      <label for="dns-nameserver">nameserver</label>
+                      <textarea id="dns-nameserver" spellcheck="false" placeholder="223.5.5.5&#10;119.29.29.29">223.5.5.5
+119.29.29.29</textarea>
+                    </div>
+                    <div class="field">
+                      <label for="dns-fallback">fallback</label>
+                      <textarea id="dns-fallback" spellcheck="false" placeholder="https://dns.alidns.com/dns-query">https://dns.alidns.com/dns-query</textarea>
+                    </div>
+                    <div class="field">
+                      <label for="dns-proxy-server-nameserver">proxy-server-nameserver</label>
+                      <textarea id="dns-proxy-server-nameserver" spellcheck="false" placeholder="223.5.5.5&#10;119.29.29.29"></textarea>
+                    </div>
+                    <div class="field">
+                      <label for="dns-direct-nameserver">direct-nameserver</label>
+                      <textarea id="dns-direct-nameserver" spellcheck="false" placeholder="https://doh.pub/dns-query"></textarea>
+                    </div>
+                    <div class="field">
+                      <label for="dns-fake-ip-filter">fake-ip-filter</label>
+                      <textarea id="dns-fake-ip-filter" spellcheck="false" placeholder="*.lan&#10;*.local&#10;localhost">*.lan
+*.local
+localhost
+*.msftconnecttest.com
+*.msftncsi.com
+*.nintendo.net
+*.playstation.net
+*.xboxlive.com
+stun.*
+time.*</textarea>
+                    </div>
+                    <div class="field dns-policy-field">
+                      <label for="dns-nameserver-policy">nameserver-policy</label>
+                      <textarea id="dns-nameserver-policy" spellcheck="false" placeholder="geosite:cn,private: https://doh.pub/dns-query, https://dns.alidns.com/dns-query&#10;+.google.com: https://dns.cloudflare.com/dns-query"></textarea>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
 
           <aside class="config-side side-column">
@@ -476,14 +581,20 @@
             </div>
 
             <div class="toolbar-group toolbar-group-right">
+              <button id="restore-deleted-nodes-btn" class="secondary-button small-button" type="button">恢复已删除</button>
               <button id="refresh-nodes-btn" class="ghost-button small-button" type="button">刷新节点列表</button>
             </div>
           </div>
+
+          <div id="node-bulk-action-bar" class="bulk-action-bar node-bulk-action-bar hidden"></div>
 
           <div class="node-table-wrap tall-table">
             <table class="node-table modern-node-table">
               <thead>
                 <tr>
+                  <th class="node-select-col">
+                    <input id="node-select-page-checkbox" type="checkbox" aria-label="选择当前页节点" />
+                  </th>
                   <th>节点</th>
                   <th>协议 / 地区</th>
                   <th>地址</th>
@@ -494,7 +605,7 @@
               </thead>
               <tbody id="node-table-body">
                 <tr>
-                  <td colspan="6" class="table-empty">正在加载节点列表...</td>
+                  <td colspan="7" class="table-empty">正在加载节点列表...</td>
                 </tr>
               </tbody>
             </table>
@@ -668,6 +779,23 @@
             <div class="modal-actions-primary">
               <button id="danger-dialog-cancel-btn" class="ghost-button" type="button">取消</button>
             </div>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="restore-deleted-dialog" class="modal-dialog">
+        <form method="dialog" class="modal-shell">
+          <div class="modal-head">
+            <div>
+              <h3>恢复已删除节点</h3>
+              <p id="restore-deleted-dialog-meta" class="meta-text">查看本机草稿中被标记删除的订阅节点。</p>
+            </div>
+            <button class="icon-button" type="button" data-close-dialog="restore-deleted-dialog">×</button>
+          </div>
+          <div id="restore-deleted-dialog-body" class="restore-deleted-body"></div>
+          <div class="modal-actions">
+            <button id="restore-all-deleted-nodes-btn" class="primary-button" type="button">恢复全部</button>
+            <button class="ghost-button" type="button" data-close-dialog="restore-deleted-dialog">关闭</button>
           </div>
         </form>
       </dialog>

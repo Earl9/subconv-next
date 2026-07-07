@@ -8,6 +8,7 @@ type RenderOptions struct {
 	LogLevel                string                   `json:"log_level"`
 	IPv6                    bool                     `json:"ipv6"`
 	DNSEnabled              bool                     `json:"dns_enabled"`
+	CustomDNS               bool                     `json:"custom_dns,omitempty"`
 	EnhancedMode            string                   `json:"enhanced_mode"`
 	Emoji                   bool                     `json:"emoji"`
 	ShowNodeType            bool                     `json:"show_node_type"`
@@ -76,17 +77,12 @@ func DefaultRenderOptions() RenderOptions {
 		SourcePrefixSeparator:   "｜",
 		NameOptions:             DefaultNameOptions(),
 		DedupeScope:             "global",
-		GeodataMode:             true,
-		GeoAutoUpdate:           true,
-		GeodataLoader:           "standard",
-		GeoUpdateInterval:       24,
 		UnifiedDelay:            true,
-		TCPConcurrent:           true,
+		TCPConcurrent:           false,
 		FindProcessMode:         "strict",
 		GlobalClientFingerprint: "chrome",
 		OutputFilename:          "mihomo.yaml",
 		TemplateRuleMode:        "rules",
-		GeoxURL:                 defaults.GeoxURL,
 		DNS:                     defaults.DNS,
 		Profile:                 defaults.Profile,
 		Sniffer:                 defaults.Sniffer,

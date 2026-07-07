@@ -124,6 +124,72 @@ func TestMultipleLocalDraftStorageHooksExist(t *testing.T) {
 	}
 }
 
+func TestSubscriptionLANAllowHooksExist(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"function isPrivateSubscriptionURL",
+		"function sourceLANWarning",
+		"data-sub-field=\"allow_lan\"",
+		"允许局域网订阅地址",
+		"allow_lan: item.allow_lan === true",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing LAN subscription hook %q", needle)
+		}
+	}
+}
+
+func TestCustomDNSHooksExist(t *testing.T) {
+	app := readAppJS(t)
+	index, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("ReadFile(index.html) error = %v", err)
+	}
+
+	requiredApp := []string{
+		"custom_dns: false",
+		"function normalizeDNSConfigForFrontend",
+		"function readDNSFormConfig",
+		"function parseNameserverPolicyText",
+		"function splitDNSListItems",
+		"splitDNSListItems(line).forEach",
+		"custom_dns: customDNS",
+		"dns: dnsConfig",
+		"custom-dns-enabled",
+	}
+	for _, needle := range requiredApp {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing custom DNS hook %q", needle)
+		}
+	}
+
+	requiredIndex := []string{
+		"id=\"dns-settings-panel\"",
+		"id=\"custom-dns-enabled\"",
+		"value=\"127.0.0.1:5335\"",
+		"value=\"198.18.0.1/16\"",
+		"id=\"dns-use-hosts\" type=\"checkbox\" checked",
+		"id=\"dns-nameserver\"",
+		">223.5.5.5\n119.29.29.29</textarea>",
+		"id=\"dns-fallback\"",
+		">https://dns.alidns.com/dns-query</textarea>",
+		"id=\"dns-nameserver-policy\"",
+	}
+	indexText := string(index)
+	for _, needle := range requiredIndex {
+		if !strings.Contains(indexText, needle) {
+			t.Fatalf("index.html missing custom DNS hook %q", needle)
+		}
+	}
+	rulePanelIndex := strings.Index(indexText, "id=\"template-mode-panel\"")
+	dnsPanelIndex := strings.Index(indexText, "id=\"dns-settings-panel\"")
+	if rulePanelIndex < 0 || dnsPanelIndex < 0 || dnsPanelIndex < rulePanelIndex {
+		t.Fatalf("dns-settings-panel should be after rule/template settings")
+	}
+}
+
 func TestRestoreFromPublishedDedupesByPublishID(t *testing.T) {
 	app := readAppJS(t)
 
@@ -218,6 +284,82 @@ func TestNodeEditorCacheInvalidatesAfterGenerate(t *testing.T) {
 	}
 }
 
+func TestNodeEditorBulkDeleteHooksExist(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"function renderNodeBulkActionBar",
+		"bulk-delete-selected-nodes-btn",
+		"bulk-delete-current-filter-btn",
+		"function openBulkDeleteDialog",
+		"function performBulkDeleteNodes",
+		"const ok = await performBulkDeleteNodes(config.nodes || config.nodeIds || [])",
+		"nodes: targets",
+		"function normalizeBulkDeleteTargets",
+		"action: \"bulk-delete-nodes\"",
+		"fetchJSON(\"/api/nodes/delete\"",
+		"`/api/nodes/custom/${encodeURIComponent(nodeId)}`",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing bulk-delete hook %q", needle)
+		}
+	}
+}
+
+func TestNodeEditorDeletedRestoreHooksExist(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"restore-deleted-nodes-btn",
+		"restore-deleted-dialog",
+		"function openDeletedNodesDialog",
+		"fetchJSON(\"/api/nodes/deleted\")",
+		"data-restore-deleted-node",
+		"function renderDeletedNodesDialog",
+		"function restoreAllDeletedNodesFromDialog",
+		"function restoreDeletedNodes",
+		"fetchJSON(\"/api/nodes/enable\"",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing deleted-node restore hook %q", needle)
+		}
+	}
+}
+
+func TestNodeEditorPerformanceHooksExist(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"nodeById: new Map()",
+		"function buildNodeIndexes",
+		"node._searchText = buildNodeSearchText(node)",
+		"function bindNodeTableDelegates",
+		"body.dataset.delegatesBound === \"1\"",
+		"function refreshNodeSelectionUI",
+		"function buildNodeQueryParams",
+		"function loadAllFilteredNodes",
+		"state.selectedNodeCache.set(node.id, node)",
+		"const localNode = state.nodeById.get(nodeId)",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing node editor performance hook %q", needle)
+		}
+	}
+
+	openStart := strings.Index(app, "async function openNodeDialog")
+	openEnd := strings.Index(app[openStart:], "\n}\n")
+	if openStart < 0 || openEnd < 0 {
+		t.Fatalf("openNodeDialog function not found")
+	}
+	openBody := app[openStart : openStart+openEnd]
+	if strings.Contains(openBody, "state.allNodes.find") || strings.Contains(openBody, "state.nodes.find") {
+		t.Fatalf("openNodeDialog should use indexed lookup instead of scanning nodes:\n%s", openBody)
+	}
+}
+
 func TestEmojiSourceNamePreviewMatchesDefaultNaming(t *testing.T) {
 	app := readAppJS(t)
 
@@ -227,6 +369,8 @@ func TestEmojiSourceNamePreviewMatchesDefaultNaming(t *testing.T) {
 		"function buildSourcePrefix",
 		"if (emoji && sourceName) return `${emoji} ${sourceName}`",
 		"return `${prefix}${SOURCE_PREFIX_SEPARATOR}${SOURCE_NAME_PREVIEW}`",
+		"function sourceNamePreviewLabel",
+		"`命名预览：${sourceNamePreview(item)}`",
 	}
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {

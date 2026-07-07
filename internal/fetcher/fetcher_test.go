@@ -133,6 +133,54 @@ func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
 	}
 }
 
+func TestFetchAllowsPrivateHostWhenSourceAllowsLAN(t *testing.T) {
+	f := New(Options{
+		CacheDir:     t.TempDir(),
+		Timeout:      5 * time.Second,
+		MaxBodyBytes: 1024,
+		MaxRedirects: 3,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("10.0.0.3")}},
+		},
+		RequestDoer: func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
+			if got := resolvedIP.String(); got != "10.0.0.3" {
+				t.Fatalf("resolvedIP = %q, want 10.0.0.3", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/plain"},
+				},
+				Body: io.NopCloser(strings.NewReader("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#lan")),
+			}, nil
+		},
+	})
+
+	fetched, _, err := f.Fetch(context.Background(), Source{
+		Name:              "lan",
+		URL:               "http://10.0.0.3/sub",
+		Enabled:           true,
+		AllowPrivateHosts: true,
+	})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if got := string(fetched.Content); !strings.Contains(got, "#lan") {
+		t.Fatalf("fetched.Content = %q, want lan node", got)
+	}
+}
+
+func TestOptionsFromConfigUsesServiceAllowLAN(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.AllowLAN = true
+
+	opts := OptionsFromConfig(cfg)
+
+	if !opts.AllowPrivateHosts {
+		t.Fatalf("AllowPrivateHosts = false, want true when service.allow_lan is enabled")
+	}
+}
+
 func TestFetchFallsBackFromEmptyClashYAML(t *testing.T) {
 	callUserAgents := []string{}
 

@@ -61,11 +61,19 @@ type nodeListItem struct {
 }
 
 type nodeListResponse struct {
-	OK       bool                `json:"ok"`
-	Summary  nodeListSummary     `json:"summary"`
-	Nodes    []nodeListItem      `json:"nodes"`
-	Warnings []string            `json:"warnings,omitempty"`
-	Errors   []parser.ParseError `json:"errors,omitempty"`
+	OK            bool                `json:"ok"`
+	Summary       nodeListSummary     `json:"summary"`
+	Nodes         []nodeListItem      `json:"nodes"`
+	SourceOptions []string            `json:"source_options,omitempty"`
+	Warnings      []string            `json:"warnings,omitempty"`
+	Errors        []parser.ParseError `json:"errors,omitempty"`
+}
+
+type deletedNodeListResponse struct {
+	OK         bool            `json:"ok"`
+	Summary    nodeListSummary `json:"summary"`
+	Nodes      []nodeListItem  `json:"nodes"`
+	MissingIDs []string        `json:"missing_ids,omitempty"`
 }
 
 type nodeStateResponse struct {
@@ -179,6 +187,8 @@ func (s *Server) handleNodeSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.handleBulkRename(w, r)
 	case path == "delete":
 		s.handleDeleteNodes(w, r)
+	case path == "deleted":
+		s.handleDeletedNodes(w, r)
 	case path == "disable":
 		s.handleToggleNodes(w, r, false)
 	case path == "enable":
@@ -249,8 +259,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
+	deleted := model.DisabledNodeSet(state.DeletedNodes)
 
-	filtered := filterNodeList(collected.Nodes, state, disabled, r)
+	filtered := filterNodeList(collected.Nodes, state, disabled, deleted, r)
 	paged := filtered
 	if !wantsAllNodes(r) {
 		page, pageSize := parsePage(r)
@@ -258,11 +269,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, nodeListResponse{
-		OK:       true,
-		Summary:  summarizeNodes(filtered, state, disabled),
-		Nodes:    buildNodeListItems(paged, state, disabled),
-		Warnings: collected.Warnings,
-		Errors:   collected.Errors,
+		OK:            true,
+		Summary:       summarizeNodes(filtered, state, disabled),
+		Nodes:         buildNodeListItems(paged, state, disabled),
+		SourceOptions: nodeSourceOptions(collected.Nodes, deleted),
+		Warnings:      collected.Warnings,
+		Errors:        collected.Errors,
 	})
 	_ = ref
 }
@@ -471,6 +483,52 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 
 	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes deleted: %d", len(req.IDs)))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+}
+
+func (s *Server) handleDeletedNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	cfg, state, _, err := s.workspaceConfigAndState(r)
+	if err != nil {
+		handleWorkspaceOrStateError(w, err)
+		return
+	}
+
+	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
+	disabled := model.DisabledNodeSet(state.DisabledNodes)
+	deleted := model.DisabledNodeSet(state.DeletedNodes)
+	deletedNodes := make([]model.NodeIR, 0, len(deleted))
+	found := make(map[string]struct{}, len(deleted))
+	for _, node := range collected.Nodes {
+		if _, ok := deleted[node.ID]; !ok {
+			continue
+		}
+		deletedNodes = append(deletedNodes, node)
+		found[node.ID] = struct{}{}
+	}
+
+	var missingIDs []string
+	for _, id := range state.DeletedNodes {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := found[id]; ok {
+			continue
+		}
+		missingIDs = append(missingIDs, id)
+	}
+	sort.Strings(missingIDs)
+
+	writeJSON(w, http.StatusOK, deletedNodeListResponse{
+		OK:         true,
+		Summary:    summarizeNodes(deletedNodes, state, disabled),
+		Nodes:      buildNodeListItems(deletedNodes, state, disabled),
+		MissingIDs: missingIDs,
+	})
 }
 
 func (s *Server) handleBulkRename(w http.ResponseWriter, r *http.Request) {
@@ -735,7 +793,7 @@ func handleWorkspaceOrNodeError(w http.ResponseWriter, err error) {
 	}
 }
 
-func filterNodeList(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}, r *http.Request) []model.NodeIR {
+func filterNodeList(nodes []model.NodeIR, state model.NodeState, disabled, deleted map[string]struct{}, r *http.Request) []model.NodeIR {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	typeFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	regionFilter := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("region")))
@@ -744,6 +802,9 @@ func filterNodeList(nodes []model.NodeIR, state model.NodeState, disabled map[st
 
 	out := make([]model.NodeIR, 0, len(nodes))
 	for _, node := range nodes {
+		if _, ok := deleted[node.ID]; ok {
+			continue
+		}
 		if q != "" {
 			haystack := strings.ToLower(strings.Join([]string{
 				node.Name,
@@ -823,13 +884,33 @@ func buildNodeListItems(nodes []model.NodeIR, state model.NodeState, disabled ma
 			},
 			TransportNetwork: strings.TrimSpace(node.Transport.Network),
 			HasReality:       node.TLS.Reality != nil,
-			HasIPv6:          strings.Contains(node.Server, ":") || (node.WireGuard != nil && strings.TrimSpace(node.WireGuard.IPv6) != ""),
+			HasIPv6:          node.WireGuard != nil && strings.TrimSpace(node.WireGuard.IPv6) != "",
 			SourceCount:      sourceCountFallback(node),
 			Warnings:         append([]string(nil), node.Warnings...),
 			Tags:             append([]string(nil), node.Tags...),
 		})
 	}
 	return items
+}
+
+func nodeSourceOptions(nodes []model.NodeIR, deleted map[string]struct{}) []string {
+	set := make(map[string]struct{})
+	for _, node := range nodes {
+		if _, ok := deleted[node.ID]; ok {
+			continue
+		}
+		name := strings.TrimSpace(node.Source.Name)
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func summarizeNodes(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}) nodeListSummary {
@@ -925,7 +1006,7 @@ func parsePage(r *http.Request) (int, int) {
 }
 
 func paginateNodes(nodes []model.NodeIR, page, pageSize int) []model.NodeIR {
-	if pageSize <= 0 || len(nodes) <= pageSize {
+	if pageSize <= 0 {
 		return nodes
 	}
 	start := (page - 1) * pageSize
@@ -1064,11 +1145,15 @@ func removeIDs(existing, ids []string) []string {
 }
 
 func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}, req bulkRenameRequest) []model.NodeIR {
+	deleted := model.DisabledNodeSet(state.DeletedNodes)
 	switch strings.ToLower(strings.TrimSpace(req.Scope)) {
 	case "selected":
 		set := model.DisabledNodeSet(req.IDs)
 		var out []model.NodeIR
 		for _, node := range nodes {
+			if _, deletedNode := deleted[node.ID]; deletedNode {
+				continue
+			}
 			if _, ok := set[node.ID]; ok {
 				out = append(out, node)
 			}
@@ -1079,6 +1164,9 @@ func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disab
 			set := model.DisabledNodeSet(req.IDs)
 			var out []model.NodeIR
 			for _, node := range nodes {
+				if _, deletedNode := deleted[node.ID]; deletedNode {
+					continue
+				}
 				if _, ok := set[node.ID]; ok {
 					out = append(out, node)
 				}
@@ -1092,7 +1180,7 @@ func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disab
 		urlValues.set("status", req.Status)
 		urlValues.set("source", req.Source)
 		fakeReq, _ := http.NewRequest(http.MethodGet, "/api/nodes?"+urlValues.encode(), nil)
-		return filterNodeList(nodes, state, disabled, fakeReq)
+		return filterNodeList(nodes, state, disabled, deleted, fakeReq)
 	default:
 		return nodes
 	}

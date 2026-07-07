@@ -221,3 +221,34 @@ func TestApplyRenderPreferencesFiltersInvalidSSNode(t *testing.T) {
 		t.Fatalf("applyRenderPreferences() = %#v, want invalid ss node filtered", got)
 	}
 }
+
+func TestApplyRenderPreferencesPreservesExplicitUDPFalse(t *testing.T) {
+	nodes := []model.NodeIR{
+		model.NormalizeNode(model.NodeIR{
+			Name:   "socks",
+			Type:   model.ProtocolSOCKS5,
+			Server: "socks.example.com",
+			Port:   1080,
+			UDP:    model.Bool(false),
+		}),
+		model.NormalizeNode(model.NodeIR{
+			Name:   "http",
+			Type:   model.ProtocolHTTP,
+			Server: "http.example.com",
+			Port:   8080,
+		}),
+	}
+
+	got := applyRenderPreferences(nodes, model.RenderConfig{
+		UDP: true,
+	})
+	if len(got) != 2 {
+		t.Fatalf("applyRenderPreferences() len = %d, want 2", len(got))
+	}
+	if got[0].UDP == nil || *got[0].UDP {
+		t.Fatalf("explicit UDP false was not preserved: %#v", got[0].UDP)
+	}
+	if got[1].UDP == nil || !*got[1].UDP {
+		t.Fatalf("missing UDP should be filled from render default: %#v", got[1].UDP)
+	}
+}

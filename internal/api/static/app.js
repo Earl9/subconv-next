@@ -476,12 +476,13 @@ const DEFAULT_SERVICE = {
 };
 
 const DEFAULT_RENDER = {
-  mixed_port: 7890,
-  allow_lan: false,
+  mixed_port: 7897,
+  allow_lan: true,
   mode: "rule",
   log_level: "info",
   ipv6: false,
   dns_enabled: true,
+  custom_dns: false,
   enhanced_mode: "fake-ip",
   emoji: false,
   show_node_type: false,
@@ -513,6 +514,49 @@ const DEFAULT_RENDER = {
   dedupe_scope: "global",
   source_mode: "rules",
   template_rule_mode: "rules",
+  unified_delay: true,
+  tcp_concurrent: false,
+  find_process_mode: "strict",
+  global_client_fingerprint: "chrome",
+  dns: {
+    enable: true,
+    listen: "127.0.0.1:5335",
+    use_hosts: true,
+    use_system_hosts: false,
+    respect_rules: false,
+    enhanced_mode: "fake-ip",
+    fake_ip_range: "198.18.0.1/16",
+    default_nameserver: ["223.5.5.5", "119.29.29.29"],
+    nameserver: ["223.5.5.5", "119.29.29.29"],
+    fallback: ["https://dns.alidns.com/dns-query"],
+    fake_ip_filter: [
+      "*.lan",
+      "*.local",
+      "localhost",
+      "*.msftconnecttest.com",
+      "*.msftncsi.com",
+      "*.nintendo.net",
+      "*.playstation.net",
+      "*.xboxlive.com",
+      "stun.*",
+      "time.*",
+    ],
+  },
+  profile: {
+    store_selected: true,
+    store_fake_ip: false,
+  },
+  sniffer: {
+    enable: true,
+    parse_pure_ip: false,
+    http: {
+      ports: ["80", "8080-8880"],
+      override_destination: true,
+    },
+    tls: {
+      ports: ["443", "8443"],
+    },
+  },
   external_config: {
     template_key: "none",
     template_label: "跟随当前服务模板",
@@ -605,7 +649,10 @@ const state = {
   allNodes: [],
   filteredNodes: [],
   nodes: [],
+  nodeById: new Map(),
+  selectedNodeCache: new Map(),
   nodeCacheStale: false,
+  nodeRequestSeq: 0,
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
   nodeSourceOptions: [],
   selectedNodeIds: new Set(),
@@ -888,6 +935,12 @@ function bindEvents() {
     .getElementById("refresh-nodes-btn")
     .addEventListener("click", loadNodes);
   document
+    .getElementById("restore-deleted-nodes-btn")
+    .addEventListener("click", openDeletedNodesDialog);
+  document
+    .getElementById("restore-all-deleted-nodes-btn")
+    .addEventListener("click", restoreAllDeletedNodesFromDialog);
+  document
     .getElementById("node-type-filter")
     .addEventListener("change", handleNodeFilterChange);
   document
@@ -1045,6 +1098,9 @@ function handleLiveFieldUpdates(event) {
     syncSourcePrefixModeControl();
     renderSubscriptionManager();
   }
+  if (target.id === "custom-dns-enabled") {
+    syncCustomDNSFields();
+  }
   if (target.id === "node-search") {
     window.clearTimeout(handleLiveFieldUpdates.nodeSearchTimer);
     handleLiveFieldUpdates.nodeSearchTimer = window.setTimeout(() => {
@@ -1091,6 +1147,7 @@ function applyDefaultState() {
   );
   setValue("rule-group-node-mode", DEFAULT_RENDER.group_options.rule_group_node_mode);
   syncSourcePrefixModeControl();
+  setDNSFormFromConfig(DEFAULT_RENDER);
   setValue("template-select", DEFAULT_RENDER.external_config.template_key);
   setValue("custom-template-url", "");
   setValue("batch-import-textarea", "");
@@ -1138,7 +1195,10 @@ function applyDefaultState() {
   state.manualNodesEnabled = true;
   state.allNodes = [];
   state.filteredNodes = [];
+  state.nodeById = new Map();
+  state.selectedNodeCache = new Map();
   state.nodeCacheStale = false;
+  state.nodeRequestSeq = 0;
   state.subscriptionMeta = { aggregate: null, sources: [] };
   state.nodeFilters = {
     q: "",
@@ -2192,6 +2252,242 @@ function subscriptionURLHostLabel(rawURL) {
   }
 }
 
+function normalizeDNSStringList(values, fallback = []) {
+  const source = Array.isArray(values) ? values : fallback;
+  return source
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function normalizeNameserverPolicy(policy) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return {};
+  const next = {};
+  Object.entries(policy).forEach(([key, values]) => {
+    const policyKey = String(key || "").trim();
+    if (!policyKey) return;
+    const resolvers = normalizeDNSStringList(
+      Array.isArray(values) ? values : [values],
+    );
+    if (resolvers.length) next[policyKey] = resolvers;
+  });
+  return next;
+}
+
+function normalizeDNSConfigForFrontend(dns) {
+  const base = deepClone(DEFAULT_RENDER.dns);
+  const next = {
+    ...base,
+    ...(dns || {}),
+  };
+  next.enable = true;
+  next.listen = String(next.listen || base.listen).trim() || base.listen;
+  next.use_hosts = next.use_hosts !== false;
+  next.use_system_hosts = next.use_system_hosts === true;
+  next.respect_rules = next.respect_rules === true;
+  next.enhanced_mode =
+    String(next.enhanced_mode || base.enhanced_mode).trim() || base.enhanced_mode;
+  next.fake_ip_range =
+    String(next.fake_ip_range || base.fake_ip_range).trim() || base.fake_ip_range;
+  next.default_nameserver = normalizeDNSStringList(
+    next.default_nameserver,
+    base.default_nameserver,
+  );
+  if (!next.default_nameserver.length) {
+    next.default_nameserver = [...base.default_nameserver];
+  }
+  next.nameserver = normalizeDNSStringList(next.nameserver, base.nameserver);
+  if (!next.nameserver.length) {
+    next.nameserver = [...base.nameserver];
+  }
+  next.proxy_server_nameserver = normalizeDNSStringList(
+    next.proxy_server_nameserver,
+  );
+  next.direct_nameserver = normalizeDNSStringList(next.direct_nameserver);
+  next.direct_nameserver_follow_policy =
+    next.direct_nameserver_follow_policy === true;
+  next.fallback = normalizeDNSStringList(next.fallback);
+  next.fake_ip_filter = normalizeDNSStringList(
+    next.fake_ip_filter,
+    base.fake_ip_filter,
+  );
+  if (!next.fake_ip_filter.length) {
+    next.fake_ip_filter = [...base.fake_ip_filter];
+  }
+  next.nameserver_policy = normalizeNameserverPolicy(next.nameserver_policy);
+  return next;
+}
+
+function stripDNSListValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^-\s*/, "")
+    .replace(/^['"]|['"]$/g, "")
+    .trim();
+}
+
+function parseDNSLines(value) {
+  const text = String(value || "").trim();
+  if (!text) return [];
+  const rawLines =
+    text.startsWith("[") && text.endsWith("]")
+      ? [text.slice(1, -1)]
+      : text.split(/\r?\n/);
+  const lines = [];
+  rawLines.forEach((line) => {
+    splitDNSListItems(line).forEach((item) => lines.push(item));
+  });
+  return lines;
+}
+
+function splitDNSListItems(value) {
+  const cleaned = String(value || "").trim().replace(/^\[|\]$/g, "");
+  if (!cleaned) return [];
+  return cleaned
+    .split(",")
+    .map(stripDNSListValue)
+    .filter(Boolean);
+}
+
+function formatDNSLines(values) {
+  return normalizeDNSStringList(values).join("\n");
+}
+
+function splitNameserverPolicyResolvers(value) {
+  return splitDNSListItems(value);
+}
+
+function parseNameserverPolicyText(value) {
+  const text = String(value || "").trim();
+  if (!text) return {};
+  if (text.startsWith("{")) {
+    try {
+      return normalizeNameserverPolicy(JSON.parse(text));
+    } catch {
+      return {};
+    }
+  }
+  const policy = {};
+  text.split(/\r?\n/).forEach((line) => {
+    const cleaned = stripDNSListValue(line);
+    if (!cleaned) return;
+    const match = cleaned.match(/^(.+?)(?:\s*=\s*|:\s+)(.+)$/);
+    if (!match) return;
+    const key = match[1].trim().replace(/:$/, "");
+    const resolvers = splitNameserverPolicyResolvers(match[2]);
+    if (key && resolvers.length) policy[key] = resolvers;
+  });
+  return policy;
+}
+
+function formatNameserverPolicyText(policy) {
+  const normalized = normalizeNameserverPolicy(policy);
+  return Object.entries(normalized)
+    .map(([key, values]) => `${key}: ${values.join(", ")}`)
+    .join("\n");
+}
+
+function setDNSFormFromConfig(render) {
+  const custom = render?.custom_dns === true;
+  const dns = normalizeDNSConfigForFrontend(render?.dns);
+  setChecked("custom-dns-enabled", custom);
+  setValue("dns-listen", dns.listen);
+  setValue("dns-enhanced-mode", dns.enhanced_mode);
+  setValue("dns-fake-ip-range", dns.fake_ip_range);
+  setChecked("dns-use-hosts", dns.use_hosts);
+  setChecked("dns-use-system-hosts", dns.use_system_hosts);
+  setChecked("dns-respect-rules", dns.respect_rules);
+  setChecked("dns-direct-follow-policy", dns.direct_nameserver_follow_policy);
+  setValue("dns-default-nameserver", formatDNSLines(dns.default_nameserver));
+  setValue("dns-nameserver", formatDNSLines(dns.nameserver));
+  setValue("dns-fallback", formatDNSLines(dns.fallback));
+  setValue(
+    "dns-proxy-server-nameserver",
+    formatDNSLines(dns.proxy_server_nameserver),
+  );
+  setValue("dns-direct-nameserver", formatDNSLines(dns.direct_nameserver));
+  setValue("dns-fake-ip-filter", formatDNSLines(dns.fake_ip_filter));
+  setValue("dns-nameserver-policy", formatNameserverPolicyText(dns.nameserver_policy));
+  syncCustomDNSFields();
+}
+
+function readDNSFormConfig(fallbackDNS) {
+  const fallback = normalizeDNSConfigForFrontend(fallbackDNS || DEFAULT_RENDER.dns);
+  const dns = {
+    ...fallback,
+    enable: true,
+    listen: getValue("dns-listen").trim() || DEFAULT_RENDER.dns.listen,
+    use_hosts: getChecked("dns-use-hosts"),
+    use_system_hosts: getChecked("dns-use-system-hosts"),
+    respect_rules: getChecked("dns-respect-rules"),
+    enhanced_mode:
+      getValue("dns-enhanced-mode").trim() || DEFAULT_RENDER.dns.enhanced_mode,
+    fake_ip_range:
+      getValue("dns-fake-ip-range").trim() || DEFAULT_RENDER.dns.fake_ip_range,
+    default_nameserver: parseDNSLines(getValue("dns-default-nameserver")),
+    nameserver: parseDNSLines(getValue("dns-nameserver")),
+    proxy_server_nameserver: parseDNSLines(getValue("dns-proxy-server-nameserver")),
+    direct_nameserver: parseDNSLines(getValue("dns-direct-nameserver")),
+    direct_nameserver_follow_policy: getChecked("dns-direct-follow-policy"),
+    fallback: parseDNSLines(getValue("dns-fallback")),
+    fake_ip_filter: parseDNSLines(getValue("dns-fake-ip-filter")),
+    nameserver_policy: parseNameserverPolicyText(
+      getValue("dns-nameserver-policy"),
+    ),
+  };
+  if (!dns.default_nameserver.length) {
+    dns.default_nameserver = [...DEFAULT_RENDER.dns.default_nameserver];
+  }
+  if (!dns.nameserver.length) {
+    dns.nameserver = [...DEFAULT_RENDER.dns.nameserver];
+  }
+  return normalizeDNSConfigForFrontend(dns);
+}
+
+function syncCustomDNSFields() {
+  const enabled = getChecked("custom-dns-enabled");
+  const fields = document.getElementById("custom-dns-fields");
+  if (!fields) return;
+  fields.classList.toggle("hidden", !enabled);
+  fields
+    .querySelectorAll("input, select, textarea")
+    .forEach((control) => {
+      control.disabled = !enabled;
+    });
+}
+
+function normalizeStableRenderConfig(render) {
+  const stableDNS = deepClone(DEFAULT_RENDER.dns);
+  const stableProfile = deepClone(DEFAULT_RENDER.profile);
+  const stableSniffer = deepClone(DEFAULT_RENDER.sniffer);
+  const customDNS = render?.custom_dns === true;
+  const next = {
+    ...(render || {}),
+    mixed_port: 7897,
+    allow_lan: true,
+    mode: "rule",
+    log_level: "info",
+    ipv6: false,
+    dns_enabled: true,
+    custom_dns: customDNS,
+    enhanced_mode: "fake-ip",
+    unified_delay: true,
+    tcp_concurrent: false,
+    find_process_mode: "strict",
+    global_client_fingerprint: "chrome",
+    geodata_mode: false,
+    geo_auto_update: false,
+    geodata_loader: "",
+    geo_update_interval: 0,
+    dns: customDNS
+      ? normalizeDNSConfigForFrontend(render?.dns || stableDNS)
+      : stableDNS,
+    profile: stableProfile,
+    sniffer: stableSniffer,
+  };
+  delete next.geox_url;
+  return next;
+}
+
 function sanitizeLocalDraftConfig(config) {
   const draftConfig = deepClone(config || {});
   draftConfig.service = {
@@ -2199,6 +2495,7 @@ function sanitizeLocalDraftConfig(config) {
     access_token: "",
     subscription_token: "",
   };
+  draftConfig.render = normalizeStableRenderConfig(draftConfig.render || {});
   return draftConfig;
 }
 
@@ -2298,8 +2595,11 @@ async function loadConfig() {
     return;
   }
 
-  state.config = response.config;
-  fillFormFromConfig(response.config);
+  state.config = {
+    ...(response.config || {}),
+    render: normalizeStableRenderConfig(response.config?.render || {}),
+  };
+  fillFormFromConfig(state.config);
 }
 
 function fillFormFromConfig(config) {
@@ -2332,6 +2632,7 @@ function fillFormFromConfig(config) {
     normalizeRuleGroupNodeMode(render.group_options?.rule_group_node_mode),
   );
   syncSourcePrefixModeControl();
+  setDNSFormFromConfig(render);
 
   state.activeSourceMode =
     (render.source_mode || render.template_rule_mode) === "template"
@@ -2993,6 +3294,25 @@ function sourceDomainFromUrl(rawUrl) {
   }
 }
 
+function isPrivateSubscriptionURL(rawUrl) {
+  const host = sourceDomainFromUrl(rawUrl).toLowerCase();
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".local")) return true;
+  const parts = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
+    return false;
+  }
+  if (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 169 && parts[1] === 254)
+  ) {
+    return true;
+  }
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  return parts[0] === 192 && parts[1] === 168;
+}
+
 function sourceLogoKey(item) {
   const domain = sourceDomainFromUrl(item?.url || "");
   return item?.id || domain || item?.name || "";
@@ -3113,6 +3433,7 @@ function uniqueSubscriptionID(value, used, start = 1) {
 function createSubscriptionEntry(values = {}) {
   const id = normalizeSourceID(values.id) || nextSubscriptionID();
   const index = state.subscriptions.length + 1;
+  const url = values.url || "";
   return {
     id,
     name: values.name || id,
@@ -3122,8 +3443,9 @@ function createSubscriptionEntry(values = {}) {
         : defaultSourceEmoji(index - 1),
     source_logo: values.source_logo || "",
     enabled: values.enabled !== false,
-    url: values.url || "",
+    url,
     user_agent: values.user_agent || DEFAULT_SOURCE_USER_AGENT,
+    allow_lan: values.allow_lan === true,
   };
 }
 
@@ -3185,6 +3507,13 @@ function sourceEmojiDuplicateWarning(item, index) {
   return duplicated ? "该 Emoji 已被其他订阅源使用，可能不易区分。" : "";
 }
 
+function sourceLANWarning(item) {
+  if (!isPrivateSubscriptionURL(item?.url) || item?.allow_lan === true) {
+    return "";
+  }
+  return "局域网订阅地址需在高级中开启允许局域网。";
+}
+
 function sourceNamePreview(item) {
   const mode = currentSourcePrefixMode();
   const prefix = buildSourcePrefix(item, mode);
@@ -3193,8 +3522,18 @@ function sourceNamePreview(item) {
   return `${prefix}${SOURCE_PREFIX_SEPARATOR}${SOURCE_NAME_PREVIEW}`;
 }
 
+function sourceNamePreviewLabel(item) {
+  return `命名预览：${sourceNamePreview(item)}`;
+}
+
 function renderSubscriptionRow(item, index) {
-  const warning = sourceEmojiDuplicateWarning(item, index);
+  const warnings = [
+    sourceEmojiDuplicateWarning(item, index),
+    sourceLANWarning(item),
+  ].filter(Boolean);
+  const lanBadge = item.allow_lan
+    ? '<span class="source-meta-separator">·</span><span class="source-meta-link">LAN</span>'
+    : "";
   return `
     <div class="source-row subscription-item">
       <div class="source-row-main">
@@ -3215,13 +3554,18 @@ function renderSubscriptionRow(item, index) {
       <div class="source-row-meta">
         <span class="source-domain">${escapeHtml(sourceDomainFromUrl(item.url) || "未识别域名")}</span>
         <span class="source-meta-separator">·</span>
-        <span class="source-preview" data-sub-index="${index}" title="${escapeHtml(sourceNamePreview(item))}">${escapeHtml(sourceNamePreview(item))}</span>
+        <span class="source-preview" data-sub-index="${index}" title="${escapeHtml(sourceNamePreviewLabel(item))}">${escapeHtml(sourceNamePreviewLabel(item))}</span>
         <span class="source-meta-separator">·</span>
         <span class="source-meta-link">User-Agent</span>
-        ${warning ? `<span class="source-meta-separator">·</span><span class="source-warning-inline">${escapeHtml(warning)}</span>` : ""}
+        ${lanBadge}
+        ${warnings.length ? `<span class="source-meta-separator">·</span><span class="source-warning-inline">${escapeHtml(warnings.join(" "))}</span>` : ""}
       </div>
       <details class="source-advanced inline-advanced">
-        <summary>User-Agent</summary>
+        <summary>高级</summary>
+        <label class="checkbox-line compact-check">
+          <input type="checkbox" data-sub-field="allow_lan" data-sub-index="${index}" ${item.allow_lan ? "checked" : ""} />
+          允许局域网订阅地址
+        </label>
         <input type="text" data-sub-field="user_agent" data-sub-index="${index}" value="${escapeHtml(item.user_agent || DEFAULT_SOURCE_USER_AGENT)}" />
       </details>
     </div>
@@ -3256,6 +3600,7 @@ function normalizeSubscriptionEntries(items) {
       enabled: source.enabled !== false,
       url: source.url || "",
       user_agent: source.user_agent || DEFAULT_SOURCE_USER_AGENT,
+      allow_lan: source.allow_lan === true,
     });
   });
 }
@@ -3297,9 +3642,14 @@ function renderSubscriptionManager() {
       renderSubscriptionMeta();
       renderNodeEditor();
       if (field === "url") {
+        if (isPrivateSubscriptionURL(element.value)) {
+          state.subscriptions[index].allow_lan = true;
+        }
         renderSubscriptionManager();
       } else if (field === "name") {
         updateSourceRowPreview(index);
+      } else if (field === "allow_lan") {
+        renderSubscriptionManager();
       }
     });
   });
@@ -3336,7 +3686,7 @@ function updateSourceRowPreview(index) {
     `.source-preview[data-sub-index="${index}"]`,
   );
   if (!row) return;
-  const preview = sourceNamePreview(item);
+  const preview = sourceNamePreviewLabel(item);
   row.textContent = preview;
   row.title = preview;
 }
@@ -3739,6 +4089,7 @@ function applyBatchImport() {
         url: item.url,
         enabled: true,
         user_agent: DEFAULT_SOURCE_USER_AGENT,
+        allow_lan: isPrivateSubscriptionURL(item.url),
       }),
     );
   });
@@ -4103,6 +4454,10 @@ function buildConfigFromForm(options = {}) {
               : "",
         }
       : { ...DEFAULT_RENDER.external_config };
+  const customDNS = getChecked("custom-dns-enabled");
+  const dnsConfig = customDNS
+    ? readDNSFormConfig(base.render?.dns || DEFAULT_RENDER.dns)
+    : deepClone(DEFAULT_RENDER.dns);
 
   base.service = {
     ...DEFAULT_SERVICE,
@@ -4125,6 +4480,8 @@ function buildConfigFromForm(options = {}) {
     sort_nodes: getChecked("opt-sort-nodes"),
     filter_illegal: getChecked("opt-filter-illegal"),
     insert_url: getChecked("opt-insert-url"),
+    custom_dns: customDNS,
+    dns: dnsConfig,
     source_prefix: prefixMode !== "none",
     group_options: {
       ...(base.render?.group_options || DEFAULT_RENDER.group_options),
@@ -4153,6 +4510,7 @@ function buildConfigFromForm(options = {}) {
       !activeOnly || activeMode === "rules" ? Array.from(state.enabledRules) : [],
     custom_rules: !activeOnly || activeMode === "rules" ? state.customRules : [],
   };
+  base.render = normalizeStableRenderConfig(base.render);
 
   const usedSubscriptionIDs = new Set();
   base.subscriptions = state.subscriptions
@@ -4168,6 +4526,7 @@ function buildConfigFromForm(options = {}) {
         url: item.url.trim(),
         user_agent: item.user_agent?.trim() || DEFAULT_SOURCE_USER_AGENT,
         insecure_skip_verify: getChecked("opt-skip-tls"),
+        allow_lan: item.allow_lan === true,
       };
     });
 
@@ -4646,7 +5005,9 @@ function previewYAMLWorkspace() {
 }
 
 async function loadNodes() {
-  const response = await fetchJSON("/api/nodes?all=1");
+  const requestSeq = ++state.nodeRequestSeq;
+  const response = await fetchJSON(`/api/nodes?${buildNodeQueryParams()}`);
+  if (requestSeq !== state.nodeRequestSeq) return;
   if (!response?.ok) {
     document.getElementById("node-table-body").innerHTML =
       `<tr><td colspan="7" class="table-empty">${escapeHtml(readAPIError(response) || "加载节点失败。")}</td></tr>`;
@@ -4655,83 +5016,108 @@ async function loadNodes() {
   }
 
   state.allNodes = Array.isArray(response.nodes) ? response.nodes : [];
-  state.nodeCacheStale = false;
-  state.nodeSourceOptions = uniqueOrdered(
-    state.allNodes.map((node) => node.source?.name).filter(Boolean),
-  );
-  syncSourceFilterOptions();
-  applyNodeFiltersAndPagination();
-}
-
-function applyNodeFiltersAndPagination() {
-  const q = String(state.nodeFilters.q || "")
-    .trim()
-    .toLowerCase();
-  const typeFilter = String(state.nodeFilters.type || "all").toLowerCase();
-  const regionFilter = String(state.nodeFilters.region || "ALL").toUpperCase();
-  const statusFilter = String(state.nodeFilters.status || "all").toLowerCase();
-  const sourceFilter = String(state.nodeFilters.source || "")
-    .trim()
-    .toLowerCase();
-
-  state.filteredNodes = state.allNodes.filter((node) => {
-    if (q) {
-      const haystack = [
-        node.name,
-        node.server,
-        node.type,
-        regionLabel(node.region),
-        node.region,
-        ...(Array.isArray(node.tags) ? node.tags : []),
-      ]
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
-    if (
-      typeFilter !== "all" &&
-      String(node.type || "").toLowerCase() !== typeFilter
-    )
-      return false;
-    if (
-      regionFilter !== "ALL" &&
-      String(node.region || "").toUpperCase() !== regionFilter
-    )
-      return false;
-    if (
-      sourceFilter &&
-      !String(node.source?.name || "")
-        .toLowerCase()
-        .includes(sourceFilter)
-    )
-      return false;
-    if (statusFilter === "enabled" && !node.enabled) return false;
-    if (statusFilter === "disabled" && node.enabled) return false;
-    if (statusFilter === "modified" && !node.modified) return false;
-    if (statusFilter === "warning" && !(node.warnings && node.warnings.length))
-      return false;
-    return true;
-  });
-
-  state.nodeSummary = summarizeNodeItems(state.filteredNodes);
-  state.nodePagination.total = state.filteredNodes.length;
-
+  state.filteredNodes = state.allNodes;
+  state.nodes = state.allNodes;
+  state.nodeSummary = response.summary || {
+    total: state.nodes.length,
+    enabled: 0,
+    disabled: 0,
+    modified: 0,
+    warnings: 0,
+  };
+  state.nodePagination.total = Number.parseInt(state.nodeSummary.total, 10) || 0;
   const totalPages = Math.max(
     1,
-    Math.ceil(
-      (state.nodePagination.total || 0) / state.nodePagination.pageSize,
-    ),
+    Math.ceil(state.nodePagination.total / state.nodePagination.pageSize),
   );
   if (state.nodePagination.page > totalPages) {
     state.nodePagination.page = totalPages;
+    await loadNodes();
+    return;
   }
-
-  const start = (state.nodePagination.page - 1) * state.nodePagination.pageSize;
-  const end = start + state.nodePagination.pageSize;
-  state.nodes = state.filteredNodes.slice(start, end);
-
+  buildNodeIndexes();
+  state.nodeCacheStale = false;
+  state.nodeSourceOptions = Array.isArray(response.source_options)
+    ? response.source_options
+    : state.nodeSourceOptions;
+  syncSourceFilterOptions();
   renderNodeEditor();
   renderConfigNodeSummary();
+}
+
+function buildNodeQueryParams(options = {}) {
+  const params = new URLSearchParams();
+  if (options.all) {
+    params.set("all", "1");
+  } else {
+    params.set("page", String(state.nodePagination.page || 1));
+    params.set("page_size", String(state.nodePagination.pageSize || 25));
+  }
+  const q = String(state.nodeFilters.q || "").trim();
+  if (q) params.set("q", q);
+  if (state.nodeFilters.type && state.nodeFilters.type !== "all")
+    params.set("type", state.nodeFilters.type);
+  if (state.nodeFilters.region && state.nodeFilters.region !== "ALL")
+    params.set("region", state.nodeFilters.region);
+  if (state.nodeFilters.status && state.nodeFilters.status !== "all")
+    params.set("status", state.nodeFilters.status);
+  if (state.nodeFilters.source) params.set("source", state.nodeFilters.source);
+  return params.toString();
+}
+
+async function loadAllFilteredNodes() {
+  const response = await fetchJSON(`/api/nodes?${buildNodeQueryParams({ all: true })}`);
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "加载筛选节点失败。", true);
+    return [];
+  }
+  return Array.isArray(response.nodes) ? response.nodes : [];
+}
+
+function buildNodeIndexes() {
+  state.nodeById = new Map();
+  state.allNodes.forEach((node) => {
+    if (!node?.id) return;
+    node._searchText = buildNodeSearchText(node);
+    node._sourceText = String(node.source?.name || "").toLowerCase();
+    state.nodeById.set(node.id, node);
+  });
+}
+
+function buildNodeSearchText(node) {
+  return [
+    node.name,
+    node.server,
+    node.type,
+    regionLabel(node.region),
+    node.region,
+    node.source?.name,
+    ...(Array.isArray(node.tags) ? node.tags : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function buildSubscriptionNameIndex() {
+  const index = new Map();
+  state.subscriptions.forEach((item) => {
+    if (item.id) index.set(`id:${item.id}`, item.name || "");
+    if (item.name) index.set(`name:${item.name}`, item.name || "");
+  });
+  return index;
+}
+
+function nodeDisplaySourceName(node, sourceNameIndex) {
+  return (
+    sourceNameIndex.get(`id:${node.source?.id || ""}`) ||
+    sourceNameIndex.get(`name:${node.source?.name || ""}`) ||
+    node.source?.name ||
+    "-"
+  );
+}
+
+function applyNodeFiltersAndPagination() {
+  void loadNodes();
 }
 
 function summarizeNodeItems(nodes) {
@@ -4753,6 +5139,7 @@ function summarizeNodeItems(nodes) {
 
 function renderNodeEditor() {
   renderNodeStatsStrip();
+  renderNodeBulkActionBar();
   renderNodeTable();
   renderNodePagination();
 }
@@ -4789,26 +5176,68 @@ function syncSourceFilterOptions() {
     .join("");
 }
 
+function renderNodeBulkActionBar() {
+  const bar = document.getElementById("node-bulk-action-bar");
+  if (!bar) return;
+  const selectedCount = state.selectedNodeIds.size;
+  const currentPageCount = state.nodes.length;
+  const filteredCount = state.nodePagination.total || state.filteredNodes.length;
+  const hasNodes = currentPageCount > 0 || filteredCount > 0 || selectedCount > 0;
+  bar.classList.toggle("hidden", !hasNodes);
+  if (!hasNodes) {
+    bar.innerHTML = "";
+    return;
+  }
+  const selectedText = selectedCount
+    ? `已选 ${selectedCount} 个节点`
+    : `当前筛选 ${filteredCount} 个节点`;
+  bar.innerHTML = `
+    <div class="bulk-action-summary">
+      <strong>${escapeHtml(selectedText)}</strong>
+      <span>当前页 ${currentPageCount} 个</span>
+    </div>
+    <div class="bulk-action-controls">
+      <button id="select-current-page-nodes-btn" class="ghost-button small-button" type="button" ${currentPageCount ? "" : "disabled"}>选择当前页</button>
+      <button id="clear-selected-nodes-btn" class="ghost-button small-button" type="button" ${selectedCount ? "" : "disabled"}>清空选择</button>
+      <button id="bulk-delete-current-filter-btn" class="danger-ghost-button small-button" type="button" ${filteredCount ? "" : "disabled"}>删除当前筛选</button>
+      <button id="bulk-delete-selected-nodes-btn" class="danger-solid-button small-button" type="button" ${selectedCount ? "" : "disabled"}>删除已选</button>
+    </div>
+  `;
+  document
+    .getElementById("select-current-page-nodes-btn")
+    ?.addEventListener("click", selectCurrentPageNodes);
+  document
+    .getElementById("clear-selected-nodes-btn")
+    ?.addEventListener("click", clearSelectedNodes);
+  document
+    .getElementById("bulk-delete-current-filter-btn")
+    ?.addEventListener("click", () => openBulkDeleteDialog("current_filtered"));
+  document
+    .getElementById("bulk-delete-selected-nodes-btn")
+    ?.addEventListener("click", () => openBulkDeleteDialog("selected"));
+}
+
 function renderNodeTable() {
   const body = document.getElementById("node-table-body");
   if (!state.nodes.length) {
-    body.innerHTML = `<tr><td colspan="6" class="table-empty">当前没有可显示的节点</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="table-empty">当前没有可显示的节点</td></tr>`;
+    updateNodeSelectPageCheckbox();
     return;
   }
 
+  const sourceNameIndex = buildSubscriptionNameIndex();
   body.innerHTML = state.nodes
     .map((node) => {
       const featureBadges = buildNodeFeatureBadges(node).join("");
-      const subscription = state.subscriptions.find(
-        (item) =>
-          item.id === node.source?.id || item.name === node.source?.name,
-      );
-      const displaySourceName = subscription?.name || node.source?.name || "-";
+      const displaySourceName = nodeDisplaySourceName(node, sourceNameIndex);
       const disabledBadge = !node.enabled
         ? '<span class="mini-badge disabled">已禁用</span>'
         : "";
       return `
-        <tr>
+        <tr data-node-row-id="${escapeHtml(node.id)}" class="${state.selectedNodeIds.has(node.id) ? "selected-row" : ""}">
+          <td class="node-select-col">
+            <input class="node-select-checkbox" type="checkbox" aria-label="选择 ${escapeHtml(node.name)}" data-node-select-id="${escapeHtml(node.id)}" ${state.selectedNodeIds.has(node.id) ? "checked" : ""} />
+          </td>
           <td>
             <div class="node-cell">
               <span class="status-dot ${node.enabled ? "enabled" : "disabled"}"></span>
@@ -4851,37 +5280,8 @@ function renderNodeTable() {
     })
     .join("");
 
-  body.querySelectorAll("[data-node-action]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      const nodeId = button.dataset.nodeId;
-      const action = button.dataset.nodeAction;
-      if (action === "edit") await openNodeDialog(nodeId);
-      if (action === "delete") {
-        event.stopPropagation();
-        toggleNodeDeletePopover(nodeId);
-      }
-    });
-  });
-  body.querySelectorAll("[data-node-delete-cancel]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      state.activeNodeDeletePopoverId = "";
-      renderNodeTable();
-    });
-  });
-  body.querySelectorAll("[data-node-delete-confirm]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const nodeId = button.dataset.nodeDeleteConfirm;
-      const node =
-        state.nodes.find((item) => item.id === nodeId) || state.editingNode;
-      if (node?.enabled === false && node.source?.kind !== "custom") {
-        await performRestoreNode(nodeId);
-      } else {
-        await performDeleteNode(nodeId);
-      }
-    });
-  });
+  bindNodeTableDelegates(body);
+  updateNodeSelectPageCheckbox();
   if (state.activeNodeDeletePopoverId) {
     window.requestAnimationFrame(() => {
       document
@@ -4891,6 +5291,120 @@ function renderNodeTable() {
         ?.focus();
     });
   }
+}
+
+function bindNodeTableDelegates(body) {
+  if (body.dataset.delegatesBound === "1") return;
+  body.dataset.delegatesBound = "1";
+  body.addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-node-select-id]");
+    if (!checkbox) return;
+    setNodeSelected(checkbox.dataset.nodeSelectId, checkbox.checked);
+  });
+  body.addEventListener("click", async (event) => {
+    const cancelButton = event.target.closest("[data-node-delete-cancel]");
+    if (cancelButton) {
+      event.stopPropagation();
+      state.activeNodeDeletePopoverId = "";
+      renderNodeTable();
+      return;
+    }
+
+    const confirmButton = event.target.closest("[data-node-delete-confirm]");
+    if (confirmButton) {
+      event.stopPropagation();
+      const nodeId = confirmButton.dataset.nodeDeleteConfirm;
+      const node = state.nodeById.get(nodeId) || state.editingNode;
+      if (node?.enabled === false && node.source?.kind !== "custom") {
+        await performRestoreNode(nodeId);
+      } else {
+        await performDeleteNode(nodeId);
+      }
+      return;
+    }
+
+    const actionButton = event.target.closest("[data-node-action]");
+    if (!actionButton) return;
+    const nodeId = actionButton.dataset.nodeId;
+    const action = actionButton.dataset.nodeAction;
+    if (action === "edit") {
+      await openNodeDialog(nodeId);
+      return;
+    }
+    if (action === "delete") {
+      event.stopPropagation();
+      toggleNodeDeletePopover(nodeId);
+    }
+  });
+}
+
+function updateNodeSelectPageCheckbox() {
+  const checkbox = document.getElementById("node-select-page-checkbox");
+  if (!checkbox) return;
+  const visibleIds = state.nodes.map((node) => node.id);
+  const selectedVisibleCount = visibleIds.filter((id) =>
+    state.selectedNodeIds.has(id),
+  ).length;
+  checkbox.checked = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  checkbox.indeterminate =
+    selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
+  checkbox.disabled = visibleIds.length === 0;
+  checkbox.onchange = () => {
+    state.nodes.forEach((node) => {
+      setNodeSelected(node.id, checkbox.checked, false);
+    });
+    refreshNodeSelectionUI();
+  };
+}
+
+function setNodeSelected(nodeId, selected, render = true) {
+  if (!nodeId) return;
+  if (selected) state.selectedNodeIds.add(nodeId);
+  else state.selectedNodeIds.delete(nodeId);
+  if (selected) {
+    const node = state.nodeById.get(nodeId);
+    if (node) state.selectedNodeCache.set(nodeId, node);
+  } else {
+    state.selectedNodeCache.delete(nodeId);
+  }
+  if (render) refreshNodeSelectionUI(nodeId);
+}
+
+function selectCurrentPageNodes() {
+  state.nodes.forEach((node) => {
+    state.selectedNodeIds.add(node.id);
+    state.selectedNodeCache.set(node.id, node);
+  });
+  refreshNodeSelectionUI();
+}
+
+function clearSelectedNodes() {
+  state.selectedNodeIds.clear();
+  state.selectedNodeCache.clear();
+  refreshNodeSelectionUI();
+}
+
+function refreshNodeSelectionUI(nodeId = "") {
+  if (nodeId) {
+    const escapedID = CSS.escape(nodeId);
+    document
+      .querySelector(`[data-node-row-id="${escapedID}"]`)
+      ?.classList.toggle("selected-row", state.selectedNodeIds.has(nodeId));
+    const checkbox = document.querySelector(
+      `[data-node-select-id="${escapedID}"]`,
+    );
+    if (checkbox) checkbox.checked = state.selectedNodeIds.has(nodeId);
+  } else {
+    document.querySelectorAll("[data-node-row-id]").forEach((row) => {
+      const nodeId = row.dataset.nodeRowId;
+      row.classList.toggle("selected-row", state.selectedNodeIds.has(nodeId));
+    });
+    document.querySelectorAll("[data-node-select-id]").forEach((checkbox) => {
+      checkbox.checked = state.selectedNodeIds.has(checkbox.dataset.nodeSelectId);
+    });
+  }
+  renderNodeBulkActionBar();
+  updateNodeSelectPageCheckbox();
 }
 
 function toggleNodeDeletePopover(nodeId) {
@@ -5006,12 +5520,12 @@ function changeNodePage(direction) {
 }
 
 async function openNodeDialog(nodeId) {
-  state.activeNodeDeletePopoverId = "";
-  renderNodeTable();
+  if (state.activeNodeDeletePopoverId) {
+    state.activeNodeDeletePopoverId = "";
+    renderNodeTable();
+  }
   const dialog = document.getElementById("node-dialog");
-  const localNode =
-    state.nodes.find((node) => node.id === nodeId) ||
-    state.allNodes.find((node) => node.id === nodeId);
+  const localNode = state.nodeById.get(nodeId);
   if (localNode) {
     state.editingNode = localNode;
     fillNodeDialog(localNode);
@@ -5099,6 +5613,11 @@ async function handleDangerDialogConfirm() {
       closeDangerDialog();
       if (config.closeNodeDialog) closeNodeDialog();
     }
+    return;
+  }
+  if (config.action === "bulk-delete-nodes") {
+    const ok = await performBulkDeleteNodes(config.nodes || config.nodeIds || []);
+    if (ok) closeDangerDialog();
     return;
   }
   if (config.action === "clear-overrides") {
@@ -5238,9 +5757,108 @@ async function performRestoreNode(nodeId) {
   return true;
 }
 
+async function openDeletedNodesDialog() {
+  const response = await fetchJSON("/api/nodes/deleted");
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "加载已删除节点失败。", true);
+    return;
+  }
+
+  const nodes = Array.isArray(response.nodes) ? response.nodes : [];
+  const missingIDs = Array.isArray(response.missing_ids)
+    ? response.missing_ids
+    : [];
+  if (!nodes.length && !missingIDs.length) {
+    showToast("当前没有已删除的订阅节点。");
+    return;
+  }
+
+  renderDeletedNodesDialog(nodes, missingIDs);
+  const dialog = document.getElementById("restore-deleted-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function renderDeletedNodesDialog(nodes, missingIDs) {
+  const body = document.getElementById("restore-deleted-dialog-body");
+  const meta = document.getElementById("restore-deleted-dialog-meta");
+  const restoreAllButton = document.getElementById("restore-all-deleted-nodes-btn");
+  const ids = nodes.map((node) => node.id).filter(Boolean);
+  restoreAllButton.dataset.restoreDeletedAll = ids.join(",");
+  restoreAllButton.disabled = ids.length === 0;
+  meta.textContent = ids.length
+    ? `当前可恢复 ${ids.length} 个已删除订阅节点。`
+    : "当前订阅中没有可恢复节点。";
+
+  const nodeItems = nodes
+    .map(
+      (node) => `
+        <li class="deleted-node-list-item">
+          <span>
+            <strong title="${escapeHtml(node.name || shortNodeID(node.id))}">${escapeHtml(node.name || shortNodeID(node.id))}</strong>
+            <small>${escapeHtml(node.type || "-")} · ${escapeHtml(node.source?.name || "-")}</small>
+          </span>
+          <button class="secondary-button tiny-button" type="button" data-restore-deleted-node="${escapeHtml(node.id)}">恢复</button>
+        </li>
+      `,
+    )
+    .join("");
+  const missingNote = missingIDs.length
+    ? `<div class="restore-deleted-note">另有 ${missingIDs.length} 条删除记录当前订阅里找不到对应节点，订阅恢复后可再次尝试。</div>`
+    : "";
+  body.innerHTML = `
+    <div class="restore-deleted-note">恢复会取消本地删除标记，节点会重新显示并参与生成。</div>
+    ${nodes.length ? `<ul class="deleted-node-list">${nodeItems}</ul>` : ""}
+    ${missingNote}
+  `;
+
+  body.querySelectorAll("[data-restore-deleted-node]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const ok = await restoreDeletedNodes([button.dataset.restoreDeletedNode]);
+      if (ok) closeDialog("restore-deleted-dialog");
+    });
+  });
+}
+
+async function restoreAllDeletedNodesFromDialog() {
+  const raw = document.getElementById("restore-all-deleted-nodes-btn")?.dataset
+    .restoreDeletedAll;
+  const ids = String(raw || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const ok = await restoreDeletedNodes(ids);
+  if (ok) closeDialog("restore-deleted-dialog");
+}
+
+async function restoreDeletedNodes(nodeIds) {
+  const ids = Array.from(new Set((nodeIds || []).filter(Boolean)));
+  if (!ids.length) {
+    showToast("没有可恢复的节点。", true);
+    return false;
+  }
+
+  const response = await fetchJSON("/api/nodes/enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "恢复已删除节点失败。", true);
+    return false;
+  }
+
+  ids.forEach((id) => {
+    state.selectedNodeIds.delete(id);
+    state.selectedNodeCache.delete(id);
+  });
+  await refreshNodesAfterGenerate();
+  showToast(ids.length === 1 ? "节点已恢复。" : `已恢复 ${ids.length} 个节点。`);
+  return true;
+}
+
 async function performDeleteNode(nodeId) {
   const node =
-    state.nodes.find((item) => item.id === nodeId) || state.editingNode;
+    state.nodeById.get(nodeId) || state.editingNode;
   if (!node) return false;
   state.activeNodeDeletePopoverId = "";
   renderNodeTable();
@@ -5259,6 +5877,140 @@ async function performDeleteNode(nodeId) {
   await refreshNodesAfterGenerate();
   showToast("节点已删除。");
   return true;
+}
+
+function getBulkDeleteTargets(scope) {
+  const source =
+    scope === "current_filtered"
+      ? state.filteredNodes
+      : Array.from(state.selectedNodeIds)
+          .map((id) => state.selectedNodeCache.get(id) || state.nodeById.get(id))
+          .filter(Boolean);
+  const seen = new Set();
+  const out = [];
+  source.forEach((node) => {
+    if (!node?.id || seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push(node);
+  });
+  return out;
+}
+
+async function getBulkDeleteTargetsForScope(scope) {
+  if (scope === "current_filtered") {
+    return uniqueNodes(await loadAllFilteredNodes());
+  }
+  return getBulkDeleteTargets(scope);
+}
+
+function uniqueNodes(nodes) {
+  const seen = new Set();
+  const out = [];
+  (nodes || []).forEach((node) => {
+    if (!node?.id || seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push(node);
+  });
+  return out;
+}
+
+async function openBulkDeleteDialog(scope) {
+  const targets = await getBulkDeleteTargetsForScope(scope);
+  if (!targets.length) {
+    showToast(scope === "current_filtered" ? "当前筛选没有可删除的节点。" : "请先选择要删除的节点。", true);
+    return;
+  }
+  const manualCount = targets.filter((node) => node.source?.kind === "custom").length;
+  const subscriptionCount = targets.length - manualCount;
+  const previewNames = targets
+    .slice(0, 6)
+    .map((node) => `<li>${escapeHtml(node.name || shortNodeID(node.id))}</li>`)
+    .join("");
+  const extraCount = targets.length > 6 ? targets.length - 6 : 0;
+  openDangerDialog({
+    action: "bulk-delete-nodes",
+    nodeIds: targets.map((node) => node.id),
+    nodes: targets,
+    title: "批量删除节点",
+    subtitle:
+      scope === "current_filtered"
+        ? `确定删除当前筛选的 ${targets.length} 个节点吗？`
+        : `确定删除已选的 ${targets.length} 个节点吗？`,
+    confirmText: "批量删除",
+    detailsHtml: `
+      <div class="danger-dialog-info">
+        <div class="danger-dialog-row"><span>订阅节点</span><strong>${subscriptionCount}</strong></div>
+        <div class="danger-dialog-row"><span>手动节点</span><strong>${manualCount}</strong></div>
+      </div>
+      <div class="danger-dialog-note">订阅节点会标记为本地删除，后续订阅更新不会恢复显示；手动节点会从当前配置中移除。</div>
+      <ul class="danger-dialog-list">${previewNames}${extraCount ? `<li>另有 ${extraCount} 个节点...</li>` : ""}</ul>
+    `,
+  });
+}
+
+async function performBulkDeleteNodes(targets) {
+  const nodes = normalizeBulkDeleteTargets(targets);
+  const ids = nodes.map((node) => node.id);
+  if (!ids.length) {
+    showToast("没有可删除的节点。", true);
+    return false;
+  }
+  state.activeNodeDeletePopoverId = "";
+  const customIDs = [];
+  const subscriptionIDs = [];
+  nodes.forEach((node) => {
+    const id = node.id;
+    if (node?.source?.kind === "custom") customIDs.push(id);
+    else subscriptionIDs.push(id);
+  });
+
+  if (subscriptionIDs.length) {
+    const response = await fetchJSON("/api/nodes/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: subscriptionIDs }),
+    });
+    if (!response?.ok) {
+      showToast(readAPIError(response) || "批量删除订阅节点失败。", true);
+      return false;
+    }
+  }
+
+  for (const nodeId of customIDs) {
+    const response = await fetchJSON(
+      `/api/nodes/custom/${encodeURIComponent(nodeId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+    if (!response?.ok) {
+      showToast(readAPIError(response) || "批量删除手动节点失败。", true);
+      return false;
+    }
+  }
+
+  ids.forEach((id) => {
+    state.selectedNodeIds.delete(id);
+    state.selectedNodeCache.delete(id);
+  });
+  await refreshNodesAfterGenerate();
+  showToast(`批量删除已完成，共处理 ${ids.length} 个节点。`);
+  return true;
+}
+
+function normalizeBulkDeleteTargets(targets) {
+  const seen = new Set();
+  const out = [];
+  (targets || []).forEach((target) => {
+    const node =
+      typeof target === "string"
+        ? state.selectedNodeCache.get(target) || state.nodeById.get(target) || { id: target }
+        : target;
+    if (!node?.id || seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push(node);
+  });
+  return out;
 }
 
 async function copyNodeDetail(nodeId) {

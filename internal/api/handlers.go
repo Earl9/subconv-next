@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -798,7 +799,7 @@ func (s *Server) handleDeletePublished(w http.ResponseWriter, r *http.Request, p
 }
 
 func (s *Server) publishedStatus(r *http.Request, published publishedRef) publishedStatusResponse {
-	url := publishedURL(s.publicOrigin(r), published.Meta.Token)
+	url := publishedURL(s.publicOrigin(r), published.Meta.Token, published.Meta.OutputFilename)
 	userinfoHeader := publishedSubscriptionUserinfoHeader(published.Meta.SubscriptionInfo)
 	return publishedStatusResponse{
 		OK:                      true,
@@ -891,9 +892,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.releaseWorkspacePublishedRef(&ref, published, created)
 		message := err.Error()
-		if errors.Is(err, pipeline.ErrNoNodes) {
-			message = "no nodes available for rendering"
-		}
 		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", message)
 		return
 	}
@@ -901,7 +899,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "PUBLISH_FAILED", err.Error())
 		return
 	}
-	subscriptionURL := publishedURL(s.publicOrigin(r), published.Meta.Token)
+	subscriptionURL := publishedURL(s.publicOrigin(r), published.Meta.Token, published.Meta.OutputFilename)
 	writeJSON(w, http.StatusOK, refreshResponse{
 		OK:              true,
 		NodeCount:       outcome.Result.NodeCount,
@@ -919,20 +917,26 @@ func (s *Server) handlePublishedSubscriptionYAML(w http.ResponseWriter, r *http.
 	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[1] != "mihomo.yaml" {
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		http.NotFound(w, r)
 		return
 	}
-	data, published, err := s.loadPublishedYAML(parts[0])
+	token, err := url.PathUnescape(parts[0])
+	if err != nil || strings.TrimSpace(token) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	data, published, err := s.loadPublishedYAML(token)
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "SUBSCRIPTION_NOT_FOUND", "subscription not found")
 		return
 	}
+	filename := publishedOutputFilename(published.Meta.OutputFilename)
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	if wantsInlineSubscriptionYAML(r) {
-		w.Header().Set("Content-Disposition", `inline; filename="mihomo.yaml"`)
+		w.Header().Set("Content-Disposition", subscriptionContentDisposition("inline", filename))
 	} else {
-		w.Header().Set("Content-Disposition", `attachment; filename="mihomo.yaml"`)
+		w.Header().Set("Content-Disposition", subscriptionContentDisposition("attachment", filename))
 	}
 	w.Header().Set("Profile-Update-Interval", "24")
 	w.Header().Set("Cache-Control", "no-store")
@@ -991,10 +995,7 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 
 		result, err := pipeline.RenderConfig(overrideCfg)
 		if err != nil {
-			message := err.Error()
-			if errors.Is(err, pipeline.ErrNoNodes) {
-				message = "no nodes available for rendering"
-			}
+			message := refreshErrorMessage(err, result)
 			writeAPIError(w, http.StatusBadRequest, "SUBSCRIPTION_UNAVAILABLE", message)
 			return
 		}
@@ -1033,9 +1034,6 @@ func (s *Server) handleSubscriptionYAML(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil {
 		message := err.Error()
-		if errors.Is(err, pipeline.ErrNoNodes) {
-			message = "no nodes available for rendering"
-		}
 		if cfg.Service.StaleIfError && hasExisting {
 			writeSubscriptionYAML(w, r, cfg, existing, cachedAggregate, "stale", "upstream refresh failed, served stale config", status.NodeCount, status.YAMLUpdatedAt)
 			return
@@ -1067,10 +1065,7 @@ func loadSubscriptionAggregate(cfg model.Config) model.AggregatedSubscriptionMet
 }
 
 func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Config, data []byte, aggregate model.AggregatedSubscriptionMeta, refreshStatus, warning string, nodeCount int, generatedAt time.Time) {
-	filename := sanitizeOutputFilename(cfg.Render.OutputFilename)
-	if filename == "" {
-		filename = "mihomo.yaml"
-	}
+	filename := subscriptionOutputFilename(cfg.Render.OutputFilename)
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
@@ -1091,9 +1086,9 @@ func writeSubscriptionYAML(w http.ResponseWriter, r *http.Request, cfg model.Con
 		w.Header().Set("X-SubConv-Warning", warning)
 	}
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.Header().Set("Content-Disposition", subscriptionContentDisposition("attachment", filename))
 	} else {
-		w.Header().Set("Content-Disposition", `inline; filename="`+filename+`"`)
+		w.Header().Set("Content-Disposition", subscriptionContentDisposition("inline", filename))
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
@@ -1130,6 +1125,103 @@ func sanitizeOutputFilename(value string) string {
 	value = strings.ReplaceAll(value, `"`, "")
 	value = strings.ReplaceAll(value, `'`, "")
 	return value
+}
+
+func subscriptionOutputFilename(value string) string {
+	filename := sanitizeOutputFilename(value)
+	if filename == "" {
+		return "mihomo.yaml"
+	}
+	if ext := filepath.Ext(filename); ext == "" || ext == "." {
+		filename += ".yaml"
+	}
+	return filename
+}
+
+func subscriptionContentDisposition(disposition, filename string) string {
+	disposition = strings.TrimSpace(disposition)
+	if disposition == "" {
+		disposition = "inline"
+	}
+	filename = subscriptionOutputFilename(filename)
+	fallback := contentDispositionFallbackFilename(filename)
+	if fallback == filename && isHTTPToken(filename) {
+		return disposition + "; filename=" + fallback
+	}
+	return disposition + "; filename=" + fallback + "; filename*=UTF-8''" + url.PathEscape(filename)
+}
+
+func contentDispositionFallbackFilename(filename string) string {
+	filename = subscriptionOutputFilename(filename)
+	ext := filepath.Ext(filename)
+	stem := strings.TrimSuffix(filename, ext)
+	safeStem := contentDispositionFilenameToken(stem)
+	if safeStem == "" {
+		safeStem = "profile"
+	}
+	safeExt := contentDispositionFilenameExtension(ext)
+	return safeStem + safeExt
+}
+
+func contentDispositionFilenameToken(value string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if isFilenameTokenRune(r) {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "._-")
+}
+
+func contentDispositionFilenameExtension(ext string) string {
+	ext = strings.TrimSpace(ext)
+	if ext == "" || ext == "." {
+		return ".yaml"
+	}
+	var b strings.Builder
+	b.WriteByte('.')
+	for _, r := range strings.TrimPrefix(ext, ".") {
+		if r >= 'a' && r <= 'z' ||
+			r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() <= 1 {
+		return ".yaml"
+	}
+	return b.String()
+}
+
+func isFilenameTokenRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= 'A' && r <= 'Z' ||
+		r >= '0' && r <= '9' ||
+		r == '.' || r == '_' || r == '-'
+}
+
+func isHTTPToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizePublicOrigin(r *http.Request) string {

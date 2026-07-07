@@ -18,6 +18,7 @@ const (
 	ProtocolVMess     Protocol = "vmess"
 	ProtocolVLESS     Protocol = "vless"
 	ProtocolTrojan    Protocol = "trojan"
+	ProtocolHysteria  Protocol = "hysteria"
 	ProtocolHysteria2 Protocol = "hysteria2"
 	ProtocolTUIC      Protocol = "tuic"
 	ProtocolAnyTLS    Protocol = "anytls"
@@ -243,6 +244,20 @@ func transportFingerprint(node NodeIR) string {
 			rawFingerprintValue(node.Raw, "trafficPattern"),
 		)
 	}
+	if node.Type == ProtocolHysteria || node.Type == ProtocolHysteria2 {
+		parts = append(parts,
+			rawFingerprintValue(node.Raw, "ports"),
+			rawFingerprintValue(node.Raw, "mport"),
+			rawFingerprintValue(node.Raw, "hopInterval"),
+			rawFingerprintValue(node.Raw, "up"),
+			rawFingerprintValue(node.Raw, "down"),
+			rawMihomoProxyFieldFingerprintValue(node.Raw, "ports"),
+			rawMihomoProxyFieldFingerprintValue(node.Raw, "mport"),
+			rawMihomoProxyFieldFingerprintValue(node.Raw, "hop-interval"),
+			rawMihomoProxyFieldFingerprintValue(node.Raw, "up"),
+			rawMihomoProxyFieldFingerprintValue(node.Raw, "down"),
+		)
+	}
 	return strings.Join(parts, "|")
 }
 
@@ -255,6 +270,27 @@ func rawFingerprintValue(raw map[string]interface{}, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func rawMihomoProxyFieldFingerprintValue(raw map[string]interface{}, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	value, ok := raw["_mihomoProxyFields"]
+	if !ok || value == nil {
+		return ""
+	}
+	switch fields := value.(type) {
+	case map[string]interface{}:
+		if field, ok := fields[key]; ok && field != nil {
+			return strings.TrimSpace(fmt.Sprint(field))
+		}
+	case map[interface{}]interface{}:
+		if field, ok := fields[key]; ok && field != nil {
+			return strings.TrimSpace(fmt.Sprint(field))
+		}
+	}
+	return ""
 }
 
 func sha256Hex(value string) string {

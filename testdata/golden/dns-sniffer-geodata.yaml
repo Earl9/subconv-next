@@ -10,7 +10,7 @@ ipv6: false
 
 unified-delay: true
 
-tcp-concurrent: true
+tcp-concurrent: false
 
 find-process-mode: strict
 
@@ -19,22 +19,15 @@ global-client-fingerprint: chrome
 dns:
   enable: true
   listen: 127.0.0.1:5335
-  use-system-hosts: false
+  use-hosts: true
   ipv6: false
+  respect-rules: false
   enhanced-mode: fake-ip
-  default-nameserver: [119.29.29.29, 223.5.5.5]
-  nameserver-policy:
-    '*.linux.do': https://xxx.ddd.oaifree.com/query-dns
-    geosite:cn,private,apple:
-      - https://doh.pub/dns-query
-      - https://dns.alidns.com/dns-query
-    linux.do: https://xxx.ddd.oaifree.com/query-dns
-  nameserver: ['https://1.1.1.1/dns-query#RULES', 'https://8.8.8.8/dns-query#RULES']
-  proxy-server-nameserver: [119.29.29.29, 223.5.5.5]
-  direct-nameserver: ['https://doh.pub/dns-query', 'https://dns.alidns.com/dns-query']
-  direct-nameserver-follow-policy: true
-  fake-ip-range: 198.18.0.0/16
-  fake-ip-filter: ['*.lan', '*.local', '*.arpa', time.*.com, ntp.*.com, +.market.xiaomi.com, localhost.ptlogin2.qq.com, '*.msftncsi.com', www.msftconnecttest.com]
+  default-nameserver: [223.5.5.5, 119.29.29.29]
+  nameserver: [223.5.5.5, 119.29.29.29]
+  fake-ip-range: 198.18.0.1/16
+  fallback: ['https://dns.alidns.com/dns-query']
+  fake-ip-filter: ['*.lan', '*.local', localhost, '*.msftconnecttest.com', '*.msftncsi.com', '*.nintendo.net', '*.playstation.net', '*.xboxlive.com', stun.*, time.*]
 
 profile:
   store-selected: true
@@ -42,35 +35,17 @@ profile:
 
 sniffer:
   enable: true
-  parse-pure-ip: true
+  parse-pure-ip: false
   sniff:
     HTTP:
       ports:
         - 80
         - 8080-8880
       override-destination: true
-    QUIC:
-      ports:
-        - 443
-        - 8443
     TLS:
       ports:
         - 443
         - 8443
-
-geodata-mode: true
-
-geo-auto-update: true
-
-geodata-loader: standard
-
-geo-update-interval: 24
-
-geox-url:
-  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
-  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
-  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb
-  asn: https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 
 proxies:
   - {name: ss-node, type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: pass, udp: true}

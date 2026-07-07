@@ -28,6 +28,7 @@ type Source struct {
 	UserAgent          string
 	Enabled            bool
 	InsecureSkipVerify bool
+	AllowPrivateHosts  bool
 }
 
 type FetchedSubscription struct {
@@ -75,11 +76,12 @@ type Fetcher struct {
 
 func OptionsFromConfig(cfg model.Config) Options {
 	return Options{
-		CacheDir:     cfg.Service.CacheDir,
-		Timeout:      time.Duration(cfg.Service.FetchTimeoutSeconds) * time.Second,
-		MaxBodyBytes: int64(cfg.Service.MaxSubscriptionBytes),
-		MaxRedirects: 3,
-		CacheTTL:     time.Duration(cfg.Service.RefreshInterval) * time.Second,
+		CacheDir:          cfg.Service.CacheDir,
+		Timeout:           time.Duration(cfg.Service.FetchTimeoutSeconds) * time.Second,
+		MaxBodyBytes:      int64(cfg.Service.MaxSubscriptionBytes),
+		MaxRedirects:      3,
+		CacheTTL:          time.Duration(cfg.Service.RefreshInterval) * time.Second,
+		AllowPrivateHosts: cfg.Service.AllowLAN,
 	}
 }
 
@@ -143,7 +145,7 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 	redirects := 0
 
 	for {
-		resolvedIP, err := f.resolveHost(ctx, currentURL.Hostname())
+		resolvedIP, err := f.resolveHost(ctx, currentURL.Hostname(), source.AllowPrivateHosts)
 		if err != nil {
 			return FetchedSubscription{}, err
 		}
@@ -231,8 +233,9 @@ func (f *Fetcher) doRequest(ctx context.Context, target *url.URL, resolvedIP net
 	return client.Do(req)
 }
 
-func (f *Fetcher) resolveHost(ctx context.Context, host string) (net.IP, error) {
-	if isBlockedHostname(host) && !f.opts.AllowPrivateHosts {
+func (f *Fetcher) resolveHost(ctx context.Context, host string, allowPrivateHosts bool) (net.IP, error) {
+	allowPrivateHosts = allowPrivateHosts || f.opts.AllowPrivateHosts
+	if isBlockedHostname(host) && !allowPrivateHosts {
 		return nil, fmt.Errorf("blocked host %q", host)
 	}
 
@@ -242,7 +245,7 @@ func (f *Fetcher) resolveHost(ctx context.Context, host string) (net.IP, error) 
 	}
 
 	for _, ipAddr := range ips {
-		if f.opts.AllowPrivateHosts || !isBlockedIP(ipAddr.IP) {
+		if allowPrivateHosts || !isBlockedIP(ipAddr.IP) {
 			return ipAddr.IP, nil
 		}
 	}

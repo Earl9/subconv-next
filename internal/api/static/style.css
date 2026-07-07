@@ -1313,6 +1313,39 @@ textarea {
   background: transparent;
 }
 
+.dns-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.dns-toggle-item {
+  padding: 0;
+}
+
+.dns-custom-fields {
+  display: grid;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.dns-basic-grid,
+.dns-list-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.dns-list-grid textarea {
+  min-height: 104px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.dns-policy-field {
+  grid-column: 1 / -1;
+}
+
 .setting-icon {
   width: 30px;
   height: 30px;
@@ -2156,6 +2189,33 @@ button:disabled {
   background: #f8fbff;
 }
 
+.node-bulk-action-bar.hidden {
+  display: none;
+}
+
+.bulk-action-summary,
+.bulk-action-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bulk-action-summary {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.bulk-action-summary strong {
+  color: var(--text);
+}
+
+.bulk-action-controls {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .node-table-wrap {
   overflow: auto;
   border: 1px solid var(--line);
@@ -2184,6 +2244,20 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.node-table .node-select-col {
+  width: 44px;
+  min-width: 44px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.node-select-checkbox,
+#node-select-page-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
 .node-table thead th {
   position: sticky;
   top: 0;
@@ -2199,6 +2273,14 @@ button:disabled {
 
 .node-table tbody tr:hover {
   background: #f8fafc;
+}
+
+.node-table tbody tr.selected-row {
+  background: #eff6ff;
+}
+
+.node-table tbody tr.selected-row:hover {
+  background: #dbeafe;
 }
 
 .table-empty {
@@ -2388,6 +2470,67 @@ button:disabled {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+
+.danger-dialog-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.restore-deleted-body {
+  display: grid;
+  gap: 12px;
+  max-height: min(56vh, 560px);
+  overflow: auto;
+}
+
+.restore-deleted-note {
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.deleted-node-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.deleted-node-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.deleted-node-list-item span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deleted-node-list-item strong,
+.deleted-node-list-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deleted-node-list-item small {
+  color: var(--muted);
 }
 
 .row-menu {
@@ -3123,6 +3266,8 @@ button:disabled {
 
   .compact-base-grid,
   .options-grid,
+  .dns-basic-grid,
+  .dns-list-grid,
   .chip-grid,
   .dialog-grid.two-col,
   .template-detail-meta {
@@ -3255,6 +3400,15 @@ button:disabled {
   .shell-toolbar,
   .node-toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .bulk-action-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bulk-action-controls {
+    justify-content: flex-start;
   }
 
   .modal-dialog,

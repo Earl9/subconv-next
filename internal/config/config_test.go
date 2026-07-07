@@ -65,34 +65,24 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			},
 		},
 		Render: model.RenderConfig{
-			MixedPort:         7890,
-			AllowLAN:          false,
-			Mode:              "rule",
-			LogLevel:          "info",
-			IPv6:              false,
-			DNSEnabled:        true,
-			EnhancedMode:      "fake-ip",
-			Emoji:             false,
-			ShowNodeType:      false,
-			IncludeInfoNode:   false,
-			ShowInfoNodes:     false,
-			UDP:               true,
-			FilterIllegal:     true,
-			GeodataMode:       true,
-			GeoAutoUpdate:     true,
-			GeodataLoader:     "standard",
-			GeoUpdateInterval: 24,
-			OutputFilename:    "mihomo.yaml",
+			MixedPort:       model.DefaultMixedPort,
+			AllowLAN:        true,
+			Mode:            "rule",
+			LogLevel:        "info",
+			IPv6:            false,
+			DNSEnabled:      true,
+			EnhancedMode:    "fake-ip",
+			Emoji:           false,
+			ShowNodeType:    false,
+			IncludeInfoNode: false,
+			ShowInfoNodes:   false,
+			UDP:             true,
+			FilterIllegal:   true,
+			OutputFilename:  "mihomo.yaml",
 			ExternalConfig: model.ExternalConfig{
 				TemplateKey:   "none",
 				TemplateLabel: "不选择，由接口提供方提供",
 				CustomURL:     "",
-			},
-			GeoxURL: &model.GeoxURLConfig{
-				GeoIP:   "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-				GeoSite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-				MMDB:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
-				ASN:     "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
 			},
 			TemplateRuleMode: "rules",
 			RuleMode:         "custom",
@@ -101,48 +91,33 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			DNS: &model.DNSConfig{
 				Enable:         true,
 				Listen:         "127.0.0.1:5335",
+				UseHosts:       true,
 				UseSystemHosts: false,
+				RespectRules:   false,
 				EnhancedMode:   "fake-ip",
-				FakeIPRange:    "198.18.0.0/16",
+				FakeIPRange:    "198.18.0.1/16",
 				DefaultNameserver: []string{
-					"119.29.29.29",
 					"223.5.5.5",
+					"119.29.29.29",
 				},
 				Nameserver: []string{
-					"https://1.1.1.1/dns-query#RULES",
-					"https://8.8.8.8/dns-query#RULES",
-				},
-				ProxyNameserver: []string{
-					"119.29.29.29",
 					"223.5.5.5",
+					"119.29.29.29",
 				},
-				DirectNameserver: []string{
-					"https://doh.pub/dns-query",
+				Fallback: []string{
 					"https://dns.alidns.com/dns-query",
-				},
-				DirectFollowPolicy: true,
-				NameserverPolicy: map[string][]string{
-					"geosite:cn,private,apple": {
-						"https://doh.pub/dns-query",
-						"https://dns.alidns.com/dns-query",
-					},
-					"*.linux.do": {
-						"https://xxx.ddd.oaifree.com/query-dns",
-					},
-					"linux.do": {
-						"https://xxx.ddd.oaifree.com/query-dns",
-					},
 				},
 				FakeIPFilter: []string{
 					"*.lan",
 					"*.local",
-					"*.arpa",
-					"time.*.com",
-					"ntp.*.com",
-					"+.market.xiaomi.com",
-					"localhost.ptlogin2.qq.com",
+					"localhost",
+					"*.msftconnecttest.com",
 					"*.msftncsi.com",
-					"www.msftconnecttest.com",
+					"*.nintendo.net",
+					"*.playstation.net",
+					"*.xboxlive.com",
+					"stun.*",
+					"time.*",
 				},
 			},
 			Profile: &model.ProfileConfig{
@@ -151,13 +126,10 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			},
 			Sniffer: &model.SnifferConfig{
 				Enable:      true,
-				ParsePureIP: true,
+				ParsePureIP: false,
 				HTTP: &model.SniffHTTP{
 					Ports:               []string{"80", "8080-8880"},
 					OverrideDestination: true,
-				},
-				QUIC: &model.SniffProtocol{
-					Ports: []string{"443", "8443"},
 				},
 				TLS: &model.SniffProtocol{
 					Ports: []string{"443", "8443"},
@@ -184,8 +156,8 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 	if jsonCfg.Inline[0].ID == "" || jsonCfg.Inline[0].Name != want.Inline[0].Name || jsonCfg.Inline[0].Content != want.Inline[0].Content {
 		t.Fatalf("inline mismatch\n got=%+v\nwant=%+v", jsonCfg.Inline, want.Inline)
 	}
-	if jsonCfg.Render.GeodataMode != true || jsonCfg.Render.GeoAutoUpdate != true || jsonCfg.Render.GeodataLoader != "standard" || jsonCfg.Render.GeoUpdateInterval != 24 {
-		t.Fatalf("geodata defaults mismatch: %+v", jsonCfg.Render)
+	if jsonCfg.Render.GeodataMode || jsonCfg.Render.GeoAutoUpdate || jsonCfg.Render.GeodataLoader != "" || jsonCfg.Render.GeoUpdateInterval != 0 || jsonCfg.Render.GeoxURL != nil {
+		t.Fatalf("geodata defaults should be disabled: %+v", jsonCfg.Render)
 	}
 	if !jsonCfg.Render.SourcePrefix || jsonCfg.Render.SourcePrefixFormat != "{emoji} {name}" || jsonCfg.Render.DedupeScope != "global" {
 		t.Fatalf("source prefix defaults mismatch: %+v", jsonCfg.Render)
@@ -348,17 +320,84 @@ func TestNormalizeMigratesLegacyComplexDefaultDNS(t *testing.T) {
 	if got.Render.DNS == nil {
 		t.Fatalf("Render.DNS = nil")
 	}
-	if len(got.Render.DNS.Fallback) != 0 || got.Render.DNS.FallbackFilter != nil {
-		t.Fatalf("legacy DNS was not migrated: %+v", got.Render.DNS)
-	}
-	if !reflect.DeepEqual(got.Render.DNS.DefaultNameserver, []string{"119.29.29.29", "223.5.5.5"}) {
+	if !reflect.DeepEqual(got.Render.DNS.DefaultNameserver, []string{"223.5.5.5", "119.29.29.29"}) {
 		t.Fatalf("DefaultNameserver = %#v, want compact defaults", got.Render.DNS.DefaultNameserver)
 	}
-	if !got.Render.DNS.DirectFollowPolicy || !reflect.DeepEqual(got.Render.DNS.ProxyNameserver, []string{"119.29.29.29", "223.5.5.5"}) {
-		t.Fatalf("DNS policy defaults missing after migration: %+v", got.Render.DNS)
+	if !reflect.DeepEqual(got.Render.DNS.Nameserver, []string{"223.5.5.5", "119.29.29.29"}) {
+		t.Fatalf("Nameserver = %#v, want updated defaults", got.Render.DNS.Nameserver)
 	}
-	if !reflect.DeepEqual(got.Render.DNS.NameserverPolicy["geosite:cn,private,apple"], []string{"https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"}) {
-		t.Fatalf("domestic DNS policy = %#v", got.Render.DNS.NameserverPolicy["geosite:cn,private,apple"])
+	if !reflect.DeepEqual(got.Render.DNS.Fallback, []string{"https://dns.alidns.com/dns-query"}) {
+		t.Fatalf("Fallback = %#v, want updated defaults", got.Render.DNS.Fallback)
+	}
+	if got.Render.DNS.FallbackFilter != nil {
+		t.Fatalf("fallback filter must be disabled after migration: %+v", got.Render.DNS.FallbackFilter)
+	}
+	if got.Render.DNS.NameserverPolicy != nil {
+		t.Fatalf("nameserver-policy must be disabled after migration: %+v", got.Render.DNS.NameserverPolicy)
+	}
+}
+
+func TestNormalizePreservesCustomDNS(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.CustomDNS = true
+	cfg.Render.DNS = &model.DNSConfig{
+		Enable:         true,
+		Listen:         "0.0.0.0:1053",
+		UseHosts:       false,
+		UseSystemHosts: true,
+		RespectRules:   true,
+		EnhancedMode:   "redir-host",
+		FakeIPRange:    "198.18.0.1/16",
+		DefaultNameserver: []string{
+			"1.1.1.1",
+		},
+		Nameserver: []string{
+			"https://dns.google/dns-query",
+		},
+		ProxyNameserver: []string{
+			"223.5.5.5",
+		},
+		DirectNameserver: []string{
+			"https://doh.pub/dns-query",
+		},
+		DirectFollowPolicy: true,
+		Fallback: []string{
+			"https://dns.cloudflare.com/dns-query",
+		},
+		FakeIPFilter: []string{
+			"*.lan",
+		},
+		NameserverPolicy: map[string][]string{
+			"geosite:cn,private": {
+				"https://dns.alidns.com/dns-query",
+			},
+		},
+	}
+
+	got := Normalize(cfg)
+	if !got.Render.CustomDNS {
+		t.Fatalf("CustomDNS = false, want true")
+	}
+	if got.Render.DNS == nil {
+		t.Fatalf("Render.DNS = nil")
+	}
+	if got.Render.DNS.Listen != "0.0.0.0:1053" {
+		t.Fatalf("Listen = %q, want custom value", got.Render.DNS.Listen)
+	}
+	if got.Render.DNS.UseHosts {
+		t.Fatalf("UseHosts = true, want false")
+	}
+	if !got.Render.DNS.UseSystemHosts || !got.Render.DNS.RespectRules {
+		t.Fatalf("custom DNS booleans were not preserved: %+v", got.Render.DNS)
+	}
+	if !reflect.DeepEqual(got.Render.DNS.Nameserver, []string{"https://dns.google/dns-query"}) {
+		t.Fatalf("Nameserver = %#v, want custom resolver", got.Render.DNS.Nameserver)
+	}
+	if !reflect.DeepEqual(got.Render.DNS.Fallback, []string{"https://dns.cloudflare.com/dns-query"}) {
+		t.Fatalf("Fallback = %#v, want custom fallback", got.Render.DNS.Fallback)
+	}
+	if got.Render.DNS.NameserverPolicy["geosite:cn,private"][0] != "https://dns.alidns.com/dns-query" {
+		t.Fatalf("NameserverPolicy = %#v, want custom policy", got.Render.DNS.NameserverPolicy)
 	}
 }
 

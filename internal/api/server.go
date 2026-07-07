@@ -413,7 +413,7 @@ func maskLogLines(lines []string) []string {
 }
 
 var (
-	publishedPathPattern = regexp.MustCompile(`/s/[^/\s]+/mihomo\.yaml`)
+	publishedPathPattern = regexp.MustCompile(`/s/[^/\s]+/[^?#\s]+`)
 	schemeSecretPattern  = regexp.MustCompile(`(?i)\b(ss|trojan|anytls|tuic|vless|vmess|wireguard|socks5|http)://([^@/\s]+)@`)
 	uuidPattern          = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	secretPairPattern    = regexp.MustCompile(`(?i)\b(password|uuid|token|private[-_ ]?key|pre[-_ ]?shared[-_ ]?key|authorization|cookie)\s*[:=]\s*[^,\s"']+`)
@@ -425,7 +425,7 @@ func maskSensitiveText(value string) string {
 	for _, key := range keys {
 		masked = maskQueryValue(masked, key)
 	}
-	masked = publishedPathPattern.ReplaceAllString(masked, "/s/<redacted>/mihomo.yaml")
+	masked = publishedPathPattern.ReplaceAllString(masked, "/s/<redacted>/<file>")
 	masked = schemeSecretPattern.ReplaceAllString(masked, `$1://***@`)
 	masked = uuidPattern.ReplaceAllString(masked, "***")
 	masked = secretPairPattern.ReplaceAllStringFunc(masked, maskSecretPair)

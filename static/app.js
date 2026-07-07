@@ -539,7 +539,7 @@ function renderBaseFields() {
   const render = ensureRenderConfig();
 
   const fields = [
-    numberField("mixed-port", render.mixed_port || 7890, (value) => {
+    numberField("mixed-port", render.mixed_port || 7897, (value) => {
       render.mixed_port = value;
     }),
     toggleField("allow-lan", Boolean(render.allow_lan), (value) => {
@@ -575,9 +575,7 @@ function renderDNSFields() {
   const container = document.getElementById("dns-fields");
   container.innerHTML = "";
 
-  const render = ensureRenderConfig();
-  const dns = render.dns || {};
-  const fallbackFilter = dns.fallback_filter || {};
+  const dns = ensureDNSConfig();
 
   container.append(
     textareaField("默认 DNS", joinLines(dns.default_nameserver), (value) => {
@@ -596,38 +594,20 @@ function renderDNSFields() {
       ensureDNSConfig().fallback = parseLines(value);
     }, {
       rows: 6,
-      placeholder: "https://dns.google/dns-query\ntls://1.0.0.1:853",
-    }),
-    textareaField("回退过滤 IPCIDR", joinLines(fallbackFilter.ipcidr), (value) => {
-      ensureDNSFallbackFilter().ipcidr = parseLines(value);
-    }, {
-      rows: 4,
-      placeholder: "240.0.0.0/4\n0.0.0.0/32",
-    }),
-    textareaField("回退过滤域名", joinLines(fallbackFilter.domain), (value) => {
-      ensureDNSFallbackFilter().domain = parseLines(value);
-    }, {
-      rows: 4,
-      placeholder: "+.google.com\n+.facebook.com",
+      placeholder: "https://dns.alidns.com/dns-query",
     }),
     textareaField("Fake-IP 排除", joinLines(dns.fake_ip_filter), (value) => {
       ensureDNSConfig().fake_ip_filter = parseLines(value);
     }, {
       rows: 8,
-      placeholder: "*.lan\ntime.windows.com\npool.ntp.org",
-    }),
-    textareaField("nameserver-policy", formatNameserverPolicy(dns.nameserver_policy), (value) => {
-      ensureDNSConfig().nameserver_policy = parseNameserverPolicy(value);
-    }, {
-      rows: 6,
-      placeholder: "rule-set:company = 172.16.0.53, 172.16.0.54\ngeosite:cn = 223.5.5.5, 119.29.29.29\n+.home.arpa = 192.168.1.1",
+      placeholder: "*.lan\n*.local\nlocalhost",
     }),
   );
 }
 
 function renderProfileFields() {
   const container = document.getElementById("profile-fields");
-  const profile = state.config.render?.profile || {};
+  const profile = ensureProfileConfig();
 
   container.replaceChildren(
     toggleField("记忆策略选择", profile.store_selected ?? true, (value) => {
@@ -643,7 +623,7 @@ function renderSnifferFields() {
   const container = document.getElementById("sniffer-fields");
   container.innerHTML = "";
 
-  const sniffer = state.config.render?.sniffer || {};
+  const sniffer = ensureSnifferConfig();
   const http = sniffer.http || {};
 
   const topGrid = document.createElement("div");
@@ -673,12 +653,6 @@ function renderSnifferFields() {
     }, {
       rows: 3,
       placeholder: "80\n8080-8880",
-    }),
-    textareaField("QUIC 端口", joinLines(sniffer.quic?.ports), (value) => {
-      ensureSnifferProtocol("quic").ports = parseLines(value);
-    }, {
-      rows: 3,
-      placeholder: "443\n8443",
     }),
   );
 }
@@ -1292,6 +1266,18 @@ function ensureRenderConfig() {
   if (!state.config.render) {
     state.config.render = {};
   }
+  state.config.render.mixed_port = 7897;
+  state.config.render.allow_lan = true;
+  state.config.render.mode = "rule";
+  state.config.render.log_level = "info";
+  state.config.render.ipv6 = false;
+  state.config.render.dns_enabled = true;
+  state.config.render.enhanced_mode = "fake-ip";
+  state.config.render.unified_delay = true;
+  state.config.render.tcp_concurrent = false;
+  state.config.render.find_process_mode = "strict";
+  state.config.render.global_client_fingerprint = "chrome";
+  delete state.config.render.geox_url;
   return state.config.render;
 }
 
@@ -1307,10 +1293,35 @@ function ensureDNSConfig() {
   const render = ensureRenderConfig();
   if (!render.dns) {
     render.dns = {
-      enable: render.dns_enabled ?? true,
-      enhanced_mode: render.enhanced_mode || "fake-ip",
     };
   }
+  render.dns.enable = true;
+  render.dns.listen = "127.0.0.1:5335";
+  render.dns.use_hosts = true;
+  render.dns.use_system_hosts = false;
+  render.dns.respect_rules = false;
+  render.dns.enhanced_mode = "fake-ip";
+  render.dns.fake_ip_range = "198.18.0.1/16";
+  render.dns.default_nameserver = ["223.5.5.5", "119.29.29.29"];
+  render.dns.nameserver = ["223.5.5.5", "119.29.29.29"];
+  render.dns.fallback = ["https://dns.alidns.com/dns-query"];
+  render.dns.fake_ip_filter = [
+    "*.lan",
+    "*.local",
+    "localhost",
+    "*.msftconnecttest.com",
+    "*.msftncsi.com",
+    "*.nintendo.net",
+    "*.playstation.net",
+    "*.xboxlive.com",
+    "stun.*",
+    "time.*",
+  ];
+  delete render.dns.nameserver_policy;
+  delete render.dns.fallback_filter;
+  delete render.dns.proxy_server_nameserver;
+  delete render.dns.direct_nameserver;
+  delete render.dns.direct_nameserver_follow_policy;
   return render.dns;
 }
 
@@ -1319,6 +1330,7 @@ function ensureDNSFallbackFilter() {
   if (!dns.fallback_filter) {
     dns.fallback_filter = {
       geoip: true,
+      geoip_code: "CN",
       ipcidr: [],
       domain: [],
     };
@@ -1330,10 +1342,10 @@ function ensureProfileConfig() {
   const render = ensureRenderConfig();
   if (!render.profile) {
     render.profile = {
-      store_selected: true,
-      store_fake_ip: false,
     };
   }
+  render.profile.store_selected = true;
+  render.profile.store_fake_ip = false;
   return render.profile;
 }
 
@@ -1341,10 +1353,11 @@ function ensureSnifferConfig() {
   const render = ensureRenderConfig();
   if (!render.sniffer) {
     render.sniffer = {
-      enable: true,
-      parse_pure_ip: true,
     };
   }
+  render.sniffer.enable = true;
+  render.sniffer.parse_pure_ip = false;
+  delete render.sniffer.quic;
   return render.sniffer;
 }
 

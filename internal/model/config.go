@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 const (
 	DefaultUserAgent          = "clash.meta"
 	DefaultListenAddr         = "127.0.0.1"
@@ -60,6 +62,7 @@ type SubscriptionConfig struct {
 	URL                string   `json:"url"`
 	UserAgent          string   `json:"user_agent"`
 	InsecureSkipVerify bool     `json:"insecure_skip_verify"`
+	AllowLAN           bool     `json:"allow_lan,omitempty"`
 	IncludeKeywords    []string `json:"include_keywords,omitempty"`
 	ExcludeKeywords    []string `json:"exclude_keywords,omitempty"`
 	ExcludedNodeIDs    []string `json:"excluded_node_ids,omitempty"`
@@ -79,6 +82,7 @@ type RenderConfig struct {
 	LogLevel                string                   `json:"log_level"`
 	IPv6                    bool                     `json:"ipv6"`
 	DNSEnabled              bool                     `json:"dns_enabled"`
+	CustomDNS               bool                     `json:"custom_dns,omitempty"`
 	EnhancedMode            string                   `json:"enhanced_mode"`
 	Emoji                   bool                     `json:"emoji"`
 	ShowNodeType            bool                     `json:"show_node_type"`
@@ -165,6 +169,7 @@ func NormalizeGroupOptions(opt GroupOptions) GroupOptions {
 type DNSConfig struct {
 	Enable             bool                `json:"enable"`
 	Listen             string              `json:"listen,omitempty"`
+	UseHosts           bool                `json:"use_hosts"`
 	UseSystemHosts     bool                `json:"use_system_hosts"`
 	RespectRules       bool                `json:"respect_rules,omitempty"`
 	EnhancedMode       string              `json:"enhanced_mode,omitempty"`
@@ -181,9 +186,10 @@ type DNSConfig struct {
 }
 
 type DNSFallbackFilter struct {
-	GeoIP  bool     `json:"geoip"`
-	IPCIDR []string `json:"ipcidr,omitempty"`
-	Domain []string `json:"domain,omitempty"`
+	GeoIP     bool     `json:"geoip"`
+	GeoIPCode string   `json:"geoip_code,omitempty"`
+	IPCIDR    []string `json:"ipcidr,omitempty"`
+	Domain    []string `json:"domain,omitempty"`
 }
 
 type ProfileConfig struct {
@@ -331,33 +337,20 @@ func DefaultRenderConfig() RenderConfig {
 		SourcePrefixSeparator: "｜",
 		NameOptions:           DefaultNameOptions(),
 		DedupeScope:           "global",
-		GeodataMode:           true,
-		GeoAutoUpdate:         true,
-		GeodataLoader:         "standard",
-		GeoUpdateInterval:     24,
 		OutputFilename:        "mihomo.yaml",
 		SourceMode:            "rules",
 		TemplateRuleMode:      "rules",
-		GeoxURL: &GeoxURLConfig{
-			GeoIP:   "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-			GeoSite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-			MMDB:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
-			ASN:     "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
-		},
-		DNS: DefaultDNSConfig(),
+		DNS:                   DefaultDNSConfig(),
 		Profile: &ProfileConfig{
 			StoreSelected: true,
 			StoreFakeIP:   false,
 		},
 		Sniffer: &SnifferConfig{
 			Enable:      true,
-			ParsePureIP: true,
+			ParsePureIP: false,
 			HTTP: &SniffHTTP{
 				Ports:               []string{"80", "8080-8880"},
 				OverrideDestination: true,
-			},
-			QUIC: &SniffProtocol{
-				Ports: []string{"443", "8443"},
 			},
 			TLS: &SniffProtocol{
 				Ports: []string{"443", "8443"},
@@ -372,7 +365,7 @@ func DefaultRenderConfig() RenderConfig {
 		EnabledRules:            []string{},
 		CustomRules:             []CustomRule{},
 		UnifiedDelay:            true,
-		TCPConcurrent:           true,
+		TCPConcurrent:           false,
 		FindProcessMode:         "strict",
 		GlobalClientFingerprint: "chrome",
 		AdditionalRules:         []string{},
@@ -386,50 +379,142 @@ func DefaultDNSConfig() *DNSConfig {
 	return &DNSConfig{
 		Enable:         true,
 		Listen:         "127.0.0.1:5335",
+		UseHosts:       true,
 		UseSystemHosts: false,
+		RespectRules:   false,
 		EnhancedMode:   "fake-ip",
-		FakeIPRange:    "198.18.0.0/16",
+		FakeIPRange:    "198.18.0.1/16",
 		DefaultNameserver: []string{
-			"119.29.29.29",
 			"223.5.5.5",
+			"119.29.29.29",
 		},
 		Nameserver: []string{
-			"https://1.1.1.1/dns-query#RULES",
-			"https://8.8.8.8/dns-query#RULES",
-		},
-		ProxyNameserver: []string{
-			"119.29.29.29",
 			"223.5.5.5",
+			"119.29.29.29",
 		},
-		DirectNameserver: []string{
-			"https://doh.pub/dns-query",
+		Fallback: []string{
 			"https://dns.alidns.com/dns-query",
-		},
-		DirectFollowPolicy: true,
-		NameserverPolicy: map[string][]string{
-			"geosite:cn,private,apple": {
-				"https://doh.pub/dns-query",
-				"https://dns.alidns.com/dns-query",
-			},
-			"*.linux.do": {
-				"https://xxx.ddd.oaifree.com/query-dns",
-			},
-			"linux.do": {
-				"https://xxx.ddd.oaifree.com/query-dns",
-			},
 		},
 		FakeIPFilter: []string{
 			"*.lan",
 			"*.local",
-			"*.arpa",
-			"time.*.com",
-			"ntp.*.com",
-			"+.market.xiaomi.com",
-			"localhost.ptlogin2.qq.com",
+			"localhost",
+			"*.msftconnecttest.com",
 			"*.msftncsi.com",
-			"www.msftconnecttest.com",
+			"*.nintendo.net",
+			"*.playstation.net",
+			"*.xboxlive.com",
+			"stun.*",
+			"time.*",
 		},
 	}
+}
+
+func NormalizeDNSConfig(dns *DNSConfig, custom bool) *DNSConfig {
+	if !custom {
+		return DefaultDNSConfig()
+	}
+	defaults := DefaultDNSConfig()
+	if dns == nil {
+		dns = defaults
+	} else {
+		dns = CloneDNSConfig(dns)
+	}
+
+	dns.Enable = true
+	dns.Listen = firstNonEmptyTrimmed(dns.Listen, defaults.Listen)
+	dns.EnhancedMode = firstNonEmptyTrimmed(dns.EnhancedMode, defaults.EnhancedMode)
+	dns.FakeIPRange = firstNonEmptyTrimmed(dns.FakeIPRange, defaults.FakeIPRange)
+	dns.DefaultNameserver = trimStringList(dns.DefaultNameserver)
+	if len(dns.DefaultNameserver) == 0 {
+		dns.DefaultNameserver = append([]string(nil), defaults.DefaultNameserver...)
+	}
+	dns.Nameserver = trimStringList(dns.Nameserver)
+	if len(dns.Nameserver) == 0 {
+		dns.Nameserver = append([]string(nil), defaults.Nameserver...)
+	}
+	dns.ProxyNameserver = trimStringList(dns.ProxyNameserver)
+	dns.DirectNameserver = trimStringList(dns.DirectNameserver)
+	dns.Fallback = trimStringList(dns.Fallback)
+	dns.FakeIPFilter = trimStringList(dns.FakeIPFilter)
+	if dns.FakeIPFilter == nil {
+		dns.FakeIPFilter = append([]string(nil), defaults.FakeIPFilter...)
+	}
+	dns.NameserverPolicy = normalizeDNSNameserverPolicy(dns.NameserverPolicy)
+	if dns.FallbackFilter != nil {
+		dns.FallbackFilter.GeoIPCode = strings.TrimSpace(dns.FallbackFilter.GeoIPCode)
+		dns.FallbackFilter.IPCIDR = trimStringList(dns.FallbackFilter.IPCIDR)
+		dns.FallbackFilter.Domain = trimStringList(dns.FallbackFilter.Domain)
+	}
+	return dns
+}
+
+func CloneDNSConfig(dns *DNSConfig) *DNSConfig {
+	if dns == nil {
+		return nil
+	}
+	cloned := *dns
+	cloned.DefaultNameserver = append([]string(nil), dns.DefaultNameserver...)
+	cloned.Nameserver = append([]string(nil), dns.Nameserver...)
+	cloned.ProxyNameserver = append([]string(nil), dns.ProxyNameserver...)
+	cloned.DirectNameserver = append([]string(nil), dns.DirectNameserver...)
+	cloned.Fallback = append([]string(nil), dns.Fallback...)
+	cloned.FakeIPFilter = append([]string(nil), dns.FakeIPFilter...)
+	if dns.NameserverPolicy != nil {
+		cloned.NameserverPolicy = make(map[string][]string, len(dns.NameserverPolicy))
+		for key, values := range dns.NameserverPolicy {
+			cloned.NameserverPolicy[key] = append([]string(nil), values...)
+		}
+	}
+	if dns.FallbackFilter != nil {
+		filter := *dns.FallbackFilter
+		filter.IPCIDR = append([]string(nil), dns.FallbackFilter.IPCIDR...)
+		filter.Domain = append([]string(nil), dns.FallbackFilter.Domain...)
+		cloned.FallbackFilter = &filter
+	}
+	return &cloned
+}
+
+func firstNonEmptyTrimmed(value, fallback string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return fallback
+}
+
+func trimStringList(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func normalizeDNSNameserverPolicy(policy map[string][]string) map[string][]string {
+	if policy == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(policy))
+	for key, values := range policy {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		trimmedValues := trimStringList(values)
+		if len(trimmedValues) == 0 {
+			continue
+		}
+		out[trimmedKey] = trimmedValues
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func DefaultRuleProviderConfig() RuleProviderConfig {

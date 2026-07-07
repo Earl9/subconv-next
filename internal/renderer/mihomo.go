@@ -15,6 +15,8 @@ import (
 
 const probeURL = "https://www.gstatic.com/generate_204"
 
+const mihomoProxyFieldsRawKey = "_mihomoProxyFields"
+
 var regionGroups = []struct {
 	Tag  string
 	Name string
@@ -68,9 +70,10 @@ type mihomoConfig struct {
 type mihomoDNS struct {
 	Enable             bool                     `yaml:"enable"`
 	Listen             string                   `yaml:"listen,omitempty"`
+	UseHosts           *bool                    `yaml:"use-hosts,omitempty"`
 	UseSystemHosts     *bool                    `yaml:"use-system-hosts,omitempty"`
 	IPv6               bool                     `yaml:"ipv6"`
-	RespectRules       bool                     `yaml:"respect-rules,omitempty"`
+	RespectRules       *bool                    `yaml:"respect-rules,omitempty"`
 	EnhancedMode       string                   `yaml:"enhanced-mode,omitempty"`
 	FakeIPRange        string                   `yaml:"fake-ip-range,omitempty"`
 	DefaultNameserver  []string                 `yaml:"default-nameserver,omitempty"`
@@ -85,9 +88,10 @@ type mihomoDNS struct {
 }
 
 type mihomoDNSFallbackFilter struct {
-	GeoIP  bool     `yaml:"geoip"`
-	IPCIDR []string `yaml:"ipcidr,omitempty"`
-	Domain []string `yaml:"domain,omitempty"`
+	GeoIP     bool     `yaml:"geoip"`
+	GeoIPCode string   `yaml:"geoip-code,omitempty"`
+	IPCIDR    []string `yaml:"ipcidr,omitempty"`
+	Domain    []string `yaml:"domain,omitempty"`
 }
 
 type mihomoGeoxURL struct {
@@ -168,6 +172,7 @@ type mihomoProxy struct {
 	DNS                      []string               `yaml:"dns,omitempty"`
 	Peers                    []mihomoWGPeer         `yaml:"peers,omitempty"`
 	AmneziaWGOption          map[string]interface{} `yaml:"amnezia-wg-option,omitempty"`
+	Extra                    map[string]interface{} `yaml:"-"`
 }
 
 type mihomoRealityOpts struct {
@@ -245,6 +250,7 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.LogLevel = cfg.Render.LogLevel
 	opts.IPv6 = cfg.Render.IPv6
 	opts.DNSEnabled = cfg.Render.DNSEnabled
+	opts.CustomDNS = cfg.Render.CustomDNS
 	opts.EnhancedMode = cfg.Render.EnhancedMode
 	opts.Emoji = cfg.Render.Emoji
 	opts.ShowNodeType = cfg.Render.ShowNodeType
@@ -262,11 +268,6 @@ func OptionsFromConfig(cfg model.Config) model.RenderOptions {
 	opts.SourcePrefixSeparator = cfg.Render.SourcePrefixSeparator
 	opts.NameOptions = cfg.Render.NameOptions
 	opts.DedupeScope = cfg.Render.DedupeScope
-	opts.GeodataMode = cfg.Render.GeodataMode
-	opts.GeoAutoUpdate = cfg.Render.GeoAutoUpdate
-	opts.GeodataLoader = cfg.Render.GeodataLoader
-	opts.GeoUpdateInterval = cfg.Render.GeoUpdateInterval
-	opts.GeoxURL = cfg.Render.GeoxURL
 	opts.IncludeKeywords = cfg.Render.IncludeKeywords
 	opts.ExcludeKeywords = cfg.Render.ExcludeKeywords
 	opts.OutputFilename = cfg.Render.OutputFilename
@@ -322,6 +323,38 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	if strings.TrimSpace(opts.ExternalConfig.TemplateLabel) == "" {
 		opts.ExternalConfig.TemplateLabel = defaults.ExternalConfig.TemplateLabel
 	}
+	opts.GeodataMode = false
+	opts.GeoAutoUpdate = false
+	opts.GeodataLoader = ""
+	opts.GeoUpdateInterval = 0
+	opts.GeoxURL = nil
+	if opts.Profile == nil {
+		opts.Profile = defaults.Profile
+	}
+	if opts.Profile != nil {
+		opts.Profile.StoreSelected = true
+		opts.Profile.StoreFakeIP = false
+	}
+	if opts.Sniffer == nil {
+		opts.Sniffer = defaults.Sniffer
+	}
+	if opts.Sniffer != nil {
+		opts.Sniffer.Enable = true
+		opts.Sniffer.ParsePureIP = false
+		opts.Sniffer.QUIC = nil
+	}
+	opts.MixedPort = model.DefaultMixedPort
+	opts.AllowLAN = true
+	opts.Mode = model.DefaultMode
+	opts.LogLevel = model.DefaultLogLevel
+	opts.IPv6 = false
+	opts.DNSEnabled = true
+	opts.DNS = model.NormalizeDNSConfig(opts.DNS, opts.CustomDNS)
+	opts.EnhancedMode = model.DefaultEnhancedMode
+	opts.UnifiedDelay = true
+	opts.TCPConcurrent = false
+	opts.FindProcessMode = "strict"
+	opts.GlobalClientFingerprint = "chrome"
 	opts.NameOptions.KeepRawName = true
 	if !opts.SourcePrefix {
 		opts.NameOptions.SourcePrefixMode = "none"
@@ -409,43 +442,58 @@ func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
 	if !opts.DNSEnabled {
 		return nil
 	}
-
-	defaultRender := model.DefaultRenderConfig()
-	base := defaultRender.DNS
-	if base == nil {
+	dns := model.NormalizeDNSConfig(opts.DNS, opts.CustomDNS)
+	if dns == nil {
 		return nil
 	}
 
-	cfg := *base
-	if opts.DNS != nil {
-		cfg = *opts.DNS
+	var useSystemHosts *bool
+	if opts.CustomDNS || dns.UseSystemHosts {
+		useSystemHosts = boolPointer(dns.UseSystemHosts)
 	}
 
-	dns := &mihomoDNS{
-		Enable:             cfg.Enable,
-		Listen:             strings.TrimSpace(cfg.Listen),
-		UseSystemHosts:     model.Bool(cfg.UseSystemHosts),
-		IPv6:               opts.IPv6,
-		RespectRules:       cfg.RespectRules,
-		EnhancedMode:       firstNonEmptyString(strings.TrimSpace(cfg.EnhancedMode), strings.TrimSpace(opts.EnhancedMode)),
-		FakeIPRange:        strings.TrimSpace(cfg.FakeIPRange),
-		DefaultNameserver:  cloneStrings(cfg.DefaultNameserver),
-		Nameserver:         cloneStrings(cfg.Nameserver),
-		ProxyNameserver:    cloneStrings(cfg.ProxyNameserver),
-		DirectNameserver:   cloneStrings(cfg.DirectNameserver),
-		DirectFollowPolicy: cfg.DirectFollowPolicy,
-		Fallback:           cloneStrings(cfg.Fallback),
-		FakeIPFilter:       cloneStrings(cfg.FakeIPFilter),
-		NameserverPolicy:   cloneStringSliceMap(cfg.NameserverPolicy),
+	return &mihomoDNS{
+		Enable:             dns.Enable,
+		Listen:             dns.Listen,
+		UseHosts:           boolPointer(dns.UseHosts),
+		UseSystemHosts:     useSystemHosts,
+		IPv6:               false,
+		RespectRules:       boolPointer(dns.RespectRules),
+		EnhancedMode:       dns.EnhancedMode,
+		FakeIPRange:        dns.FakeIPRange,
+		DefaultNameserver:  append([]string(nil), dns.DefaultNameserver...),
+		Nameserver:         append([]string(nil), dns.Nameserver...),
+		ProxyNameserver:    append([]string(nil), dns.ProxyNameserver...),
+		DirectNameserver:   append([]string(nil), dns.DirectNameserver...),
+		DirectFollowPolicy: dns.DirectFollowPolicy,
+		Fallback:           append([]string(nil), dns.Fallback...),
+		FallbackFilter:     buildDNSFallbackFilter(dns.FallbackFilter),
+		FakeIPFilter:       append([]string(nil), dns.FakeIPFilter...),
+		NameserverPolicy:   cloneDNSPolicy(dns.NameserverPolicy),
 	}
-	if cfg.FallbackFilter != nil {
-		dns.FallbackFilter = &mihomoDNSFallbackFilter{
-			GeoIP:  cfg.FallbackFilter.GeoIP,
-			IPCIDR: cloneStrings(cfg.FallbackFilter.IPCIDR),
-			Domain: cloneStrings(cfg.FallbackFilter.Domain),
-		}
+}
+
+func buildDNSFallbackFilter(filter *model.DNSFallbackFilter) *mihomoDNSFallbackFilter {
+	if filter == nil {
+		return nil
 	}
-	return dns
+	return &mihomoDNSFallbackFilter{
+		GeoIP:     filter.GeoIP,
+		GeoIPCode: filter.GeoIPCode,
+		IPCIDR:    append([]string(nil), filter.IPCIDR...),
+		Domain:    append([]string(nil), filter.Domain...),
+	}
+}
+
+func cloneDNSPolicy(policy map[string][]string) map[string][]string {
+	if policy == nil {
+		return nil
+	}
+	cloned := make(map[string][]string, len(policy))
+	for key, values := range policy {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
 }
 
 func buildProfileConfig(cfg *model.ProfileConfig) *mihomoProfile {
@@ -462,9 +510,6 @@ func buildProfileConfig(cfg *model.ProfileConfig) *mihomoProfile {
 }
 
 func buildGeoxURLConfig(cfg *model.GeoxURLConfig) *mihomoGeoxURL {
-	if cfg == nil {
-		cfg = model.DefaultRenderConfig().GeoxURL
-	}
 	if cfg == nil {
 		return nil
 	}
@@ -496,12 +541,6 @@ func buildSnifferConfig(cfg *model.SnifferConfig) *mihomoSniffer {
 			OverrideDestination: cfg.HTTP.OverrideDestination,
 		}
 	}
-	if cfg.QUIC != nil && len(cfg.QUIC.Ports) > 0 {
-		sniff["QUIC"] = mihomoSniffRule{
-			Ports: cloneStrings(cfg.QUIC.Ports),
-		}
-	}
-
 	return &mihomoSniffer{
 		Enable:      cfg.Enable,
 		ParsePureIP: cfg.ParsePureIP,
@@ -528,6 +567,7 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		Server: node.Server,
 		Port:   node.Port,
 		UDP:    udpOrDefault(node),
+		Extra:  mihomoProxyExtraFields(node),
 	}
 
 	switch node.Type {
@@ -576,6 +616,20 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.ALPN = node.TLS.ALPN
 		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 		applyTransport(&proxy, node.Transport)
+	case model.ProtocolHysteria:
+		if rawMihomoProxyFieldString(node.Raw, "password") != "" {
+			proxy.Password = node.Auth.Password
+		} else if node.Auth.Password != "" && rawMihomoProxyFieldString(node.Raw, "auth-str", "auth_str", "auth") == "" {
+			if proxy.Extra == nil {
+				proxy.Extra = make(map[string]interface{})
+			}
+			proxy.Extra["auth-str"] = node.Auth.Password
+		}
+		proxy.SNI = node.TLS.SNI
+		proxy.ALPN = node.TLS.ALPN
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
+		proxy.Obfs = rawString(node.Raw, "obfs")
+		proxy.ObfsParam = rawString(node.Raw, "obfsParam")
 	case model.ProtocolHysteria2:
 		proxy.Password = node.Auth.Password
 		proxy.SNI = node.TLS.SNI
@@ -612,6 +666,13 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.Multiplexing = rawString(node.Raw, "multiplexing")
 		proxy.HandshakeMode = rawString(node.Raw, "handshakeMode")
 		proxy.TrafficPattern = rawString(node.Raw, "trafficPattern")
+	case model.ProtocolHTTP, model.ProtocolSOCKS5:
+		proxy.Username = node.Auth.Username
+		proxy.Password = node.Auth.Password
+		proxy.TLS = node.TLS.Enabled
+		proxy.SNI = node.TLS.SNI
+		proxy.ALPN = node.TLS.ALPN
+		proxy.SkipCertVerify = boolPointerIfTrue(node.TLS.Insecure)
 	case model.ProtocolWireGuard:
 		if node.WireGuard == nil {
 			return mihomoProxy{}, fmt.Errorf("wireguard node %q missing wireguard settings", node.Name)
@@ -1480,7 +1541,7 @@ func udpOrDefault(node model.NodeIR) *bool {
 		return node.UDP
 	}
 	switch node.Type {
-	case model.ProtocolSS, model.ProtocolSSR, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard, model.ProtocolMieru:
+	case model.ProtocolSS, model.ProtocolSSR, model.ProtocolVMess, model.ProtocolVLESS, model.ProtocolTrojan, model.ProtocolHysteria, model.ProtocolHysteria2, model.ProtocolTUIC, model.ProtocolAnyTLS, model.ProtocolWireGuard, model.ProtocolMieru, model.ProtocolSOCKS5:
 		return model.Bool(true)
 	default:
 		return nil
@@ -1492,6 +1553,10 @@ func boolPointerIfTrue(v bool) *bool {
 		return nil
 	}
 	return model.Bool(true)
+}
+
+func boolPointer(v bool) *bool {
+	return &v
 }
 
 func allowedIPsOrDefault(values []string) []string {
@@ -1540,6 +1605,118 @@ func cloneStringMap(values map[string]interface{}) map[string]interface{} {
 	return cloned
 }
 
+func mihomoProxyExtraFields(node model.NodeIR) map[string]interface{} {
+	out := make(map[string]interface{})
+	if fields := rawStringAnyMap(node.Raw, mihomoProxyFieldsRawKey); len(fields) > 0 {
+		for key, value := range fields {
+			key = strings.TrimSpace(key)
+			if key == "" || value == nil {
+				continue
+			}
+			out[key] = cloneAnyValue(value)
+		}
+	}
+
+	if node.Type == model.ProtocolHysteria {
+		addExtraFromRaw(out, node.Raw, "protocol", "protocol")
+		addExtraFromRaw(out, node.Raw, "obfsParam", "obfs-param")
+	}
+	if node.Type == model.ProtocolHysteria || node.Type == model.ProtocolHysteria2 {
+		addExtraFromRaw(out, node.Raw, "ports", "ports")
+		addExtraFromRaw(out, node.Raw, "mport", "mport")
+		addExtraFromRaw(out, node.Raw, "hopInterval", "hop-interval")
+		addExtraFromRaw(out, node.Raw, "up", "up")
+		addExtraFromRaw(out, node.Raw, "down", "down")
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func rawMihomoProxyFieldString(raw map[string]interface{}, keys ...string) string {
+	fields := rawStringAnyMap(raw, mihomoProxyFieldsRawKey)
+	if len(fields) == 0 {
+		return ""
+	}
+	for _, key := range keys {
+		value, ok := fields[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text := strings.TrimSpace(fmt.Sprint(value)); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func addExtraFromRaw(out map[string]interface{}, raw map[string]interface{}, rawKey, yamlKey string) {
+	if len(raw) == 0 {
+		return
+	}
+	if _, exists := out[yamlKey]; exists {
+		return
+	}
+	value, ok := raw[rawKey]
+	if !ok || value == nil {
+		return
+	}
+	out[yamlKey] = cloneAnyValue(value)
+}
+
+func rawStringAnyMap(raw map[string]interface{}, key string) map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[fmt.Sprint(key)] = value
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func cloneAnyValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[key] = cloneAnyValue(value)
+		}
+		return out
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[fmt.Sprint(key)] = cloneAnyValue(value)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, cloneAnyValue(item))
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	default:
+		return value
+	}
+}
+
 func renderConfig(cfg mihomoConfig) []byte {
 	cfg = sanitizeConfigBeforeSerialize(cfg)
 	sections := make([]struct {
@@ -1565,9 +1742,7 @@ func renderConfig(cfg mihomoConfig) []byte {
 	if cfg.UnifiedDelay {
 		addSection("unified-delay", scalarNode(cfg.UnifiedDelay))
 	}
-	if cfg.TCPConcurrent {
-		addSection("tcp-concurrent", scalarNode(cfg.TCPConcurrent))
-	}
+	addSection("tcp-concurrent", scalarNode(cfg.TCPConcurrent))
 	if cfg.FindProcessMode != "" {
 		addSection("find-process-mode", scalarNode(cfg.FindProcessMode))
 	}
@@ -1700,12 +1875,15 @@ func buildDNSNode(dns mihomoDNS) *yaml.Node {
 	if dns.Listen != "" {
 		appendMap(node, "listen", scalarNode(dns.Listen))
 	}
+	if dns.UseHosts != nil {
+		appendMap(node, "use-hosts", scalarNode(*dns.UseHosts))
+	}
 	if dns.UseSystemHosts != nil {
 		appendMap(node, "use-system-hosts", scalarNode(*dns.UseSystemHosts))
 	}
 	appendMap(node, "ipv6", scalarNode(dns.IPv6))
-	if dns.RespectRules {
-		appendMap(node, "respect-rules", scalarNode(dns.RespectRules))
+	if dns.RespectRules != nil {
+		appendMap(node, "respect-rules", scalarNode(*dns.RespectRules))
 	}
 	if dns.EnhancedMode != "" {
 		appendMap(node, "enhanced-mode", scalarNode(dns.EnhancedMode))
@@ -1746,6 +1924,9 @@ func buildDNSNode(dns mihomoDNS) *yaml.Node {
 	if dns.FallbackFilter != nil {
 		filter := flowMappingNode()
 		appendMap(filter, "geoip", scalarNode(dns.FallbackFilter.GeoIP))
+		if dns.FallbackFilter.GeoIPCode != "" {
+			appendMap(filter, "geoip-code", scalarNode(dns.FallbackFilter.GeoIPCode))
+		}
 		if len(dns.FallbackFilter.IPCIDR) > 0 {
 			appendMap(filter, "ipcidr", flowStringSeqNode(dns.FallbackFilter.IPCIDR))
 		}
@@ -1799,7 +1980,7 @@ func buildSnifferNode(sniffer mihomoSniffer) *yaml.Node {
 		return node
 	}
 	sniff := mappingNode()
-	for _, key := range []string{"HTTP", "QUIC", "TLS"} {
+	for _, key := range []string{"HTTP", "TLS"} {
 		rule, ok := sniffer.Sniff[key]
 		if !ok {
 			continue
@@ -2039,7 +2220,29 @@ func buildProxyNode(proxy mihomoProxy) *yaml.Node {
 	if len(proxy.AmneziaWGOption) > 0 {
 		appendMap(node, "amnezia-wg-option", nodeFromAny(proxy.AmneziaWGOption))
 	}
+	appendProxyExtraFields(node, proxy.Extra)
 	return node
+}
+
+func appendProxyExtraFields(node *yaml.Node, extra map[string]interface{}) {
+	if len(extra) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(extra))
+	for key := range extra {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if mappingNodeHasKey(node, key) {
+			continue
+		}
+		appendMap(node, key, nodeFromAny(extra[key]))
+	}
 }
 
 func buildProxyGroupsNode(groups []mihomoProxyGroup) *yaml.Node {
@@ -2137,6 +2340,18 @@ func appendMap(node *yaml.Node, key string, value *yaml.Node) {
 	node.Content = append(node.Content, scalarStringNode(key), value)
 }
 
+func mappingNodeHasKey(node *yaml.Node, key string) bool {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return false
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
 func scalarStringNode(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Value: value}
 }
@@ -2154,6 +2369,13 @@ func scalarNode(value interface{}) *yaml.Node {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(typed)}
 	case int64:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.FormatInt(typed, 10)}
+	case float64:
+		if typed == float64(int64(typed)) {
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.FormatInt(int64(typed), 10)}
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: strconv.FormatFloat(typed, 'f', -1, 64)}
+	case float32:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: strconv.FormatFloat(float64(typed), 'f', -1, 32)}
 	default:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fmt.Sprint(value)}
 	}
@@ -2181,7 +2403,7 @@ func nodeFromAny(value interface{}) *yaml.Node {
 		return typed
 	case nil:
 		return nil
-	case string, bool, int, int64:
+	case string, bool, int, int64, float64, float32:
 		return scalarNode(typed)
 	case []string:
 		return flowStringSeqNode(typed)
@@ -2218,12 +2440,15 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 	if dns.Listen != "" {
 		w.scalar(indent, "listen", dns.Listen)
 	}
+	if dns.UseHosts != nil {
+		w.scalar(indent, "use-hosts", *dns.UseHosts)
+	}
 	if dns.UseSystemHosts != nil {
 		w.scalar(indent, "use-system-hosts", *dns.UseSystemHosts)
 	}
 	w.scalar(indent, "ipv6", dns.IPv6)
-	if dns.RespectRules {
-		w.scalar(indent, "respect-rules", dns.RespectRules)
+	if dns.RespectRules != nil {
+		w.scalar(indent, "respect-rules", *dns.RespectRules)
 	}
 	if dns.EnhancedMode != "" {
 		w.scalar(indent, "enhanced-mode", dns.EnhancedMode)
@@ -2287,6 +2512,9 @@ func renderDNS(w *yamlWriter, indent int, dns mihomoDNS) {
 	if dns.FallbackFilter != nil {
 		w.line(indent, "fallback-filter:")
 		w.scalar(indent+4, "geoip", dns.FallbackFilter.GeoIP)
+		if dns.FallbackFilter.GeoIPCode != "" {
+			w.scalar(indent+4, "geoip-code", dns.FallbackFilter.GeoIPCode)
+		}
 		if len(dns.FallbackFilter.IPCIDR) > 0 {
 			w.line(indent+4, "ipcidr:")
 			for _, item := range dns.FallbackFilter.IPCIDR {
@@ -2336,7 +2564,7 @@ func renderSniffer(w *yamlWriter, indent int, sniffer mihomoSniffer) {
 	}
 
 	w.line(indent, "sniff:")
-	for _, key := range []string{"TLS", "HTTP", "QUIC"} {
+	for _, key := range []string{"TLS", "HTTP"} {
 		rule, ok := sniffer.Sniff[key]
 		if !ok {
 			continue

@@ -34,10 +34,11 @@ func parseHysteria2(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	setRaw(&node, "obfs", firstQuery(q, "obfs"))
 	setRaw(&node, "obfsPassword", firstQuery(q, "obfs-password", "obfsPassword"))
 	setRaw(&node, "ports", firstQuery(q, "ports"))
+	setRaw(&node, "mport", firstQuery(q, "mport"))
 	setRaw(&node, "hopInterval", firstQuery(q, "hop-interval"))
 	setRaw(&node, "up", firstQuery(q, "up"))
 	setRaw(&node, "down", firstQuery(q, "down"))
-	if raw := unknownQueryParams(q, "sni", "insecure", "skip-cert-verify", "alpn", "obfs", "obfs-password", "obfsPassword", "ports", "hop-interval", "up", "down"); raw != nil {
+	if raw := unknownQueryParams(q, "sni", "insecure", "skip-cert-verify", "alpn", "obfs", "obfs-password", "obfsPassword", "ports", "mport", "hop-interval", "up", "down"); raw != nil {
 		for key, value := range raw {
 			setRaw(&node, key, value)
 		}

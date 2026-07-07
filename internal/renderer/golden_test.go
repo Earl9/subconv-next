@@ -33,11 +33,6 @@ func TestRenderGoldenFullFormatTopLevelOrder(t *testing.T) {
 		"dns:",
 		"profile:",
 		"sniffer:",
-		"geodata-mode:",
-		"geo-auto-update:",
-		"geodata-loader:",
-		"geo-update-interval:",
-		"geox-url:",
 		"proxies:",
 		"proxy-groups:",
 		"rule-providers:",
@@ -119,6 +114,117 @@ func TestRenderVLESSXUDPPacketEncoding(t *testing.T) {
 	}
 }
 
+func TestRenderIgnoresGeodataOptions(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.GeodataMode = true
+	opts.GeoAutoUpdate = true
+	opts.GeodataLoader = "standard"
+	opts.GeoUpdateInterval = 24
+	opts.GeoxURL = &model.GeoxURLConfig{
+		GeoIP:   "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+		GeoSite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+		MMDB:    "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+		ASN:     "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
+	}
+
+	got := mustRender(t, nodes, opts)
+	text := string(got)
+	for _, needle := range []string{
+		"geodata-mode:",
+		"geo-auto-update:",
+		"geodata-loader:",
+		"geo-update-interval:",
+		"geox-url:",
+	} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("rendered output must not contain %q:\n%s", needle, text)
+		}
+	}
+}
+
+func TestRenderForcesProfileAndSnifferDefaults(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.Profile = &model.ProfileConfig{
+		StoreSelected: true,
+		StoreFakeIP:   false,
+	}
+	opts.Sniffer = &model.SnifferConfig{
+		Enable:      true,
+		ParsePureIP: true,
+	}
+
+	got := mustRender(t, nodes, opts)
+	text := string(got)
+	for _, needle := range []string{
+		"store-fake-ip: false",
+		"parse-pure-ip: false",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("rendered output missing forced value %q:\n%s", needle, text)
+		}
+	}
+	for _, needle := range []string{
+		"store-fake-ip: true",
+		"parse-pure-ip: true",
+	} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("rendered output must not contain stale value %q:\n%s", needle, text)
+		}
+	}
+}
+
+func TestRenderPreservesMihomoProxyFields(t *testing.T) {
+	nodes := mustParseContent(t, []byte(`
+proxies:
+  - name: "hysteria yaml"
+    type: hysteria
+    server: hysteria.example.com
+    port: 443
+    auth-str: hy-secret
+    protocol: udp
+    obfs: salamander
+    obfs-param: obfs-secret
+    up: 100
+    down: 100
+    sni: hysteria.example.com
+    skip-cert-verify: true
+    custom-hy-flag: keep-v1
+  - name: "hy2 yaml"
+    type: hysteria2
+    server: hkt03ddns.poke-mon.xyz
+    port: 20000
+    ports: 20000-50000
+    mport: 20000-50000
+    udp: true
+    password: hy2-secret
+    sni: www.bing.com
+    skip-cert-verify: false
+    custom-hy2-flag: keep-me
+`))
+	got := mustRender(t, nodes, standardRenderOptions())
+	text := string(got)
+	for _, needle := range []string{
+		"type: hysteria",
+		"auth-str: hy-secret",
+		"protocol: udp",
+		"obfs: salamander",
+		"obfs-param: obfs-secret",
+		"up: 100",
+		"down: 100",
+		"custom-hy-flag: keep-v1",
+		"ports: 20000-50000",
+		"mport: 20000-50000",
+		"skip-cert-verify: false",
+		"custom-hy2-flag: keep-me",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("rendered output missing preserved field %q:\n%s", needle, text)
+		}
+	}
+}
+
 func TestRenderMieru(t *testing.T) {
 	nodes := mustParseContent(t, []byte("mieru://user:secret@example.com?port-range=2090-2099&transport=udp&udp=1&multiplexing=MULTIPLEXING_HIGH&handshake-mode=HANDSHAKE_STANDARD#mieru-node"))
 	got := mustRender(t, nodes, standardRenderOptions())
@@ -136,6 +242,32 @@ func TestRenderMieru(t *testing.T) {
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("mieru output missing %q:\n%s", needle, text)
+		}
+	}
+}
+
+func TestRenderHTTPAndSOCKS5(t *testing.T) {
+	nodes := mustParseContent(t, []byte(strings.Join([]string{
+		"https://user:secret@example.com:8443?sni=proxy.example.com&skip-cert-verify=1#https-node",
+		"socks5://sock:s3cr3t@socks.example.net:1080?udp=0#socks-node",
+	}, "\n")))
+	got := mustRender(t, nodes, standardRenderOptions())
+	text := string(got)
+	for _, needle := range []string{
+		"type: http",
+		"server: example.com",
+		"port: 8443",
+		"username: user",
+		"password: secret",
+		"tls: true",
+		"sni: proxy.example.com",
+		"skip-cert-verify: true",
+		"type: socks5",
+		"server: socks.example.net",
+		"udp: false",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("http/socks output missing %q:\n%s", needle, text)
 		}
 	}
 }
@@ -298,25 +430,73 @@ func TestRenderCompactDNS(t *testing.T) {
 	text := string(got)
 	for _, needle := range []string{
 		"default-nameserver: [",
+		"respect-rules: false",
 		"nameserver: [",
-		"proxy-server-nameserver: [",
-		"direct-nameserver: [",
-		"direct-nameserver-follow-policy: true",
-		"nameserver-policy:",
-		"https://1.1.1.1/dns-query#RULES",
+		"223.5.5.5",
+		"fallback: [",
+		"https://dns.alidns.com/dns-query",
 		"fake-ip-filter: [",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("compact dns output missing %q:\n%s", needle, text)
 		}
 	}
+}
+
+func TestRenderCustomDNS(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.CustomDNS = true
+	opts.DNS = &model.DNSConfig{
+		Enable:         true,
+		Listen:         "0.0.0.0:1053",
+		UseHosts:       false,
+		UseSystemHosts: true,
+		RespectRules:   true,
+		EnhancedMode:   "redir-host",
+		FakeIPRange:    "198.18.0.1/16",
+		DefaultNameserver: []string{
+			"1.1.1.1",
+		},
+		Nameserver: []string{
+			"https://dns.google/dns-query",
+		},
+		ProxyNameserver: []string{
+			"223.5.5.5",
+		},
+		DirectNameserver: []string{
+			"https://doh.pub/dns-query",
+		},
+		DirectFollowPolicy: true,
+		Fallback: []string{
+			"https://dns.cloudflare.com/dns-query",
+		},
+		FakeIPFilter: []string{
+			"*.lan",
+		},
+		NameserverPolicy: map[string][]string{
+			"+.example.com": {
+				"https://dns.example/dns-query",
+			},
+		},
+	}
+
+	got := string(mustRender(t, nodes, opts))
 	for _, needle := range []string{
-		"fallback:",
-		"fallback-filter:",
-		"tls://",
+		"listen: 0.0.0.0:1053",
+		"use-hosts: false",
+		"use-system-hosts: true",
+		"respect-rules: true",
+		"enhanced-mode: redir-host",
+		"https://dns.google/dns-query",
+		"proxy-server-nameserver:",
+		"direct-nameserver-follow-policy: true",
+		"https://dns.cloudflare.com/dns-query",
+		"dns.example",
+		"fake-ip-filter:",
 	} {
-		if strings.Contains(text, needle) {
-			t.Fatalf("compact dns output should not include %q by default:\n%s", needle, text)
+		if !strings.Contains(got, needle) {
+			t.Fatalf("custom dns output missing %q:\n%s", needle, got)
 		}
 	}
 }

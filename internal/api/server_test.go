@@ -130,10 +130,39 @@ func publishedTokenFromURL(t *testing.T, rawURL string) string {
 	t.Helper()
 	path := strings.Trim(publishedPathFromURL(t, rawURL), "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 3 || parts[0] != "s" || parts[2] != "mihomo.yaml" {
-		t.Fatalf("published url path = %q, want /s/{token}/mihomo.yaml", path)
+	if len(parts) != 3 || parts[0] != "s" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		t.Fatalf("published url path = %q, want /s/{token}/{filename}", path)
 	}
-	return parts[1]
+	token, err := url.PathUnescape(parts[1])
+	if err != nil {
+		t.Fatalf("unescape published token: %v", err)
+	}
+	return token
+}
+
+func publishedFilenameFromURL(t *testing.T, rawURL string) string {
+	t.Helper()
+	path := strings.Trim(publishedPathFromURL(t, rawURL), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[0] != "s" || strings.TrimSpace(parts[2]) == "" {
+		t.Fatalf("published url path = %q, want /s/{token}/{filename}", path)
+	}
+	filename, err := url.PathUnescape(parts[2])
+	if err != nil {
+		t.Fatalf("unescape published filename: %v", err)
+	}
+	return filename
+}
+
+func publishedPathWithFilenameFromURL(t *testing.T, rawURL, filename string) string {
+	t.Helper()
+	path := strings.Trim(publishedPathFromURL(t, rawURL), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[0] != "s" || strings.TrimSpace(parts[1]) == "" {
+		t.Fatalf("published url path = %q, want /s/{token}/{filename}", path)
+	}
+	parts[2] = url.PathEscape(filename)
+	return "/" + strings.Join(parts, "/")
 }
 
 func publishedDirCount(t *testing.T, server *Server) int {
@@ -494,6 +523,81 @@ func TestHandleNodes(t *testing.T) {
 	}
 	if response.Summary.Total != 1 || response.Summary.Enabled != 1 {
 		t.Fatalf("response.Summary = %#v, want one enabled node", response.Summary)
+	}
+}
+
+func TestDeleteNodeRemovesItFromNodeList(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{
+			Name:    "manual",
+			Enabled: true,
+			Content: "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#delete-me",
+		},
+	}
+	server, cfg := newTestServer(t, cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	listReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes?all=1", workspaceID), nil)
+	listRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listRec, listReq)
+
+	var listBody nodeListResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listBody.Nodes) != 1 {
+		t.Fatalf("len(listBody.Nodes) = %d, want 1", len(listBody.Nodes))
+	}
+	nodeID := listBody.Nodes[0].ID
+
+	deleteReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/nodes/delete", workspaceID), bytes.NewBufferString(`{"ids":["`+nodeID+`"]}`))
+	deleteReq.Header.Set("Content-Type", "application/json")
+	deleteRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status code = %d, want %d; body=%s", deleteRec.Code, http.StatusOK, deleteRec.Body.String())
+	}
+
+	listRec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(listRec, listReq)
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode list response after delete: %v", err)
+	}
+	if len(listBody.Nodes) != 0 || listBody.Summary.Total != 0 {
+		t.Fatalf("list after delete = len %d summary %#v, want empty", len(listBody.Nodes), listBody.Summary)
+	}
+
+	deletedReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/nodes/deleted", workspaceID), nil)
+	deletedRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deletedRec, deletedReq)
+	if deletedRec.Code != http.StatusOK {
+		t.Fatalf("deleted status code = %d, want %d; body=%s", deletedRec.Code, http.StatusOK, deletedRec.Body.String())
+	}
+	var deletedBody deletedNodeListResponse
+	if err := json.Unmarshal(deletedRec.Body.Bytes(), &deletedBody); err != nil {
+		t.Fatalf("decode deleted response: %v", err)
+	}
+	if len(deletedBody.Nodes) != 1 || deletedBody.Nodes[0].ID != nodeID || deletedBody.Summary.Total != 1 {
+		t.Fatalf("deleted nodes = %#v summary %#v, want deleted node %q", deletedBody.Nodes, deletedBody.Summary, nodeID)
+	}
+
+	enableReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/nodes/enable", workspaceID), bytes.NewBufferString(`{"ids":["`+nodeID+`"]}`))
+	enableReq.Header.Set("Content-Type", "application/json")
+	enableRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(enableRec, enableReq)
+	if enableRec.Code != http.StatusOK {
+		t.Fatalf("enable status code = %d, want %d; body=%s", enableRec.Code, http.StatusOK, enableRec.Body.String())
+	}
+
+	listRec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(listRec, listReq)
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode list response after enable: %v", err)
+	}
+	if len(listBody.Nodes) != 1 || listBody.Nodes[0].ID != nodeID {
+		t.Fatalf("list after enable = %#v, want restored node %q", listBody.Nodes, nodeID)
 	}
 }
 
@@ -1310,12 +1414,14 @@ func TestMaskSensitiveTextMasksKeyValueSecrets(t *testing.T) {
 func TestMaskSensitiveTextMasksPublishedURLAndNodeSecrets(t *testing.T) {
 	value := strings.Join([]string{
 		"subscription http://127.0.0.1:9876/s/SDCWuCZAorYdAi-87nrSgNu9oGMqILT2/mihomo.yaml",
+		"custom http://127.0.0.1:9876/s/abcd1234efgh5678/office-profile.yaml?view=1",
 		"upstream https://example.com/sub?password=p1&uuid=00000000-0000-0000-0000-000000000000&private-key=client-key",
 		"node ss://secret@example.com:443#demo",
 	}, " ")
 	masked := maskSensitiveText(value)
 	for _, secret := range []string{
 		"SDCWuCZAorYdAi-87nrSgNu9oGMqILT2",
+		"abcd1234efgh5678",
 		"p1",
 		"00000000-0000-0000-0000-000000000000",
 		"client-key",
@@ -1325,7 +1431,7 @@ func TestMaskSensitiveTextMasksPublishedURLAndNodeSecrets(t *testing.T) {
 			t.Fatalf("maskSensitiveText() leaked %q in %q", secret, masked)
 		}
 	}
-	if !strings.Contains(masked, "/s/<redacted>/mihomo.yaml") || !strings.Contains(masked, "ss://***@") {
+	if !strings.Contains(masked, "/s/<redacted>/<file>") || !strings.Contains(masked, "ss://***@") {
 		t.Fatalf("maskSensitiveText() = %q, want redacted published URL and node URI", masked)
 	}
 }
@@ -2012,7 +2118,7 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 	if got := subRec.Header().Get("Content-Type"); got != "text/yaml; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want text/yaml", got)
 	}
-	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename=mihomo.yaml` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
 	}
 	viewReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL)+"?view=1", nil)
@@ -2021,7 +2127,7 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 	if viewRec.Code != http.StatusOK {
 		t.Fatalf("view subscription status code = %d; body=%s", viewRec.Code, viewRec.Body.String())
 	}
-	if got := viewRec.Header().Get("Content-Disposition"); got != `inline; filename="mihomo.yaml"` {
+	if got := viewRec.Header().Get("Content-Disposition"); got != `inline; filename=mihomo.yaml` {
 		t.Fatalf("view Content-Disposition = %q, want inline filename", got)
 	}
 	if got := subRec.Header().Get("Profile-Update-Interval"); got != "24" {
@@ -2073,7 +2179,7 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 	if got := headRec.Header().Get("Profile-Update-Interval"); got != "24" {
 		t.Fatalf("HEAD Profile-Update-Interval = %q, want 24", got)
 	}
-	if got := headRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+	if got := headRec.Header().Get("Content-Disposition"); got != `attachment; filename=mihomo.yaml` {
 		t.Fatalf("HEAD Content-Disposition = %q, want attachment filename", got)
 	}
 	if headRec.Body.Len() != 0 {
@@ -2089,6 +2195,87 @@ func TestPublishedSubscriptionReturnsUserinfoHeaders(t *testing.T) {
 	}
 	if strings.Contains(logText, publishedTokenFromURL(t, refreshBody.SubscriptionURL)) {
 		t.Fatalf("logs leaked full token: %q", logText)
+	}
+}
+
+func TestPublishedSubscriptionUsesConfiguredOutputFilename(t *testing.T) {
+	dir := t.TempDir()
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(dir, "state.json")
+	cfg.Render.OutputFilename = "../SubConvNext"
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#custom-filename"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	workspaceID := createWorkspaceForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", workspaceID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+	refreshBody := decodeRefreshResponse(t, refreshRec)
+	if got := publishedFilenameFromURL(t, refreshBody.SubscriptionURL); got != "SubConvNext.yaml" {
+		t.Fatalf("published filename = %q, want sanitized custom filename", got)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", workspaceID), nil)
+	statusRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("published status code = %d; body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody publishedStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatalf("decode published status: %v", err)
+	}
+	if statusBody.SubscriptionURL != refreshBody.SubscriptionURL {
+		t.Fatalf("published status URL = %q, want %q", statusBody.SubscriptionURL, refreshBody.SubscriptionURL)
+	}
+
+	subReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	subRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(subRec, subReq)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("subscription status code = %d; body=%s", subRec.Code, subRec.Body.String())
+	}
+	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename=SubConvNext.yaml` {
+		t.Fatalf("Content-Disposition = %q, want custom attachment filename", got)
+	}
+
+	viewReq := httptest.NewRequest(http.MethodGet, publishedPathFromURL(t, refreshBody.SubscriptionURL)+"?view=1", nil)
+	viewRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(viewRec, viewReq)
+	if viewRec.Code != http.StatusOK {
+		t.Fatalf("view status code = %d; body=%s", viewRec.Code, viewRec.Body.String())
+	}
+	if got := viewRec.Header().Get("Content-Disposition"); got != `inline; filename=SubConvNext.yaml` {
+		t.Fatalf("view Content-Disposition = %q, want custom inline filename", got)
+	}
+
+	legacyReq := httptest.NewRequest(http.MethodGet, publishedPathWithFilenameFromURL(t, refreshBody.SubscriptionURL, "mihomo.yaml"), nil)
+	legacyRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(legacyRec, legacyReq)
+	if legacyRec.Code != http.StatusOK {
+		t.Fatalf("legacy subscription status code = %d; body=%s", legacyRec.Code, legacyRec.Body.String())
+	}
+	if got := legacyRec.Header().Get("Content-Disposition"); got != `attachment; filename=SubConvNext.yaml` {
+		t.Fatalf("legacy Content-Disposition = %q, want custom attachment filename", got)
+	}
+
+	restarted := NewServer("0.1.0-test", cfg)
+	headReq := httptest.NewRequest(http.MethodHead, publishedPathFromURL(t, refreshBody.SubscriptionURL), nil)
+	headRec := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(headRec, headReq)
+	if headRec.Code != http.StatusOK {
+		t.Fatalf("HEAD status code = %d; body=%s", headRec.Code, headRec.Body.String())
+	}
+	if got := headRec.Header().Get("Content-Disposition"); got != `attachment; filename=SubConvNext.yaml` {
+		t.Fatalf("HEAD Content-Disposition = %q, want custom attachment filename after restart", got)
+	}
+	if headRec.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", headRec.Body.Len())
 	}
 }
 
@@ -2121,7 +2308,7 @@ func TestPublishedSubscriptionOmitsUserinfoHeaderWhenUnavailable(t *testing.T) {
 	if got := subRec.Header().Get("Profile-Update-Interval"); got != "24" {
 		t.Fatalf("Profile-Update-Interval = %q, want 24", got)
 	}
-	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename="mihomo.yaml"` {
+	if got := subRec.Header().Get("Content-Disposition"); got != `attachment; filename=mihomo.yaml` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
 	}
 }
@@ -2883,7 +3070,7 @@ func TestNoTokenInLogs(t *testing.T) {
 	if strings.Contains(content, token) {
 		t.Fatalf("log leaked token: %s", content)
 	}
-	if !strings.Contains(content, "/s/<redacted>/mihomo.yaml") {
+	if !strings.Contains(content, "/s/<redacted>/<file>") {
 		t.Fatalf("log content = %q, want redacted published path", content)
 	}
 }

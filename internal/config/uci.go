@@ -250,6 +250,9 @@ func applySubscriptionSection(dst *model.SubscriptionConfig, section uciSection)
 	if err := setBool(section, "insecure_skip_verify", &dst.InsecureSkipVerify); err != nil {
 		return fmt.Errorf("subscription.insecure_skip_verify: %w", err)
 	}
+	if err := setBool(section, "allow_lan", &dst.AllowLAN); err != nil {
+		return fmt.Errorf("subscription.allow_lan: %w", err)
+	}
 	return nil
 }
 

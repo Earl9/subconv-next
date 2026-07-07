@@ -70,19 +70,41 @@ func normalizeConfig(cfg model.Config) model.Config {
 	if strings.TrimSpace(cfg.Render.TemplateRuleMode) == "" {
 		cfg.Render.TemplateRuleMode = "rules"
 	}
-	if strings.TrimSpace(cfg.Render.GeodataLoader) == "" {
-		cfg.Render.GeodataLoader = "standard"
+	cfg.Render.MixedPort = model.DefaultMixedPort
+	cfg.Render.AllowLAN = true
+	cfg.Render.Mode = model.DefaultMode
+	cfg.Render.LogLevel = model.DefaultLogLevel
+	cfg.Render.IPv6 = false
+	cfg.Render.DNSEnabled = true
+	cfg.Render.EnhancedMode = model.DefaultEnhancedMode
+	cfg.Render.UnifiedDelay = true
+	cfg.Render.TCPConcurrent = false
+	cfg.Render.FindProcessMode = "strict"
+	cfg.Render.GlobalClientFingerprint = "chrome"
+	cfg.Render.GeodataMode = false
+	cfg.Render.GeoAutoUpdate = false
+	cfg.Render.GeodataLoader = ""
+	cfg.Render.GeoUpdateInterval = 0
+	cfg.Render.GeoxURL = nil
+	if cfg.Render.Profile == nil {
+		cfg.Render.Profile = model.DefaultRenderConfig().Profile
 	}
-	if cfg.Render.GeoUpdateInterval == 0 {
-		cfg.Render.GeoUpdateInterval = 24
+	if cfg.Render.Profile != nil {
+		cfg.Render.Profile.StoreSelected = true
+		cfg.Render.Profile.StoreFakeIP = false
 	}
-	if cfg.Render.GeoxURL == nil {
-		defaults := model.DefaultRenderConfig()
-		cfg.Render.GeoxURL = defaults.GeoxURL
+	if cfg.Render.Sniffer == nil {
+		cfg.Render.Sniffer = model.DefaultRenderConfig().Sniffer
 	}
-	if cfg.Render.DNS != nil && isLegacyComplexDefaultDNS(*cfg.Render.DNS) {
+	if cfg.Render.Sniffer != nil {
+		cfg.Render.Sniffer.Enable = true
+		cfg.Render.Sniffer.ParsePureIP = false
+		cfg.Render.Sniffer.QUIC = nil
+	}
+	if !cfg.Render.CustomDNS && cfg.Render.DNS != nil && isLegacyComplexDefaultDNS(*cfg.Render.DNS) {
 		cfg.Render.DNS = model.DefaultDNSConfig()
 	}
+	cfg.Render.DNS = model.NormalizeDNSConfig(cfg.Render.DNS, cfg.Render.CustomDNS)
 	if cfg.Render.RuleProviders == nil {
 		cfg.Render.RuleProviders = []model.RuleProviderConfig{}
 	}

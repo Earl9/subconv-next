@@ -130,13 +130,6 @@ cat >"$PKGROOT/CONTROL/postinst" <<'EOF_POSTINST'
 
 if [ -x /etc/init.d/subconv-next ]; then
 	/etc/init.d/subconv-next enable || true
-
-	enabled="$(uci -q get subconv-next.main.enabled)"
-	[ -z "$enabled" ] && enabled="1"
-
-	if [ "$enabled" = "1" ]; then
-		/etc/init.d/subconv-next start || true
-	fi
 fi
 
 rm -f /tmp/luci-indexcache

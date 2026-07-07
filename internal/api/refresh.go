@@ -20,6 +20,40 @@ type refreshOutcome struct {
 	At     time.Time
 }
 
+type refreshFailedError struct {
+	message string
+	cause   error
+}
+
+func (err refreshFailedError) Error() string {
+	return err.message
+}
+
+func (err refreshFailedError) Unwrap() error {
+	return err.cause
+}
+
+func refreshErrorMessage(err error, result pipeline.RenderResult) string {
+	if err == nil {
+		return ""
+	}
+	if !errors.Is(err, pipeline.ErrNoNodes) {
+		return err.Error()
+	}
+
+	for _, parseErr := range result.Errors {
+		message := strings.TrimSpace(parseErr.Message)
+		if message == "" {
+			continue
+		}
+		if strings.TrimSpace(parseErr.Kind) != "" {
+			return "no nodes available for rendering: [" + parseErr.Kind + "] " + message
+		}
+		return "no nodes available for rendering: " + message
+	}
+	return "no nodes available for rendering"
+}
+
 func (s *Server) startRefresh(reason string) (*refreshOutcome, error) {
 	return s.startRefreshForConfig(s.snapshotConfig(), "", reason)
 }
@@ -87,17 +121,14 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 	})
 	now := time.Now().UTC()
 	if err != nil {
-		message := err.Error()
-		if errors.Is(err, pipeline.ErrNoNodes) {
-			message = "no nodes available for rendering"
-		}
+		message := refreshErrorMessage(err, result)
 		s.setRefreshFailure(message, now)
 		s.appendLog(reason + " failed: " + message)
 		s.appendWorkspaceLog(workspaceHash, reason+" failed: "+message)
 		if s.refreshAfterRun != nil {
 			s.refreshAfterRun()
 		}
-		return nil, err
+		return nil, refreshFailedError{message: message, cause: err}
 	}
 	s.setRefreshStage("writing")
 	if err := pipeline.SaveNodeState(cfg, result.State); err != nil {

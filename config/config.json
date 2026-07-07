@@ -52,16 +52,6 @@
       "dedupe_suffix_style": "#n"
     },
     "dedupe_scope": "global",
-    "geodata_mode": true,
-    "geo_auto_update": true,
-    "geodata_loader": "standard",
-    "geo_update_interval": 24,
-    "geox_url": {
-      "geoip": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-      "geosite": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-      "mmdb": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
-      "asn": "https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb"
-    },
     "output_filename": "mihomo.yaml",
     "source_mode": "rules",
     "template_rule_mode": "rules",
@@ -93,54 +83,39 @@
     ],
     "custom_rules": [],
     "unified_delay": true,
-    "tcp_concurrent": true,
+    "tcp_concurrent": false,
     "find_process_mode": "strict",
     "global_client_fingerprint": "chrome",
     "dns": {
       "enable": true,
       "listen": "127.0.0.1:5335",
+      "use_hosts": true,
       "use_system_hosts": false,
+      "respect_rules": false,
       "enhanced_mode": "fake-ip",
-      "fake_ip_range": "198.18.0.0/16",
+      "fake_ip_range": "198.18.0.1/16",
       "default_nameserver": [
-        "119.29.29.29",
-        "223.5.5.5"
+        "223.5.5.5",
+        "119.29.29.29"
       ],
       "nameserver": [
-        "https://1.1.1.1/dns-query#RULES",
-        "https://8.8.8.8/dns-query#RULES"
+        "223.5.5.5",
+        "119.29.29.29"
       ],
-      "proxy_server_nameserver": [
-        "119.29.29.29",
-        "223.5.5.5"
-      ],
-      "direct_nameserver": [
-        "https://doh.pub/dns-query",
+      "fallback": [
         "https://dns.alidns.com/dns-query"
       ],
-      "direct_nameserver_follow_policy": true,
-      "nameserver_policy": {
-        "geosite:cn,private,apple": [
-          "https://doh.pub/dns-query",
-          "https://dns.alidns.com/dns-query"
-        ],
-        "*.linux.do": [
-          "https://xxx.ddd.oaifree.com/query-dns"
-        ],
-        "linux.do": [
-          "https://xxx.ddd.oaifree.com/query-dns"
-        ]
-      },
       "fake_ip_filter": [
         "*.lan",
         "*.local",
-        "*.arpa",
-        "time.*.com",
-        "ntp.*.com",
-        "+.market.xiaomi.com",
-        "localhost.ptlogin2.qq.com",
+        "localhost",
+        "*.msftconnecttest.com",
         "*.msftncsi.com",
-        "www.msftconnecttest.com"
+        "*.nintendo.net",
+        "*.playstation.net",
+        "*.xboxlive.com",
+        "stun.*",
+        "time.*"
       ]
     },
     "profile": {
@@ -149,7 +124,7 @@
     },
     "sniffer": {
       "enable": true,
-      "parse_pure_ip": true,
+      "parse_pure_ip": false,
       "tls": {
         "ports": [
           "443",
@@ -162,12 +137,6 @@
           "8080-8880"
         ],
         "override_destination": true
-      },
-      "quic": {
-        "ports": [
-          "443",
-          "8443"
-        ]
       }
     },
     "additional_rules": [],
