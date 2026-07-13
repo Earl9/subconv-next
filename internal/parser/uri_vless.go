@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"fmt"
 	"strings"
 
 	"subconv-next/internal/model"
@@ -87,10 +86,6 @@ func parseVLESS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	return node, nil
 }
 
-func parseVisionFlow(flow string) string {
-	return strings.TrimSpace(flow)
-}
-
 func normalizeVLESSPacketEncoding(value string) string {
 	value = strings.TrimSpace(value)
 	switch strings.ToLower(value) {
@@ -101,8 +96,4 @@ func normalizeVLESSPacketEncoding(value string) string {
 	default:
 		return value
 	}
-}
-
-func invalidVLESSError(message string) error {
-	return fmt.Errorf("vless: %s", message)
 }

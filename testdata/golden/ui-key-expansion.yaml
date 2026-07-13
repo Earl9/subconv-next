@@ -158,5 +158,5 @@ rules:
   - "RULE-SET,paypal,💳 支付平台"
   - "RULE-SET,stripe,💳 支付平台"
   - "RULE-SET,wise,💳 支付平台"
-  - RULE-SET,binance,₿ 加密货币
+  - "RULE-SET,binance,₿ 加密货币"
   - "MATCH,🐟 漏网之鱼"

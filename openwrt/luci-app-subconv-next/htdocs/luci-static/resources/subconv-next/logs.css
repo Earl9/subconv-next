@@ -1,0 +1,145 @@
+.subconv-next-app .scn-logs-section {
+	padding: 12px 0;
+}
+
+.subconv-next-app .scn-logs-toolbar {
+	display: flex;
+	align-items: flex-end;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.subconv-next-app .scn-logs-select {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 130px;
+	font-weight: 600;
+}
+
+.subconv-next-app .scn-logs-select select {
+	min-height: 36px;
+}
+
+.subconv-next-app .scn-logs-auto {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 36px;
+}
+
+.subconv-next-app .scn-logs-auto-state {
+	min-width: 24px;
+	color: var(--scn-muted);
+	font-size: 0.86rem;
+}
+
+.subconv-next-app .scn-logs-switch {
+	position: relative;
+	display: inline-block;
+	width: 44px;
+	height: 24px;
+	flex: 0 0 44px;
+}
+
+.subconv-next-app .scn-logs-switch input {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+}
+
+.subconv-next-app .scn-logs-switch-track {
+	position: absolute;
+	inset: 0;
+	cursor: pointer;
+	border: 1px solid #9da7b1;
+	border-radius: 12px;
+	background: #c7cdd3;
+}
+
+.subconv-next-app .scn-logs-switch-track::before {
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(20, 30, 40, 0.25);
+	content: '';
+	transition: transform 120ms ease;
+}
+
+.subconv-next-app .scn-logs-switch input:checked + .scn-logs-switch-track {
+	border-color: var(--scn-running);
+	background: var(--scn-running);
+}
+
+.subconv-next-app .scn-logs-switch input:checked + .scn-logs-switch-track::before {
+	transform: translateX(20px);
+}
+
+.subconv-next-app .scn-logs-switch input:focus-visible + .scn-logs-switch-track {
+	outline: 2px solid #3b82b6;
+	outline-offset: 2px;
+}
+
+.subconv-next-app .scn-logs-buttons {
+	display: flex;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.subconv-next-app .scn-logs-buttons .btn {
+	min-width: 88px;
+	min-height: 36px;
+	margin: 0;
+}
+
+.subconv-next-app .scn-log-output {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 180px;
+	max-height: 52vh;
+	margin: 0;
+	padding: 14px;
+	overflow: auto;
+	border: 1px solid #343b42;
+	border-radius: 4px;
+	background: #171b1f;
+	color: #e6ebef;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: 0.86rem;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.subconv-next-app .scn-log-meta {
+	margin-top: 8px;
+	color: var(--scn-muted);
+	font-size: 0.84rem;
+}
+
+@media (max-width: 639px) {
+	.subconv-next-app .scn-logs-toolbar,
+	.subconv-next-app .scn-logs-buttons {
+		align-items: stretch;
+		flex-direction: column;
+		width: 100%;
+	}
+
+	.subconv-next-app .scn-logs-select,
+	.subconv-next-app .scn-logs-select select,
+	.subconv-next-app .scn-logs-buttons .btn {
+		width: 100%;
+	}
+
+	.subconv-next-app .scn-logs-buttons {
+		margin-left: 0;
+	}
+
+	.subconv-next-app .scn-log-output { min-height: 160px; max-height: 46vh; }
+}

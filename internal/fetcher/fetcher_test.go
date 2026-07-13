@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,82 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one cache warning", warnings)
+	}
+}
+
+func TestFetchUsesFreshCacheBeforeNetwork(t *testing.T) {
+	callCount := 0
+	f := New(Options{
+		CacheDir:     t.TempDir(),
+		MaxBodyBytes: 1024,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+		RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+			callCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("cached body")),
+			}, nil
+		},
+	})
+	source := Source{
+		Name:     "rules",
+		URL:      "https://example.com/rules.txt",
+		Enabled:  true,
+		CacheTTL: time.Hour,
+	}
+
+	first, _, err := f.Fetch(context.Background(), source)
+	if err != nil {
+		t.Fatalf("first Fetch() error = %v", err)
+	}
+	second, warnings, err := f.Fetch(context.Background(), source)
+	if err != nil {
+		t.Fatalf("second Fetch() error = %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("network calls = %d, want 1", callCount)
+	}
+	if first.FromCache || !second.FromCache || string(second.Content) != "cached body" {
+		t.Fatalf("cache results = first:%+v second:%+v", first, second)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "fresh cached content") {
+		t.Fatalf("warnings = %#v, want fresh cache diagnostic", warnings)
+	}
+}
+
+func TestFetchRejectsCacheBodyMetadataMismatch(t *testing.T) {
+	callCount := 0
+	cacheDir := t.TempDir()
+	f := New(Options{
+		CacheDir:     cacheDir,
+		MaxBodyBytes: 1024,
+		Resolver:     staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+		RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+			callCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("network body")),
+			}, nil
+		},
+	})
+	source := Source{Name: "rules", URL: "https://example.com/rules.txt", Enabled: true, CacheTTL: time.Hour}
+	if _, _, err := f.Fetch(context.Background(), source); err != nil {
+		t.Fatalf("first Fetch() error = %v", err)
+	}
+	bodyPath, _ := cachePaths(cacheDir, source.URL)
+	if err := os.WriteFile(bodyPath, []byte("tampered body with a different size"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := f.Fetch(context.Background(), source)
+	if err != nil {
+		t.Fatalf("second Fetch() error = %v", err)
+	}
+	if callCount != 2 || second.FromCache || string(second.Content) != "network body" {
+		t.Fatalf("cache mismatch was reused: calls=%d result=%+v", callCount, second)
 	}
 }
 

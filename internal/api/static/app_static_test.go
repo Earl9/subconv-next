@@ -190,6 +190,68 @@ func TestCustomDNSHooksExist(t *testing.T) {
 	}
 }
 
+func TestCustomRulePayloadRepairHooksExist(t *testing.T) {
+	app := readAppJS(t)
+	required := []string{
+		"function splitConcatenatedCustomRulePayloadLine",
+		"CUSTOM_RULE_PAYLOAD_PREFIXES",
+		"CUSTOM_RULE_PAYLOAD_NO_SPLIT_PREFIXES",
+		"处粘连已拆分",
+		"行无效或注释",
+		"条重复",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing custom-rule payload repair hook %q", needle)
+		}
+	}
+}
+
+func TestCustomRuleEditorInitialVisibility(t *testing.T) {
+	app := readAppJS(t)
+	index, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("ReadFile(index.html) error = %v", err)
+	}
+
+	if !strings.Contains(app, "resetCustomRuleForm();\n  switchWorkspace(\"config\")") {
+		t.Fatalf("app.js must reset the custom-rule editor during initial state setup")
+	}
+	if !strings.Contains(app, "if (!isBuiltin) {\n    syncCustomRuleFormVisibility();") {
+		t.Fatalf("app.js must synchronize custom-rule fields when entering the custom tab")
+	}
+
+	indexText := string(index)
+	for _, id := range []string{
+		"custom-rule-target-group-wrap",
+		"custom-rule-url-wrap",
+		"custom-rule-path-wrap",
+		"custom-rule-interval-wrap",
+	} {
+		needle := "class=\"field hidden\" id=\"" + id + "\""
+		if !strings.Contains(indexText, needle) {
+			t.Fatalf("index.html field %q must be hidden before JavaScript initialization", id)
+		}
+	}
+}
+
+func TestCustomRuleTargetModeDoesNotPersistHiddenGroup(t *testing.T) {
+	app := readAppJS(t)
+	required := []string{
+		"getValue(\"custom-rule-target-mode\") !== \"existing_group\"",
+		"setValue(\"custom-rule-target-group\", \"\")",
+		"const targetGroup = targetMode === \"existing_group\"",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing custom-rule target cleanup hook %q", needle)
+		}
+	}
+	if strings.Contains(app, "targetMode = \"new_group\"") {
+		t.Fatalf("app.js must not rewrite existing-group selection to new_group")
+	}
+}
+
 func TestRestoreFromPublishedDedupesByPublishID(t *testing.T) {
 	app := readAppJS(t)
 
@@ -241,6 +303,22 @@ func TestSourceModeIsMutuallyExclusiveInGeneratedConfig(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {
 			t.Fatalf("app.js missing source-mode guard %q", needle)
+		}
+	}
+}
+
+func TestRuleModeDefaultsToBalanced(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		`rule_mode: "balanced"`,
+		"enabled_rules: RULE_PRESETS.balanced",
+		"state.ruleMode = DEFAULT_RENDER.rule_mode",
+		"RULE_PRESETS[state.ruleMode] || RULE_PRESETS.custom",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing balanced rule-mode default %q", needle)
 		}
 	}
 }
@@ -324,6 +402,22 @@ func TestNodeEditorDeletedRestoreHooksExist(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {
 			t.Fatalf("app.js missing deleted-node restore hook %q", needle)
+		}
+	}
+}
+
+func TestLocalDraftPrunesDeletedNodesFromRemovedSubscriptions(t *testing.T) {
+	app := readAppJS(t)
+
+	required := []string{
+		"deleted_node_sources:",
+		"function pruneLocalDraftDeletedNodes",
+		"!sources.some((sourceID) => activeSources.has(sourceID))",
+		"delete sanitized.deleted_node_sources[nodeID]",
+	}
+	for _, needle := range required {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing deleted-node source cleanup marker %q", needle)
 		}
 	}
 }

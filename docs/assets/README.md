@@ -1,9 +1,10 @@
 # README Screenshots
 
-Place release screenshots here using these filenames:
+README screenshots use these filenames:
 
 - `screenshot-main.png`
-- `screenshot-nodes.png`
+- `screenshot-mobile.png`
 - `screenshot-luci.png`
+- `screenshot-luci-mobile.png`
 
-Keep each image under 800 KB when possible. Do not add README image references until the files exist, to avoid broken links.
+Capture screenshots from a fresh browser context so no subscription URL, token, or local draft data is exposed. Keep each image under 800 KB when possible.

@@ -111,13 +111,7 @@ func ValidateFinalConfig(yamlBytes []byte, finalNodes FinalNodeSet, auditReport 
 			current := group
 			mainSelect = &current
 		}
-		if isRegionProxyGroupName(group.Name) {
-			return fmt.Errorf("region proxy-group %q must not be generated", group.Name)
-		}
-		if isKnownRegionAutoProxyGroupName(group.Name) {
-			return fmt.Errorf("region auto proxy-group %q must not be generated", group.Name)
-		}
-		if strings.TrimSpace(group.Name) == "⚡ 自动选择" {
+		if strings.TrimSpace(group.Name) == "⚡ 自动选择" || isKnownRegionAutoProxyGroupName(group.Name) {
 			for _, proxyName := range group.Proxies {
 				proxyName = strings.TrimSpace(proxyName)
 				if proxyName == "" {
@@ -141,8 +135,18 @@ func ValidateFinalConfig(yamlBytes []byte, finalNodes FinalNodeSet, auditReport 
 			if proxyName == "" {
 				continue
 			}
+			if isRegionProxyGroupName(groupName) {
+				if proxyName == "🚀 节点选择" || proxyName == "⚡ 自动选择" || isRegionProxyGroupName(proxyName) {
+					return fmt.Errorf("region proxy-group %q must not reference policy group %q", group.Name, proxyName)
+				}
+				if isAutoProxyGroupType(groupType) {
+					if _, ok := realNames[proxyName]; !ok {
+						return fmt.Errorf("region auto proxy-group %q must only reference real node %q", group.Name, proxyName)
+					}
+				}
+			}
 			switch proxyName {
-			case "DIRECT", "REJECT":
+			case "DIRECT", "REJECT", "REJECT-DROP", "PASS":
 				continue
 			}
 			if reason, leaked := excludedNames[proxyName]; leaked {
@@ -175,7 +179,7 @@ func ValidateFinalConfig(yamlBytes []byte, finalNodes FinalNodeSet, auditReport 
 
 	for targetGroup := range collectRuleTargets(out.Rules) {
 		switch targetGroup {
-		case "", "DIRECT", "REJECT":
+		case "", "DIRECT", "REJECT", "REJECT-DROP", "PASS":
 			continue
 		}
 		if _, ok := groupNames[targetGroup]; !ok {
@@ -259,6 +263,15 @@ func containsProxyRef(proxies []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func isAutoProxyGroupType(groupType string) bool {
+	switch strings.ToLower(strings.TrimSpace(groupType)) {
+	case "url-test", "fallback", "load-balance":
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldRequireRealNodeInPolicyGroup(groupName string, opts model.RenderOptions) bool {

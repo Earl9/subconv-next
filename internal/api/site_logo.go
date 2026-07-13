@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,6 +35,12 @@ type iconCandidate struct {
 }
 
 var linkTagPattern = regexp.MustCompile(`(?is)<link\b[^>]*>`)
+
+const maxSiteLogoCacheEntries = 256
+
+type siteLogoResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
 
 func (s *Server) handleSiteLogo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -65,7 +73,7 @@ func (s *Server) resolveSiteLogo(rawURL string) (siteLogoResponse, error) {
 		return siteLogoResponse{}, fmt.Errorf("missing host")
 	}
 
-	cacheKey := parsed.Scheme + "://" + domain
+	cacheKey := strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 	if cached, ok := s.lookupSiteLogoCache(cacheKey); ok {
 		return cached, nil
 	}
@@ -109,9 +117,23 @@ func (s *Server) lookupSiteLogoCache(key string) (siteLogoResponse, bool) {
 
 func (s *Server) storeSiteLogoCache(key string, payload siteLogoResponse) {
 	s.siteLogoMu.Lock()
+	now := time.Now()
+	if len(s.siteLogoCache) >= maxSiteLogoCacheEntries {
+		for cacheKey, entry := range s.siteLogoCache {
+			if !entry.ExpiresAt.IsZero() && now.After(entry.ExpiresAt) {
+				delete(s.siteLogoCache, cacheKey)
+			}
+		}
+	}
+	if len(s.siteLogoCache) >= maxSiteLogoCacheEntries {
+		for cacheKey := range s.siteLogoCache {
+			delete(s.siteLogoCache, cacheKey)
+			break
+		}
+	}
 	s.siteLogoCache[key] = siteLogoCacheEntry{
 		Payload:   payload,
-		ExpiresAt: time.Now().Add(12 * time.Hour),
+		ExpiresAt: now.Add(12 * time.Hour),
 	}
 	s.siteLogoMu.Unlock()
 }
@@ -129,18 +151,25 @@ func parseSiteLogoURL(raw string) (*url.URL, error) {
 	if strings.TrimSpace(parsed.Hostname()) == "" {
 		return nil, fmt.Errorf("missing host")
 	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("url credentials are not allowed")
+	}
 	return parsed, nil
 }
 
 func siteLogoHostAllowed(host string) bool {
+	return siteLogoHostAllowedWithResolver(context.Background(), net.DefaultResolver, host)
+}
+
+func siteLogoHostAllowedWithResolver(ctx context.Context, resolver siteLogoResolver, host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "" || host == "localhost" || strings.HasSuffix(host, ".local") {
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".local") || resolver == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
 		return false
 	}
 	for _, ipAddr := range ips {
@@ -153,7 +182,8 @@ func siteLogoHostAllowed(host string) bool {
 }
 
 func fetchBestSiteLogo(home *url.URL) (string, string, bool) {
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := newSiteLogoHTTPClient(net.DefaultResolver)
+	defer client.CloseIdleConnections()
 	html, contentType, ok := fetchSiteDocument(client, home)
 	if ok && strings.Contains(strings.ToLower(contentType), "html") {
 		for _, candidate := range discoverSiteLogoCandidates(home, html) {
@@ -168,6 +198,95 @@ func fetchBestSiteLogo(home *url.URL) (string, string, bool) {
 		return logo, "favicon", true
 	}
 	return "", "", false
+}
+
+func newSiteLogoHTTPClient(resolver siteLogoResolver) *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	transport := &http.Transport{
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		target, err := resolveSiteLogoDialTarget(ctx, resolver, address)
+		if err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, network, target)
+	}
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		target, err := resolveSiteLogoDialTarget(ctx, resolver, address)
+		if err != nil {
+			return nil, err
+		}
+		conn, err := dialer.DialContext(ctx, network, target)
+		if err != nil {
+			return nil, err
+		}
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   8 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many redirects")
+			}
+			if err := validateSiteLogoTarget(req.Context(), resolver, req.URL); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+}
+
+func validateSiteLogoTarget(ctx context.Context, resolver siteLogoResolver, target *url.URL) error {
+	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
+		return fmt.Errorf("unsafe site logo target")
+	}
+	if !siteLogoHostAllowedWithResolver(ctx, resolver, target.Hostname()) {
+		return fmt.Errorf("site logo target is not publicly routable")
+	}
+	return nil
+}
+
+func resolveSiteLogoDialTarget(ctx context.Context, resolver siteLogoResolver, address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", err
+	}
+	if !siteLogoHostAllowedWithResolver(ctx, resolver, host) {
+		return "", fmt.Errorf("site logo target is not publicly routable")
+	}
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return "", fmt.Errorf("resolve site logo host: %w", err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("resolve site logo host: no addresses")
+	}
+	for _, item := range ips {
+		if !siteLogoIPBlocked(item.IP) {
+			return net.JoinHostPort(item.IP.String(), port), nil
+		}
+	}
+	return "", fmt.Errorf("site logo target is not publicly routable")
+}
+
+func siteLogoIPBlocked(ip net.IP) bool {
+	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() ||
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
 func fetchSiteDocument(client *http.Client, target *url.URL) ([]byte, string, bool) {
@@ -186,7 +305,7 @@ func fetchSiteDocument(client *http.Client, target *url.URL) ([]byte, string, bo
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	body, err := readSiteLogoBody(resp.Body, 512*1024)
 	if err != nil {
 		return nil, "", false
 	}
@@ -240,7 +359,7 @@ func extractHTMLAttribute(tag, attr string) string {
 }
 
 func fetchLogoAsDataURL(client *http.Client, target *url.URL) (string, bool) {
-	if target == nil || !siteLogoHostAllowed(target.Hostname()) {
+	if target == nil {
 		return "", false
 	}
 	req, err := http.NewRequest(http.MethodGet, target.String(), nil)
@@ -258,7 +377,7 @@ func fetchLogoAsDataURL(client *http.Client, target *url.URL) (string, bool) {
 		return "", false
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	body, err := readSiteLogoBody(resp.Body, 256*1024)
 	if err != nil || len(body) == 0 {
 		return "", false
 	}
@@ -267,5 +386,20 @@ func fetchLogoAsDataURL(client *http.Client, target *url.URL) (string, bool) {
 	if contentType == "" {
 		contentType = http.DetectContentType(body)
 	}
-	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(body), true
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return "", false
+	}
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(body), true
+}
+
+func readSiteLogoBody(reader io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("site logo response exceeds size limit")
+	}
+	return body, nil
 }

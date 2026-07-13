@@ -7,12 +7,13 @@ import (
 )
 
 type NodeState struct {
-	NodeOverrides    map[string]NodeOverride     `json:"node_overrides,omitempty"`
-	DisabledNodes    []string                    `json:"disabled_nodes,omitempty"`
-	DeletedNodes     []string                    `json:"deleted_nodes,omitempty"`
-	CustomNodes      []NodeIR                    `json:"custom_nodes,omitempty"`
-	SubscriptionMeta map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
-	LastAudit        AuditReport                 `json:"last_audit,omitempty"`
+	NodeOverrides      map[string]NodeOverride     `json:"node_overrides,omitempty"`
+	DisabledNodes      []string                    `json:"disabled_nodes,omitempty"`
+	DeletedNodes       []string                    `json:"deleted_nodes,omitempty"`
+	DeletedNodeSources map[string][]string         `json:"deleted_node_sources,omitempty"`
+	CustomNodes        []NodeIR                    `json:"custom_nodes,omitempty"`
+	SubscriptionMeta   map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
+	LastAudit          AuditReport                 `json:"last_audit,omitempty"`
 }
 
 type NodeOverride struct {
@@ -37,11 +38,12 @@ type NodeOverrideFields struct {
 
 func DefaultNodeState() NodeState {
 	return NodeState{
-		NodeOverrides:    map[string]NodeOverride{},
-		DisabledNodes:    []string{},
-		DeletedNodes:     []string{},
-		CustomNodes:      []NodeIR{},
-		SubscriptionMeta: map[string]SubscriptionMeta{},
+		NodeOverrides:      map[string]NodeOverride{},
+		DisabledNodes:      []string{},
+		DeletedNodes:       []string{},
+		DeletedNodeSources: map[string][]string{},
+		CustomNodes:        []NodeIR{},
+		SubscriptionMeta:   map[string]SubscriptionMeta{},
 	}
 }
 
@@ -55,6 +57,9 @@ func NormalizeNodeState(state NodeState) NodeState {
 	if state.DeletedNodes == nil {
 		state.DeletedNodes = []string{}
 	}
+	if state.DeletedNodeSources == nil {
+		state.DeletedNodeSources = map[string][]string{}
+	}
 	if state.CustomNodes == nil {
 		state.CustomNodes = []NodeIR{}
 	}
@@ -64,6 +69,23 @@ func NormalizeNodeState(state NodeState) NodeState {
 
 	state.DisabledNodes = cleanStringSlice(state.DisabledNodes)
 	state.DeletedNodes = cleanStringSlice(state.DeletedNodes)
+	deletedNodeSet := DisabledNodeSet(state.DeletedNodes)
+	normalizedDeletedSources := make(map[string][]string, len(state.DeletedNodeSources))
+	for id, sourceIDs := range state.DeletedNodeSources {
+		cleanID := sanitizeText(id)
+		if cleanID == "" {
+			continue
+		}
+		if _, deleted := deletedNodeSet[cleanID]; !deleted {
+			continue
+		}
+		cleanSources := cleanStringSlice(sourceIDs)
+		if len(cleanSources) == 0 {
+			continue
+		}
+		normalizedDeletedSources[cleanID] = mergeUniqueStrings(normalizedDeletedSources[cleanID], cleanSources)
+	}
+	state.DeletedNodeSources = normalizedDeletedSources
 
 	for id, override := range state.NodeOverrides {
 		cleanID := sanitizeText(id)

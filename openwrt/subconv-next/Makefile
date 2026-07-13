@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=subconv-next
-PKG_VERSION:=1.0.0
-PKG_RELEASE:=3
+PKG_VERSION:=1.0.7
+PKG_RELEASE:=33
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=SubConv Next contributors
 
@@ -35,15 +35,11 @@ define Package/subconv-next
   CATEGORY:=Network
   TITLE:=SubConv Next Mihomo subscription generator
   URL:=https://github.com/subconv-next/subconv-next
-  DEPENDS:=+ca-bundle +luci-base +rpcd +uci
+  DEPENDS:=+ca-bundle +uci
 endef
 
 define Package/subconv-next/description
   Self-hosted subscription converter and Mihomo YAML generator.
-endef
-
-define Package/subconv-next/conffiles
-/etc/config/subconv-next
 endef
 
 define Build/Prepare
@@ -85,27 +81,58 @@ define Package/subconv-next/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/subconv-next.config $(1)/etc/config/subconv-next
 	$(INSTALL_DIR) $(1)/etc/subconv-next/data
-	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json $(1)/usr/share/luci/menu.d/luci-app-subconv-next.json
-	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
-	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json $(1)/usr/share/rpcd/acl.d/luci-app-subconv-next.json
-	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/subconv-next
-	$(INSTALL_DATA) $(SUBCONV_NEXT_SRC)/openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js $(1)/www/luci-static/resources/view/subconv-next/index.js
+	$(INSTALL_DIR) $(1)/usr/share/subconv-next
+	$(INSTALL_DATA) ./files/subconv-next.config $(1)/usr/share/subconv-next/subconv-next.config
+endef
+
+define Package/subconv-next/preinst
+#!/bin/sh
+root="$${IPKG_INSTROOT:-}"
+config_path="$$root/etc/config/subconv-next"
+backup_path="$$root/tmp/subconv-next.config.keep"
+persistent_backup="$$root/etc/config/subconv-next-opkg.backup"
+if [ -f "$$config_path" ]; then
+	mkdir -p "$$root/tmp"
+	cp "$$config_path" "$$backup_path" || true
+	cp "$$config_path" "$$persistent_backup" || true
+	chmod 0600 "$$persistent_backup" 2>/dev/null || true
+fi
+exit 0
 endef
 
 define Package/subconv-next/postinst
 #!/bin/sh
+root="$${IPKG_INSTROOT:-}"
+config_path="$$root/etc/config/subconv-next"
+default_config="$$root/usr/share/subconv-next/subconv-next.config"
+backup_path="$$root/tmp/subconv-next.config.keep"
+persistent_backup="$$root/etc/config/subconv-next-opkg.backup"
+if [ -f "$$backup_path" ]; then
+	mkdir -p "$$root/etc/config"
+	cp "$$backup_path" "$$config_path"
+	chmod 0644 "$$config_path"
+	cp "$$config_path" "$$persistent_backup" || true
+	chmod 0600 "$$persistent_backup" 2>/dev/null || true
+elif [ -f "$$persistent_backup" ]; then
+	mkdir -p "$$root/etc/config"
+	cp "$$persistent_backup" "$$config_path"
+	chmod 0644 "$$config_path"
+elif [ ! -e "$$config_path" ] && [ -f "$$default_config" ]; then
+	mkdir -p "$$root/etc/config"
+	cp "$$default_config" "$$config_path"
+	chmod 0644 "$$config_path"
+fi
+[ ! -f "$$persistent_backup" ] || chmod 0600 "$$persistent_backup" 2>/dev/null || true
+rm -f "$$backup_path"
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 if [ -x /etc/init.d/subconv-next ]; then
-	/etc/init.d/subconv-next enable || true
+	/etc/init.d/subconv-next enable >/dev/null 2>&1 || true
 	enabled="$$(uci -q get subconv-next.main.enabled)"
 	[ -z "$$enabled" ] && enabled="1"
 	if [ "$$enabled" = "1" ]; then
-		/etc/init.d/subconv-next start || true
+		/etc/init.d/subconv-next start >/dev/null 2>&1 || true
 	fi
 fi
-rm -f /tmp/luci-indexcache
-rm -rf /tmp/luci-modulecache
 exit 0
 endef
 
@@ -113,8 +140,12 @@ define Package/subconv-next/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 if [ -x /etc/init.d/subconv-next ]; then
-	/etc/init.d/subconv-next stop || true
-	/etc/init.d/subconv-next disable || true
+	if [ -f /etc/config/subconv-next ]; then
+		cp /etc/config/subconv-next /etc/config/subconv-next-opkg.backup >/dev/null 2>&1 || true
+		chmod 0600 /etc/config/subconv-next-opkg.backup >/dev/null 2>&1 || true
+	fi
+	/etc/init.d/subconv-next stop >/dev/null 2>&1 || true
+	/etc/init.d/subconv-next disable >/dev/null 2>&1 || true
 fi
 exit 0
 endef

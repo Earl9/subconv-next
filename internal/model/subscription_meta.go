@@ -127,24 +127,24 @@ func AggregateSubscriptionMeta(metas map[string]SubscriptionMeta, opts Subscript
 	case "none":
 		return AggregatedSubscriptionMeta{}
 	case "first":
-		for _, meta := range ordered {
-			meta = NormalizeSubscriptionMeta(meta)
-			aggregate := AggregatedSubscriptionMeta{
-				Upload:    meta.Upload,
-				Download:  meta.Download,
-				Total:     meta.Total,
-				Used:      meta.Used,
-				Remaining: meta.Remaining,
-				UsedRatio: meta.UsedRatio,
-				Expire:    meta.Expire,
-			}
-			if meta.Expire > 0 {
-				aggregate.ExpireSourceID = meta.SourceID
-				aggregate.ExpireSourceName = meta.SourceName
-			}
-			return aggregate
+		if len(ordered) == 0 {
+			return AggregatedSubscriptionMeta{}
 		}
-		return AggregatedSubscriptionMeta{}
+		meta := NormalizeSubscriptionMeta(ordered[0])
+		aggregate := AggregatedSubscriptionMeta{
+			Upload:    meta.Upload,
+			Download:  meta.Download,
+			Total:     meta.Total,
+			Used:      meta.Used,
+			Remaining: meta.Remaining,
+			UsedRatio: meta.UsedRatio,
+			Expire:    meta.Expire,
+		}
+		if meta.Expire > 0 {
+			aggregate.ExpireSourceID = meta.SourceID
+			aggregate.ExpireSourceName = meta.SourceName
+		}
+		return aggregate
 	default:
 		var aggregate AggregatedSubscriptionMeta
 		for _, meta := range ordered {

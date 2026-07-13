@@ -188,7 +188,7 @@
               </div>
 
               <div id="rules-mode-panel" class="source-panel" role="tabpanel" aria-labelledby="source-mode-rules">
-                <div class="rule-mode-subtabs hidden">
+                <div class="rule-mode-subtabs">
                   <button id="rule-subtab-builtin" class="tab-button active" type="button">内置规则</button>
                   <button id="rule-subtab-custom" class="tab-button" type="button">自定义规则</button>
                 </div>
@@ -215,6 +215,18 @@
                 </div>
 
                 <div id="rule-custom-panel" class="rule-subpanel hidden">
+                  <section class="custom-rule-editor-panel direct-rule-panel">
+                    <div class="sub-section-title">
+                      <span class="section-badge" data-icon-name="code"></span>
+                      <span>直写规则</span>
+                    </div>
+                    <div class="field full-span">
+                      <label for="additional-rules-input">Mihomo 规则</label>
+                      <textarea id="additional-rules-input" rows="12" class="code-textarea" placeholder="DOMAIN-KEYWORD,tracker,PROXY&#10;DOMAIN-KEYWORD,torrent,PROXY&#10;IP-CIDR,10.0.0.6/32,PROXY&#10;&#10;DOMAIN-SUFFIX,39.la,DIRECT&#10;DOMAIN-SUFFIX,pp.ua,DIRECT&#10;RULE-SET,Adobe,REJECT"></textarea>
+                      <p class="field-help">这些规则会插入到最终 MATCH 之前。支持直接粘贴带 “- ” 前缀和 “#” 注释的列表。</p>
+                    </div>
+                  </section>
+
                   <div class="custom-rule-layout inline-custom-rule-layout">
                     <section class="custom-rule-list-panel">
                       <div class="sub-section-title">
@@ -224,20 +236,21 @@
                       <div id="custom-rule-list" class="custom-rule-list"></div>
                     </section>
 
-                    <section class="custom-rule-editor-panel">
+                    <section class="custom-rule-editor-panel custom-rule-form-panel">
                       <div class="sub-section-title">
                         <span class="section-badge" data-icon-name="rule"></span>
                         <span>规则编辑器</span>
                       </div>
                       <input id="custom-rule-edit-index" type="hidden" />
+                      <div id="custom-rule-editor-summary" class="custom-rule-editor-summary"></div>
                       <div class="field">
                         <label for="custom-rule-key">规则 Key</label>
-                        <input id="custom-rule-key" type="text" placeholder="例如 my_rule" />
+                        <input id="custom-rule-key" type="text" placeholder="例如 my_rule" autocomplete="off" spellcheck="false" />
                         <p class="field-help">用于内部识别，建议使用小写英文、数字和下划线。</p>
                       </div>
                       <div class="field">
                         <label for="custom-rule-label">显示名称</label>
-                        <input id="custom-rule-label" type="text" placeholder="例如 我的规则" />
+                        <input id="custom-rule-label" type="text" placeholder="例如 我的规则" autocomplete="off" />
                       </div>
                       <div class="field">
                         <label for="custom-rule-emoji">图标 / Emoji，可选</label>
@@ -252,9 +265,17 @@
                           <option value="reject">REJECT</option>
                         </select>
                       </div>
-                      <div class="field" id="custom-rule-target-group-wrap">
+                      <div class="field hidden" id="custom-rule-target-group-wrap">
                         <label for="custom-rule-target-group">目标组名称</label>
-                        <input id="custom-rule-target-group" type="text" placeholder="例如 节点选择 / 自动选择 / 自定义代理组" />
+                        <input id="custom-rule-target-group" type="text" list="custom-rule-target-group-options" placeholder="例如 节点选择 / 自动选择 / 自定义代理组" autocomplete="off" />
+                        <datalist id="custom-rule-target-group-options">
+                          <option value="🚀 节点选择"></option>
+                          <option value="⚡ 自动选择"></option>
+                          <option value="🐟 漏网之鱼"></option>
+                          <option value="DIRECT"></option>
+                          <option value="REJECT"></option>
+                          <option value="PROXY"></option>
+                        </datalist>
                       </div>
                       <div class="field">
                         <label for="custom-rule-source-type">规则来源类型</label>
@@ -265,7 +286,7 @@
                           <option value="group_only">仅创建代理组，不生成规则</option>
                         </select>
                       </div>
-                      <div class="field">
+                      <div class="field" id="custom-rule-behavior-wrap">
                         <label for="custom-rule-behavior">规则行为</label>
                         <select id="custom-rule-behavior">
                           <option value="domain">domain</option>
@@ -273,7 +294,7 @@
                           <option value="classical">classical</option>
                         </select>
                       </div>
-                      <div class="field">
+                      <div class="field" id="custom-rule-format-wrap">
                         <label for="custom-rule-format">规则格式</label>
                         <select id="custom-rule-format">
                           <option value="text">text</option>
@@ -281,34 +302,38 @@
                           <option value="mrs">mrs</option>
                         </select>
                       </div>
-                      <div class="field" id="custom-rule-url-wrap">
+                      <div class="field hidden" id="custom-rule-url-wrap">
                         <label for="custom-rule-url">远程规则 URL</label>
                         <input id="custom-rule-url" type="text" placeholder="https://example.com/rules/my_rule.mrs" />
                       </div>
-                      <div class="field" id="custom-rule-path-wrap">
+                      <div class="field hidden" id="custom-rule-path-wrap">
                         <label for="custom-rule-path">本地文件路径</label>
                         <input id="custom-rule-path" type="text" placeholder="./ruleset/my_rule.yaml" />
                       </div>
-                      <div class="field" id="custom-rule-interval-wrap">
+                      <div class="field hidden" id="custom-rule-interval-wrap">
                         <label for="custom-rule-interval">更新间隔</label>
                         <input id="custom-rule-interval" type="number" min="1" placeholder="86400" />
                       </div>
-                      <div class="field">
-                        <label for="custom-rule-insert-position">插入位置</label>
-                        <select id="custom-rule-insert-position">
-                          <option value="before_match">before_match</option>
-                          <option value="after_adblock">after_adblock</option>
-                          <option value="before_domestic">before_domestic</option>
-                          <option value="before_non_cn">before_non_cn</option>
+                      <div class="field" id="custom-rule-insert-position-wrap">
+                        <label for="custom-rule-insert-position">匹配顺序</label>
+                        <select id="custom-rule-insert-position" disabled>
+                          <option value="priority">优先匹配（内置规则之前）</option>
                         </select>
                       </div>
                       <label class="checkbox-line"><input id="custom-rule-enabled" type="checkbox" checked /> 启用该规则</label>
-                      <label class="checkbox-line"><input id="custom-rule-no-resolve" type="checkbox" /> no-resolve</label>
+                      <label id="custom-rule-no-resolve-wrap" class="checkbox-line"><input id="custom-rule-no-resolve" type="checkbox" /> no-resolve</label>
                       <div class="field full-span" id="custom-rule-payload-wrap">
-                        <label for="custom-rule-payload">内联规则内容</label>
+                        <div class="field-headline">
+                          <label for="custom-rule-payload">内联规则内容</label>
+                          <div class="custom-rule-payload-tools">
+                            <button id="normalize-custom-rule-payload-btn" class="tiny-button" type="button">整理</button>
+                            <button id="clear-custom-rule-payload-btn" class="tiny-button warn-text" type="button">清空</button>
+                          </div>
+                        </div>
                         <textarea id="custom-rule-payload" rows="10" class="code-textarea" placeholder="+.example.com&#10;example.org&#10;DOMAIN-SUFFIX,example.com"></textarea>
+                        <div id="custom-rule-payload-meta" class="custom-rule-payload-meta"></div>
                       </div>
-                      <div class="field">
+                      <div class="field full-span">
                         <label>预览</label>
                         <pre id="custom-rule-preview" class="custom-rule-preview">未填写</pre>
                       </div>

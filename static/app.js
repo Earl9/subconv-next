@@ -662,11 +662,32 @@ function renderAdditionalRules() {
   const rules = state.config.render?.additional_rules || [];
   input.value = rules.join("\n");
   input.oninput = (event) => {
-    state.config.render.additional_rules = event.target.value
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean);
+    state.config.render.additional_rules = parseRuleLines(event.target.value);
   };
+}
+
+function parseRuleLines(value) {
+  const rules = [];
+  const seen = new Set();
+  String(value || "")
+    .split(/\r?\n/)
+    .forEach((item) => {
+      const rule = normalizeRuleLine(item);
+      if (!rule || seen.has(rule)) return;
+      seen.add(rule);
+      rules.push(rule);
+    });
+  return rules;
+}
+
+function normalizeRuleLine(value) {
+  let line = String(value || "").trim();
+  if (!line || line.startsWith("#")) return "";
+  line = line.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
+  if (!line || line.startsWith("#")) return "";
+  const commentIndex = line.indexOf(" #");
+  if (commentIndex >= 0) line = line.slice(0, commentIndex).trim();
+  return line;
 }
 
 function renderRuleProviders() {

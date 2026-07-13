@@ -204,7 +204,21 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 		}, ErrNoNodes
 	}
 
-	renderOpts := renderer.OptionsFromConfig(cfg)
+	resolvedCfg, customRuleWarnings, err := snapshotRemoteCustomRules(cfg)
+	collected.Warnings = append(collected.Warnings, customRuleWarnings...)
+	if err != nil {
+		return RenderResult{
+			Nodes:            finalNodes,
+			NodeCount:        len(finalNodes),
+			Warnings:         collected.Warnings,
+			Errors:           collected.Errors,
+			State:            state,
+			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+			Audit:            audit,
+		}, err
+	}
+	renderOpts := renderer.OptionsFromConfig(resolvedCfg)
 	if err := ValidateFinalNodeSet(finalSet, audit); err != nil {
 		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_validation_failed", Message: err.Error()})
 		state.LastAudit = audit

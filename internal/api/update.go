@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -93,7 +94,7 @@ func fetchLatestRelease(ctx context.Context) (githubLatestReleaseResponse, error
 	}
 
 	var release githubLatestReleaseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&release); err != nil {
 		return githubLatestReleaseResponse{}, err
 	}
 	if strings.TrimSpace(release.TagName) == "" {

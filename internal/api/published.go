@@ -589,6 +589,7 @@ func (s *Server) clearPublishedAssociations(publishID string) error {
 		}
 		return err
 	}
+	var updateErrors []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -603,9 +604,11 @@ func (s *Server) clearPublishedAssociations(publishID string) error {
 		ref.Meta.PublishID = ""
 		ref.Meta.LegacyPublishedToken = ""
 		ref.Meta.LegacyPublishedAt = time.Time{}
-		_ = s.saveWorkspaceMeta(ref)
+		if err := s.saveWorkspaceMeta(ref); err != nil {
+			updateErrors = append(updateErrors, fmt.Errorf("clear publish association from workspace %s: %w", entry.Name(), err))
+		}
 	}
-	return nil
+	return errors.Join(updateErrors...)
 }
 
 func (s *Server) cleanupStalePublished() error {
@@ -622,22 +625,29 @@ func (s *Server) cleanupStalePublished() error {
 		return err
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	var cleanupErrors []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		published, err := s.loadPublishedByID(entry.Name())
 		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("load published item %s: %w", entry.Name(), err))
 			continue
 		}
 		lastAccess := firstNonZeroTime(published.Meta.LastAccessAt, published.Meta.UpdatedAt, published.Meta.CreatedAt)
 		if lastAccess.IsZero() || lastAccess.After(cutoff) {
 			continue
 		}
-		_ = os.RemoveAll(published.Dir)
-		_ = s.clearPublishedAssociations(published.ID)
+		if err := os.RemoveAll(published.Dir); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove stale published item %s: %w", published.ID, err))
+			continue
+		}
+		if err := s.clearPublishedAssociations(published.ID); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
 	}
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 func randomPublishID() (string, error) {

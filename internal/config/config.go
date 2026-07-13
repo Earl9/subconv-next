@@ -70,6 +70,9 @@ func normalizeConfig(cfg model.Config) model.Config {
 	if strings.TrimSpace(cfg.Render.TemplateRuleMode) == "" {
 		cfg.Render.TemplateRuleMode = "rules"
 	}
+	if strings.TrimSpace(cfg.Render.RuleMode) == "" {
+		cfg.Render.RuleMode = "balanced"
+	}
 	cfg.Render.MixedPort = model.DefaultMixedPort
 	cfg.Render.AllowLAN = true
 	cfg.Render.Mode = model.DefaultMode
@@ -159,6 +162,17 @@ func normalizeConfig(cfg model.Config) model.Config {
 		if strings.TrimSpace(rule.TargetMode) == "" {
 			rule.TargetMode = "new_group"
 		}
+		rule.TargetMode = strings.ToLower(strings.TrimSpace(rule.TargetMode))
+		switch rule.TargetMode {
+		case "new_group":
+			// The UI defines this mode as a group named after the rule. Ignore
+			// stale hidden target-group values left by older editors.
+			rule.TargetGroup = ""
+		case "direct":
+			rule.TargetGroup = "DIRECT"
+		case "reject":
+			rule.TargetGroup = "REJECT"
+		}
 		if strings.TrimSpace(rule.SourceType) == "" {
 			if len(rule.Payload) == 0 && strings.TrimSpace(rule.URL) == "" && strings.TrimSpace(rule.Path) == "" {
 				rule.SourceType = "group_only"
@@ -172,10 +186,18 @@ func normalizeConfig(cfg model.Config) model.Config {
 		if strings.TrimSpace(rule.Format) == "" {
 			rule.Format = "text"
 		}
+		if strings.EqualFold(strings.TrimSpace(rule.SourceType), "inline") {
+			rule.Payload = normalizeCustomRulePayload(rule.Payload)
+		}
 		if rule.Interval <= 0 {
 			rule.Interval = 86400
 		}
-		if strings.TrimSpace(rule.InsertPosition) == "" {
+		rule.InsertPosition = strings.ToLower(strings.TrimSpace(rule.InsertPosition))
+		switch rule.InsertPosition {
+		case "", "priority":
+			// "priority" was briefly emitted by the web editor as a display-only
+			// alias. Keep existing configs loadable and migrate them to the
+			// canonical highest-priority position.
 			rule.InsertPosition = "before_match"
 		}
 		if strings.TrimSpace(rule.TargetGroup) == "" {
@@ -600,6 +622,94 @@ func isAllowedCustomRuleInsertPosition(value string) bool {
 	default:
 		return false
 	}
+}
+
+var customRulePayloadPrefixes = []string{
+	"PROCESS-PATH-REGEX,", "PROCESS-NAME-REGEX,", "DOMAIN-SUFFIX,",
+	"DOMAIN-KEYWORD,", "DOMAIN-WILDCARD,", "DOMAIN-REGEX,", "SRC-IP-CIDR,",
+	"SRC-IP-SUFFIX,", "SRC-IP-ASN,", "PROCESS-NAME,", "PROCESS-PATH,",
+	"IP-CIDR6,", "IP-CIDR,", "IP-SUFFIX,", "IP-ASN,", "SRC-GEOIP,",
+	"DST-PORT,", "SRC-PORT,", "RULE-SET,", "SUB-RULE,", "GEOSITE,",
+	"GEOIP,", "DOMAIN,", "IN-TYPE,", "IN-USER,", "IN-NAME,", "NETWORK,",
+	"UID,", "AND,", "OR,", "NOT,",
+}
+
+var customRulePayloadNoSplitPrefixes = []string{
+	"DOMAIN-REGEX,", "PROCESS-PATH-REGEX,", "PROCESS-NAME-REGEX,",
+	"AND,", "OR,", "NOT,",
+}
+
+func normalizeCustomRulePayload(payload []string) []string {
+	var normalized []string
+	seen := make(map[string]struct{})
+	for _, item := range payload {
+		for _, segment := range splitConcatenatedCustomRulePayloadLine(item) {
+			segment = prepareCustomRulePayloadLine(segment)
+			if segment == "" {
+				continue
+			}
+			if _, exists := seen[segment]; exists {
+				continue
+			}
+			seen[segment] = struct{}{}
+			normalized = append(normalized, segment)
+		}
+	}
+	return normalized
+}
+
+func splitConcatenatedCustomRulePayloadLine(value string) []string {
+	line := prepareCustomRulePayloadLine(value)
+	if line == "" {
+		return nil
+	}
+	upper := strings.ToUpper(line)
+	for _, prefix := range customRulePayloadNoSplitPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return []string{line}
+		}
+	}
+	boundaries := []int{0}
+	for index := 1; index < len(line); index++ {
+		if !isCustomRulePayloadBoundaryByte(line[index-1]) {
+			continue
+		}
+		for _, prefix := range customRulePayloadPrefixes {
+			if strings.HasPrefix(upper[index:], prefix) {
+				boundaries = append(boundaries, index)
+				break
+			}
+		}
+	}
+	boundaries = append(boundaries, len(line))
+	segments := make([]string, 0, len(boundaries)-1)
+	for index := 0; index < len(boundaries)-1; index++ {
+		segment := strings.TrimSpace(line[boundaries[index]:boundaries[index+1]])
+		if segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	return segments
+}
+
+func prepareCustomRulePayloadLine(value string) string {
+	line := strings.TrimSpace(value)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+	line = strings.Trim(line, `"'`)
+	if index := strings.Index(line, " #"); index >= 0 {
+		line = strings.TrimSpace(line[:index])
+	}
+	return line
+}
+
+func isCustomRulePayloadBoundaryByte(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' ||
+		strings.ContainsRune("._/-", rune(value))
 }
 
 func isValidCustomRuleKey(value string) bool {

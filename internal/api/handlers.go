@@ -485,11 +485,37 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
 			return
 		}
+		oldCfg, err := s.loadWorkspaceConfig(ref)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+			return
+		}
+		state, err := pipeline.LoadNodeState(oldCfg)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "STATE_READ_FAILED", err.Error())
+			return
+		}
+		nextState, stateChanged, prunedDeleted := pruneDeletedNodeStateForConfigChange(oldCfg, req, state)
 		if err := config.WriteJSON(ref.ConfigPath, req); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 			return
 		}
+		if stateChanged {
+			if err := pipeline.SaveNodeState(req, nextState); err != nil {
+				rollbackErr := config.WriteJSON(ref.ConfigPath, oldCfg)
+				if rollbackErr != nil {
+					s.appendLog(fmt.Sprintf("workspace config rollback failed after state cleanup error: workspace=%s state_error=%v rollback_error=%v", ref.Hash, err, rollbackErr))
+					writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", "node state cleanup failed and configuration rollback was unsuccessful")
+					return
+				}
+				writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+				return
+			}
+		}
 		s.appendLog("workspace config updated: " + ref.Hash)
+		if prunedDeleted > 0 {
+			s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("subscription removal pruned deleted-node records: %d", prunedDeleted))
+		}
 		writeJSON(w, http.StatusOK, configResponse{
 			OK:     true,
 			Config: RedactConfig(req),
@@ -619,6 +645,7 @@ func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Requ
 	}
 	if req.NodeState != nil {
 		state := restorableDraftNodeState(*req.NodeState)
+		state = pruneRestoredDraftDeletedNodeState(cfg, state)
 		if err := pipeline.SaveNodeState(cfg, state); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 			return
@@ -695,6 +722,7 @@ func (s *Server) handleRestoreWorkspaceFromPublished(w http.ResponseWriter, r *h
 		return
 	}
 	nodeState = restorableDraftNodeState(nodeState)
+	nodeState = pruneRestoredDraftDeletedNodeState(cfg, nodeState)
 	if err := pipeline.SaveNodeState(cfg, nodeState); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 		return

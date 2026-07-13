@@ -155,7 +155,6 @@ func DefaultGroupOptions() GroupOptions {
 }
 
 func NormalizeGroupOptions(opt GroupOptions) GroupOptions {
-	opt.EnableRegionGroups = false
 	switch opt.RuleGroupNodeMode {
 	case "compact", "full":
 	default:
@@ -361,7 +360,7 @@ func DefaultRenderConfig() RenderConfig {
 			TemplateLabel: "不选择，由接口提供方提供",
 			CustomURL:     "",
 		},
-		RuleMode:                "custom",
+		RuleMode:                "balanced",
 		EnabledRules:            []string{},
 		CustomRules:             []CustomRule{},
 		UnifiedDelay:            true,

@@ -473,8 +473,10 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 		handleWorkspaceOrStateError(w, err)
 		return
 	}
+	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	state.DeletedNodes = addIDs(state.DeletedNodes, req.IDs)
 	state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
+	_ = rememberDeletedNodeSources(&state, collected.Nodes)
 
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
@@ -491,13 +493,28 @@ func (s *Server) handleDeletedNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, state, _, err := s.workspaceConfigAndState(r)
+	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
 		handleWorkspaceOrStateError(w, err)
 		return
 	}
 
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
+	state, changed, pruned := pruneDeletedNodeStateForCurrentConfig(
+		cfg,
+		state,
+		collected.Nodes,
+		len(collected.Errors) == 0,
+	)
+	if changed {
+		if err := pipeline.SaveNodeState(cfg, state); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+			return
+		}
+	}
+	if pruned > 0 {
+		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("stale deleted-node records pruned: %d", pruned))
+	}
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
 	deleted := model.DisabledNodeSet(state.DeletedNodes)
 	deletedNodes := make([]model.NodeIR, 0, len(deleted))

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,7 +24,6 @@ type Server struct {
 
 	mu              sync.RWMutex
 	config          model.Config
-	configPath      string
 	status          model.RuntimeStatus
 	logLines        []string
 	workspaceStatus map[string]model.RuntimeStatus
@@ -116,32 +116,6 @@ func (s *Server) snapshotConfig() model.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config
-}
-
-func (s *Server) configFilePath() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.configPath
-}
-
-func (s *Server) SetConfigPath(path string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.configPath = path
-}
-
-func (s *Server) updateConfig(cfg model.Config) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.config = cfg
-	s.status.EnabledSubscriptionCount = enabledSubscriptionCount(cfg.Subscriptions)
-	s.status.UpstreamSourceCount = enabledSubscriptionCount(cfg.Subscriptions)
-	s.status.RefreshInterval = effectiveRefreshInterval(cfg)
-	s.status.OutputPath = cfg.Service.OutputPath
-	s.status.NextRefreshAt = nextRefreshTime(time.Now().UTC(), cfg)
-	s.status.YAMLExists = yamlFileExists(cfg.Service.OutputPath)
-	s.status.YAMLUpdatedAt = yamlFileUpdatedAt(cfg.Service.OutputPath)
 }
 
 func (s *Server) appendLog(message string) {
@@ -336,13 +310,21 @@ func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
 func decodeJSONBody(r *http.Request, dst any) error {
 	defer r.Body.Close()
 
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	const maxJSONBodyBytes = int64(1 << 20)
+	limited := &io.LimitedReader{R: r.Body, N: maxJSONBodyBytes + 1}
+	dec := json.NewDecoder(limited)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
+		if limited.N == 0 {
+			return errors.New("decode request body: body exceeds 1 MiB limit")
+		}
 		return fmt.Errorf("decode request body: %w", err)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return fmt.Errorf("decode request body: trailing content")
+	}
+	if limited.N == 0 {
+		return errors.New("decode request body: body exceeds 1 MiB limit")
 	}
 
 	return nil

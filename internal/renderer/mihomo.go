@@ -233,12 +233,18 @@ type mihomoRuleProvider struct {
 }
 
 type compiledCustomRule struct {
-	Rule           model.CustomRule
-	TargetGroup    string
-	CreateGroup    bool
-	Provider       *mihomoRuleProvider
-	RuleLine       string
-	InsertPosition string
+	Rule        model.CustomRule
+	TargetGroup string
+	CreateGroup bool
+	Provider    *mihomoRuleProvider
+	RuleLine    string
+}
+
+type resolvedRegionProxyGroup struct {
+	Tag      string
+	Name     string
+	AutoName string
+	Proxies  []string
 }
 
 func OptionsFromConfig(cfg model.Config) model.RenderOptions {
@@ -316,6 +322,9 @@ func NormalizeRenderOptions(opts model.RenderOptions) model.RenderOptions {
 	opts.GroupOptions = model.NormalizeGroupOptions(opts.GroupOptions)
 	if strings.TrimSpace(opts.TemplateRuleMode) == "" {
 		opts.TemplateRuleMode = defaults.TemplateRuleMode
+	}
+	if strings.TrimSpace(opts.RuleMode) == "" {
+		opts.RuleMode = defaults.RuleMode
 	}
 	if strings.TrimSpace(opts.ExternalConfig.TemplateKey) == "" {
 		opts.ExternalConfig.TemplateKey = defaults.ExternalConfig.TemplateKey
@@ -435,7 +444,7 @@ func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error
 		return nil, err
 	}
 
-	return renderConfig(cfg), nil
+	return renderConfig(cfg)
 }
 
 func buildDNSConfig(opts model.RenderOptions) *mihomoDNS {
@@ -797,9 +806,21 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 		return nil
 	}
 
+	resolvedCustomRules := resolveCustomRules(customRules, enabledRules, nil, customGroups)
+	regionProxyGroups := resolveRegionProxyGroups(regularNodes)
+	if !shouldGenerateRegionProxyGroups(groupOpt) {
+		regionProxyGroups = nil
+	}
+	regionNames := regionProxyGroupNames(regionProxyGroups)
+	regionReservedNames := regionProxyGroupReservedNames(regionProxyGroups)
+	if len(regionReservedNames) > 0 {
+		resolvedCustomRules = resolveCustomRules(customRules, enabledRules, regionReservedNames, customGroups)
+	}
+
 	mainSelectProxies := []string{"DIRECT", "REJECT"}
 	if len(regularNames) > 0 {
 		mainSelectProxies = append([]string{groupAutoSelect}, mainSelectProxies...)
+		mainSelectProxies = append(mainSelectProxies, regionNames...)
 		mainSelectProxies = append(mainSelectProxies, regularNames...)
 	}
 	if err := addGroup(mihomoProxyGroup{
@@ -819,20 +840,39 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	}); err != nil {
 		return nil, err
 	}
+	for _, region := range regionProxyGroups {
+		if err := addGroup(mihomoProxyGroup{
+			Name:     region.AutoName,
+			Type:     "url-test",
+			Proxies:  region.Proxies,
+			URL:      probeURL,
+			Interval: 300,
+			Lazy:     model.Bool(false),
+		}); err != nil {
+			return nil, err
+		}
+		regionSelectProxies := append([]string{region.AutoName, "DIRECT"}, region.Proxies...)
+		if err := addGroup(mihomoProxyGroup{
+			Name:    region.Name,
+			Type:    "select",
+			Proxies: regionSelectProxies,
+		}); err != nil {
+			return nil, err
+		}
+	}
 
-	resolvedCustomRules := resolveCustomRules(customRules, enabledRules, nil, customGroups)
 	if len(enabledRules) > 0 || len(resolvedCustomRules) > 0 {
 		for _, category := range orderedRuleCategories(enabledRules) {
 			if err := addGroup(mihomoProxyGroup{
 				Name:    category.GroupName,
 				Type:    "select",
-				Proxies: serviceGroupProxiesForCategory(category.Key, groupOpt, regularNames),
+				Proxies: serviceGroupProxiesForCategory(category.Key, groupOpt, regularNames, regionNames),
 			}); err != nil {
 				return nil, err
 			}
 		}
 
-		customGroupProxies := serviceGroupProxiesForCategory("", groupOpt, regularNames)
+		customGroupProxies := serviceGroupProxiesForCategory("", groupOpt, regularNames, regionNames)
 		for _, rule := range resolvedCustomRules {
 			if !rule.CreateGroup {
 				continue
@@ -846,7 +886,7 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	if err := addGroup(mihomoProxyGroup{
 		Name:    groupFinal,
 		Type:    "select",
-		Proxies: serviceGroupProxiesForCategory("", groupOpt, regularNames),
+		Proxies: serviceGroupProxiesForCategory("", groupOpt, regularNames, regionNames),
 	}); err != nil {
 		return nil, err
 	}
@@ -867,6 +907,57 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 	}
 
 	return sanitizeGeneratedProxyGroups(groups, regularNames), nil
+}
+
+func shouldGenerateRegionProxyGroups(groupOpt model.GroupOptions) bool {
+	return groupOpt.EnableRegionGroups
+}
+
+func resolveRegionProxyGroups(nodes []model.NodeIR) []resolvedRegionProxyGroup {
+	byTag := make(map[string][]string, len(regionGroups))
+	for _, node := range nodes {
+		name := strings.TrimSpace(node.Name)
+		if name == "" {
+			continue
+		}
+		tag := model.NodeRegionCode(node)
+		if tag == "" || tag == "OTHER" {
+			continue
+		}
+		byTag[tag] = append(byTag[tag], name)
+	}
+
+	out := make([]resolvedRegionProxyGroup, 0, len(regionGroups))
+	for _, region := range regionGroups {
+		proxies := uniqueOrdered(byTag[region.Tag])
+		if len(proxies) == 0 {
+			continue
+		}
+		out = append(out, resolvedRegionProxyGroup{
+			Tag:      region.Tag,
+			Name:     region.Name,
+			AutoName: regionAutoGroupName(region.Name),
+			Proxies:  proxies,
+		})
+	}
+	return out
+}
+
+func regionProxyGroupNames(groups []resolvedRegionProxyGroup) []string {
+	out := make([]string, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, group.Name)
+	}
+	return out
+}
+
+func regionProxyGroupReservedNames(groups []resolvedRegionProxyGroup) []string {
+	out := make([]string, 0, len(groups)*2)
+	for _, group := range groups {
+		out = append(out, group.Name)
+		out = append(out, group.AutoName)
+	}
+	return out
 }
 
 func filterOutInfoNodes(nodes []model.NodeIR) []model.NodeIR {
@@ -937,7 +1028,7 @@ func sanitizeGeneratedProxyGroups(groups []mihomoProxyGroup, regularNames []stri
 
 	out := make([]mihomoProxyGroup, 0, len(groups))
 	for _, group := range groups {
-		if group.Name == groupAutoSelect {
+		if isAutoProxyGroup(group) {
 			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
 				_, ok := realNameSet[ref]
 				return ok
@@ -946,6 +1037,15 @@ func sanitizeGeneratedProxyGroups(groups []mihomoProxyGroup, regularNames []stri
 		out = append(out, group)
 	}
 	return out
+}
+
+func isAutoProxyGroup(group mihomoProxyGroup) bool {
+	switch strings.ToLower(strings.TrimSpace(group.Type)) {
+	case "url-test", "fallback", "load-balance":
+		return true
+	default:
+		return false
+	}
 }
 
 func filterProxyRefs(proxies []string, allow func(string) bool) []string {
@@ -971,7 +1071,7 @@ func stringSet(values []string) map[string]struct{} {
 	return out
 }
 
-func serviceGroupProxiesForCategory(categoryKey string, groupOpt model.GroupOptions, realNames []string) []string {
+func serviceGroupProxiesForCategory(categoryKey string, groupOpt model.GroupOptions, realNames []string, regionNames []string) []string {
 	switch categoryKey {
 	case "adblock":
 		return []string{"REJECT", "DIRECT", groupNodeSelect}
@@ -987,6 +1087,7 @@ func serviceGroupProxiesForCategory(categoryKey string, groupOpt model.GroupOpti
 			proxies = append(proxies, groupAutoSelect)
 		}
 		proxies = append(proxies, "DIRECT", "REJECT")
+		proxies = append(proxies, regionNames...)
 		if model.NormalizeGroupOptions(groupOpt).RuleGroupNodeMode == "full" {
 			proxies = append(proxies, realNames...)
 		}
@@ -1028,6 +1129,12 @@ func resolveCustomRules(rules []model.CustomRule, enabledRules []string, regionG
 			if targetGroup == "" {
 				targetGroup = groupNodeSelect
 			}
+			targetGroup = normalizeRulePolicyTarget(targetGroup)
+			if targetGroup == groupNodeSelect {
+				createGroup = true
+				targetGroup = uniqueGroupName(customRuleDisplayName(rule), reserved)
+				reserved[targetGroup] = struct{}{}
+			}
 		default:
 			createGroup = true
 			if targetGroup == "" {
@@ -1038,10 +1145,9 @@ func resolveCustomRules(rules []model.CustomRule, enabledRules []string, regionG
 		}
 
 		compiled := compiledCustomRule{
-			Rule:           rule,
-			TargetGroup:    targetGroup,
-			CreateGroup:    createGroup,
-			InsertPosition: firstNonEmptyString(strings.TrimSpace(rule.InsertPosition), "before_match"),
+			Rule:        rule,
+			TargetGroup: targetGroup,
+			CreateGroup: createGroup,
 		}
 
 		if !strings.EqualFold(strings.TrimSpace(rule.SourceType), "group_only") {
@@ -1059,15 +1165,13 @@ func resolveCustomRules(rules []model.CustomRule, enabledRules []string, regionG
 	return out
 }
 
-func customRulesForPosition(rules []compiledCustomRule, position string) []string {
+func customRuleLines(rules []compiledCustomRule) []string {
 	var out []string
 	for _, rule := range rules {
 		if rule.RuleLine == "" {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(rule.InsertPosition), position) {
-			out = append(out, rule.RuleLine)
-		}
+		out = append(out, rule.RuleLine)
 	}
 	return out
 }
@@ -1076,13 +1180,14 @@ func buildCustomRuleProvider(rule model.CustomRule) mihomoRuleProvider {
 	sourceType := strings.ToLower(strings.TrimSpace(rule.SourceType))
 	switch sourceType {
 	case "http":
+		behavior, format := normalizeRemoteRuleProviderShape(rule.Behavior, rule.Format, rule.URL, rule.Path)
 		return mihomoRuleProvider{
 			Type:     "http",
-			Behavior: strings.ToLower(strings.TrimSpace(rule.Behavior)),
+			Behavior: behavior,
 			URL:      strings.TrimSpace(rule.URL),
-			Path:     firstNonEmptyString(strings.TrimSpace(rule.Path), customRuleProviderPath(rule)),
+			Path:     firstNonEmptyString(strings.TrimSpace(rule.Path), customRuleProviderPathForFormat(rule.Key, format)),
 			Interval: rule.Interval,
-			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
+			Format:   format,
 		}
 	case "file":
 		return mihomoRuleProvider{
@@ -1092,24 +1197,150 @@ func buildCustomRuleProvider(rule model.CustomRule) mihomoRuleProvider {
 			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
 		}
 	default:
+		payload := normalizeRuleProviderPayload(rule.Payload)
+		behavior, format := normalizeInlineRuleProviderShape(rule.Behavior, rule.Format, payload)
 		return mihomoRuleProvider{
 			Type:     "inline",
-			Behavior: strings.ToLower(strings.TrimSpace(rule.Behavior)),
-			Format:   strings.ToLower(strings.TrimSpace(rule.Format)),
-			Payload:  append([]string(nil), rule.Payload...),
+			Behavior: behavior,
+			Format:   format,
+			Payload:  payload,
 		}
 	}
 }
 
-func customRuleProviderPath(rule model.CustomRule) string {
-	format := strings.ToLower(strings.TrimSpace(rule.Format))
+func normalizeRemoteRuleProviderShape(behavior string, format string, rawURL string, path string) (string, string) {
+	behavior = strings.ToLower(strings.TrimSpace(behavior))
+	format = strings.ToLower(strings.TrimSpace(format))
+	if behavior == "" {
+		behavior = "domain"
+	}
+	if format == "" {
+		format = inferRuleProviderFormatFromSource(rawURL, path)
+	}
+	if format == "" {
+		format = "text"
+	}
+	if isClassicalYAMLRuleProviderSource(rawURL, path) {
+		behavior = "classical"
+		format = "yaml"
+	}
+	if behavior == "classical" && format == "mrs" {
+		format = "yaml"
+	}
+	return behavior, format
+}
+
+func inferRuleProviderFormatFromSource(rawURL string, path string) string {
+	source := strings.ToLower(strings.TrimSpace(firstNonEmptyString(path, rawURL)))
+	switch {
+	case strings.HasSuffix(source, ".mrs"):
+		return "mrs"
+	case strings.HasSuffix(source, ".yaml"), strings.HasSuffix(source, ".yml"):
+		return "yaml"
+	case strings.HasSuffix(source, ".txt"), strings.HasSuffix(source, ".text"):
+		return "text"
+	default:
+		return ""
+	}
+}
+
+func isClassicalYAMLRuleProviderSource(rawURL string, path string) bool {
+	source := strings.ToLower(strings.TrimSpace(rawURL + " " + path))
+	return strings.Contains(source, "/rule/clash/") || strings.Contains(source, "blackmatrix7/ios_rule_script")
+}
+
+func normalizeInlineRuleProviderShape(behavior string, format string, payload []string) (string, string) {
+	behavior = strings.ToLower(strings.TrimSpace(behavior))
+	format = strings.ToLower(strings.TrimSpace(format))
+	if behavior == "" {
+		behavior = "domain"
+	}
+	if format == "" {
+		format = "text"
+	}
+	if hasClassicalRuleProviderPayload(payload) {
+		behavior = "classical"
+		if format == "mrs" {
+			format = "text"
+		}
+	}
+	return behavior, format
+}
+
+func hasClassicalRuleProviderPayload(payload []string) bool {
+	for _, item := range payload {
+		if isClassicalRuleProviderPayloadLine(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func isClassicalRuleProviderPayloadLine(line string) bool {
+	parts := strings.Split(strings.TrimSpace(line), ",")
+	if len(parts) < 2 {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(parts[0])) {
+	case "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "DOMAIN-REGEX",
+		"GEOSITE", "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "GEOIP", "SRC-GEOIP",
+		"SRC-IP-ASN", "SRC-IP-CIDR", "SRC-IP-SUFFIX", "DST-PORT", "SRC-PORT",
+		"PROCESS-NAME", "PROCESS-PATH", "PROCESS-PATH-REGEX", "PROCESS-NAME-REGEX",
+		"IN-TYPE", "IN-USER", "IN-NAME", "NETWORK", "UID", "SUB-RULE", "RULE-SET", "AND", "OR", "NOT":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRuleProviderPayload(payload []string) []string {
+	var out []string
+	for _, item := range payload {
+		item = normalizeRuleProviderPayloadLine(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return uniqueOrdered(out)
+}
+
+func normalizeRuleProviderPayloadLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+	line = strings.Trim(line, `"'`)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	if idx := strings.Index(line, " #"); idx >= 0 {
+		line = strings.TrimSpace(line[:idx])
+	}
+	parts := strings.Split(line, ",")
+	if len(parts) < 3 {
+		return line
+	}
+	targetIndex := len(parts) - 1
+	if strings.EqualFold(strings.TrimSpace(parts[targetIndex]), "no-resolve") && len(parts) >= 4 {
+		targetIndex--
+	}
+	if isRulePolicyTarget(parts[targetIndex]) {
+		parts = append(parts[:targetIndex], parts[targetIndex+1:]...)
+	}
+	return strings.Join(parts, ",")
+}
+
+func customRuleProviderPathForFormat(key string, format string) string {
+	format = strings.ToLower(strings.TrimSpace(format))
 	switch format {
 	case "mrs":
-		return "./ruleset/" + rule.Key + ".mrs"
+		return "./ruleset/" + key + ".mrs"
 	case "text":
-		return "./ruleset/" + rule.Key + ".txt"
+		return "./ruleset/" + key + ".txt"
 	default:
-		return "./ruleset/" + rule.Key + ".yaml"
+		return "./ruleset/" + key + ".yaml"
 	}
 }
 
@@ -1147,12 +1378,6 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 	resolvedCustomRules := resolveCustomRules(customRules, enabled, nil, customGroups)
 	for _, category := range orderedRuleCategories(enabled) {
 		if category.Key == "domestic" {
-			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_domestic")...)
-		}
-		if category.Key == "non_cn" {
-			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_non_cn")...)
-		}
-		if category.Key == "domestic" {
 			for _, spec := range category.Rules {
 				baseRules = append(baseRules, renderRuleSet(spec))
 			}
@@ -1160,9 +1385,6 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 		}
 		for _, spec := range category.Rules {
 			baseRules = append(baseRules, renderRuleSet(spec))
-		}
-		if category.Key == "adblock" {
-			baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "after_adblock")...)
 		}
 	}
 	if containsString(enabled, "domestic") {
@@ -1172,9 +1394,8 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 		}))
 	}
 
-	baseRules = append(baseRules, customRulesForPosition(resolvedCustomRules, "before_match")...)
 	baseRules = append(baseRules, fmt.Sprintf("MATCH,%s", normalizeFinalPolicyName(finalPolicy)))
-	return mergeRules(baseRules, additionalRules, providerRules(providers))
+	return mergeRules(baseRules, customRuleLines(resolvedCustomRules), additionalRules, providerRules(providers))
 }
 
 func renderRuleSet(spec RuleSpec) string {
@@ -1196,8 +1417,9 @@ func normalizeFinalPolicyName(value string) string {
 	}
 }
 
-func mergeRules(baseRules, additionalRules, providerRules []string) []string {
+func mergeRules(baseRules, customRules, additionalRules, providerRules []string) []string {
 	base := uniqueOrdered(baseRules)
+	custom := normalizeRules(customRules)
 	providerExtras := normalizeRules(providerRules)
 	extras := normalizeRules(additionalRules)
 	matchRule := ""
@@ -1205,9 +1427,10 @@ func mergeRules(baseRules, additionalRules, providerRules []string) []string {
 		matchRule = base[len(base)-1]
 		base = base[:len(base)-1]
 	}
-	merged := append([]string{}, base...)
-	merged = append(merged, providerExtras...)
+	merged := append([]string{}, custom...)
 	merged = append(merged, extras...)
+	merged = append(merged, providerExtras...)
+	merged = append(merged, base...)
 	if matchRule != "" {
 		merged = append(merged, matchRule)
 	}
@@ -1217,13 +1440,60 @@ func mergeRules(baseRules, additionalRules, providerRules []string) []string {
 func normalizeRules(rules []string) []string {
 	var normalized []string
 	for _, rule := range rules {
-		rule = strings.TrimSpace(rule)
+		rule = normalizeRuleLine(rule)
 		if rule == "" {
 			continue
 		}
 		normalized = append(normalized, rule)
 	}
 	return uniqueOrdered(normalized)
+}
+
+func normalizeRuleLine(rule string) string {
+	rule = strings.TrimSpace(rule)
+	if rule == "" || strings.HasPrefix(rule, "#") {
+		return ""
+	}
+	rule = strings.TrimSpace(strings.TrimPrefix(rule, "-"))
+	rule = strings.Trim(rule, `"'`)
+	if rule == "" || strings.HasPrefix(rule, "#") {
+		return ""
+	}
+	if idx := strings.Index(rule, " #"); idx >= 0 {
+		rule = strings.TrimSpace(rule[:idx])
+	}
+	return normalizeRulePolicyAlias(strings.TrimSpace(rule))
+}
+
+func normalizeRulePolicyAlias(rule string) string {
+	parts := strings.Split(rule, ",")
+	if len(parts) < 3 {
+		return rule
+	}
+	targetIndex := len(parts) - 1
+	if strings.EqualFold(strings.TrimSpace(parts[targetIndex]), "no-resolve") && len(parts) >= 4 {
+		targetIndex--
+	}
+	parts[targetIndex] = normalizeRulePolicyTarget(parts[targetIndex])
+	return strings.Join(parts, ",")
+}
+
+func normalizeRulePolicyTarget(target string) string {
+	switch strings.ToUpper(strings.TrimSpace(target)) {
+	case "PROXY":
+		return groupNodeSelect
+	default:
+		return strings.TrimSpace(target)
+	}
+}
+
+func isRulePolicyTarget(target string) bool {
+	switch strings.TrimSpace(target) {
+	case "DIRECT", "REJECT", groupNodeSelect, groupAutoSelect, groupFinal:
+		return true
+	default:
+		return strings.EqualFold(strings.TrimSpace(target), "PROXY")
+	}
 }
 
 func buildRuleProviders(providers []model.RuleProviderConfig, enabledRules []string, customRules []model.CustomRule, customGroups []model.CustomProxyGroupConfig) map[string]mihomoRuleProvider {
@@ -1374,24 +1644,6 @@ func firstNonNilBool(values ...*bool) *bool {
 		}
 	}
 	return nil
-}
-
-func cloneStringSliceMap(values map[string][]string) map[string][]string {
-	if len(values) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	out := make(map[string][]string, len(values))
-	for _, key := range keys {
-		out[key] = cloneStrings(values[key])
-	}
-	return out
 }
 
 func normalizeRenderNodesPreserveNames(nodes []model.NodeIR) []model.NodeIR {
@@ -1717,7 +1969,7 @@ func cloneAnyValue(value interface{}) interface{} {
 	}
 }
 
-func renderConfig(cfg mihomoConfig) []byte {
+func renderConfig(cfg mihomoConfig) ([]byte, error) {
 	cfg = sanitizeConfigBeforeSerialize(cfg)
 	sections := make([]struct {
 		key   string
@@ -1792,12 +2044,15 @@ func renderConfig(cfg mihomoConfig) []byte {
 		enc := yaml.NewEncoder(&buf)
 		enc.SetIndent(2)
 		if err := enc.Encode(doc); err != nil {
-			panic(err)
+			_ = enc.Close()
+			return nil, fmt.Errorf("encode mihomo section %s: %w", section.key, err)
 		}
-		_ = enc.Close()
+		if err := enc.Close(); err != nil {
+			return nil, fmt.Errorf("close mihomo section %s: %w", section.key, err)
+		}
 		out.Write(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	}
-	return []byte(unescapeYAMLUnicodeEscapes(out.String()))
+	return []byte(unescapeYAMLUnicodeEscapes(out.String())), nil
 }
 
 func sanitizeConfigBeforeSerialize(cfg mihomoConfig) mihomoConfig {
@@ -1813,60 +2068,17 @@ func sanitizeConfigBeforeSerialize(cfg mihomoConfig) mihomoConfig {
 }
 
 func sanitizeProxyGroupsBeforeSerialize(groups []mihomoProxyGroup, realProxyNames map[string]struct{}) []mihomoProxyGroup {
-	regionAutoNames := make(map[string]struct{}, len(regionGroups))
-	for _, region := range regionGroups {
-		regionAutoNames[regionAutoGroupName(region.Name)] = struct{}{}
-	}
-
 	out := make([]mihomoProxyGroup, 0, len(groups))
 	for _, group := range groups {
-		switch {
-		case isRegionLikeGroupName(group.Name):
-			continue
-		case isKnownRegionAutoName(group.Name, regionAutoNames):
-			continue
-		case group.Name == groupAutoSelect:
+		if isAutoProxyGroup(group) {
 			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
 				_, ok := realProxyNames[ref]
 				return ok
-			})
-		default:
-			group.Proxies = filterProxyRefs(group.Proxies, func(ref string) bool {
-				if isRegionLikeGroupName(ref) {
-					return false
-				}
-				if _, ok := regionAutoNames[ref]; ok {
-					return false
-				}
-				return true
 			})
 		}
 		out = append(out, group)
 	}
 	return out
-}
-
-func isKnownRegionAutoName(name string, regionAutoNames map[string]struct{}) bool {
-	_, ok := regionAutoNames[strings.TrimSpace(name)]
-	return ok
-}
-
-func isRegionLikeGroupName(name string) bool {
-	name = strings.TrimSpace(name)
-	for _, region := range regionGroups {
-		parts := strings.Fields(region.Name)
-		if len(parts) < 2 {
-			if name == region.Name {
-				return true
-			}
-			continue
-		}
-		flag, label := parts[0], strings.Join(parts[1:], "")
-		if strings.HasPrefix(name, flag) && strings.Contains(name, label) {
-			return true
-		}
-	}
-	return false
 }
 
 func buildDNSNode(dns mihomoDNS) *yaml.Node {
@@ -2314,7 +2526,16 @@ func buildRuleProvidersNode(providers map[string]mihomoRuleProvider, preferredOr
 }
 
 func buildRulesNode(rules []string) *yaml.Node {
-	return stringSeqNode(rules)
+	seq := sequenceNode()
+	for _, rule := range rules {
+		seq.Content = append(seq.Content, &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Tag:   "!!str",
+			Value: rule,
+			Style: yaml.DoubleQuotedStyle,
+		})
+	}
+	return seq
 }
 
 func mappingNode() *yaml.Node {

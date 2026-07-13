@@ -97,10 +97,10 @@ func TestStableNodeIDIgnoresDisplayNameButTracksSecretDigest(t *testing.T) {
 	}
 }
 
-func TestNormalizeGroupOptionsDisablesRegionGroupsForV1(t *testing.T) {
+func TestNormalizeGroupOptionsPreservesRegionGroupFlag(t *testing.T) {
 	got := NormalizeGroupOptions(GroupOptions{EnableRegionGroups: true})
-	if got.EnableRegionGroups {
-		t.Fatalf("EnableRegionGroups = true, want false for V1")
+	if !got.EnableRegionGroups {
+		t.Fatalf("EnableRegionGroups = false, want true")
 	}
 	if got.RuleGroupNodeMode != "full" {
 		t.Fatalf("RuleGroupNodeMode = %q, want full", got.RuleGroupNodeMode)

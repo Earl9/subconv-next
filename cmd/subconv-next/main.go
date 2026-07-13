@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"subconv-next/internal/api"
+	"subconv-next/internal/backup"
 	"subconv-next/internal/config"
 	"subconv-next/internal/model"
 	"subconv-next/internal/parser"
@@ -50,6 +51,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runParse(args[1:], stdout, stderr)
 	case "generate":
 		return runGenerate(args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return runServe(args, stderr)
@@ -67,7 +70,88 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  serve       Run the local HTTP daemon")
 	_, _ = fmt.Fprintln(w, "  generate    Generate Mihomo YAML from config")
 	_, _ = fmt.Fprintln(w, "  parse       Parse subscription content into NodeIR")
+	_, _ = fmt.Fprintln(w, "  backup      Export, inspect, or restore application backups")
 	_, _ = fmt.Fprintln(w, "  version     Print the build version")
+}
+
+func runBackup(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(stderr, "backup: missing action")
+		return 2
+	}
+
+	switch args[0] {
+	case "export":
+		fs := flag.NewFlagSet("backup export", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		configPath := fs.String("config", "/etc/config/subconv-next", "UCI configuration path")
+		dataDir := fs.String("data-dir", "/etc/subconv-next/data", "Application data directory")
+		output := fs.String("output", "", "Output tar.gz path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *output == "" || fs.NArg() != 0 {
+			_, _ = fmt.Fprintln(stderr, "backup export: --output is required")
+			return 2
+		}
+		result, err := backup.Export(backup.ExportOptions{ConfigPath: *configPath, DataDir: *dataDir, OutputPath: *output, AppVersion: version})
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "backup export: %v\n", err)
+			return 1
+		}
+		return writeJSON(stdout, result, stderr)
+	case "inspect":
+		fs := flag.NewFlagSet("backup inspect", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		archive := fs.String("archive", "", "Backup archive path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *archive == "" || fs.NArg() != 0 {
+			_, _ = fmt.Fprintln(stderr, "backup inspect: --archive is required")
+			return 2
+		}
+		manifest, err := backup.Inspect(*archive)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "backup inspect: %v\n", err)
+			return 1
+		}
+		return writeJSON(stdout, manifest, stderr)
+	case "restore":
+		fs := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		archive := fs.String("archive", "", "Backup archive path")
+		configPath := fs.String("config", "/etc/config/subconv-next", "UCI configuration path")
+		dataDir := fs.String("data-dir", "/etc/subconv-next/data", "Application data directory")
+		initScript := fs.String("init-script", "/etc/init.d/subconv-next", "Service init script")
+		lockPath := fs.String("lock", "/tmp/subconv-next-restore.lock", "Restore lock path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *archive == "" || fs.NArg() != 0 {
+			_, _ = fmt.Fprintln(stderr, "backup restore: --archive is required")
+			return 2
+		}
+		result, err := backup.Restore(backup.RestoreOptions{ArchivePath: *archive, ConfigPath: *configPath, DataDir: *dataDir, InitScript: *initScript, LockPath: *lockPath})
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "backup restore: %v\n", err)
+			return 1
+		}
+		return writeJSON(stdout, result, stderr)
+	default:
+		_, _ = fmt.Fprintf(stderr, "backup: unknown action %q\n", args[0])
+		return 2
+	}
+}
+
+func writeJSON(stdout io.Writer, value interface{}, stderr io.Writer) int {
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		_, _ = fmt.Fprintf(stderr, "json: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runServe(args []string, stderr io.Writer) int {
@@ -114,11 +198,14 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 
 	server := api.NewServer(version, cfg)
-	server.SetConfigPath(*configPath)
 	httpServer := &http.Server{
 		Addr:              api.ListenAddress(cfg),
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -48,6 +48,31 @@ func TestFailOnCriticalWarnings(t *testing.T) {
 	}
 }
 
+func TestValidateMihomoConfigAllowsRuleSetBuiltinTargets(t *testing.T) {
+	cfg := mihomoConfig{
+		RuleProviders: map[string]mihomoRuleProvider{
+			"adobe": {Type: "http", Behavior: "classical", URL: "https://example.com/adobe.yaml"},
+		},
+		Rules: []string{
+			"RULE-SET,adobe,DIRECT",
+			"RULE-SET,adobe, REJECT",
+			"RULE-SET,adobe,REJECT-DROP",
+			"RULE-SET,adobe,PASS",
+			"MATCH,DIRECT",
+		},
+	}
+
+	warnings := ValidateMihomoConfig(cfg)
+	for _, warning := range warnings {
+		if warning.Code == "missing_rule_target" {
+			t.Fatalf("ValidateMihomoConfig() unexpected missing target warning: %#v", warnings)
+		}
+	}
+	if err := failOnCriticalWarnings(warnings); err != nil {
+		t.Fatalf("failOnCriticalWarnings() error = %v", err)
+	}
+}
+
 func TestValidateMihomoConfigRegionGroupRoleWarnings(t *testing.T) {
 	cfg := mihomoConfig{
 		Proxies: []mihomoProxy{

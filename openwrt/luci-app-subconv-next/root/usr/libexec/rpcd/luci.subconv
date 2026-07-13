@@ -1,0 +1,1103 @@
+#!/bin/sh
+
+. "${IPKG_INSTROOT}/usr/share/libubox/jshn.sh"
+
+SERVICE="subconv-next"
+INIT_SCRIPT="${IPKG_INSTROOT}/etc/init.d/${SERVICE}"
+PROGRAM="${IPKG_INSTROOT}/usr/bin/${SERVICE}"
+LOGREAD="${IPKG_INSTROOT}/sbin/logread"
+
+json_result() {
+	local success="$1"
+	local message="$2"
+
+	json_init
+	json_add_boolean success "$success"
+	json_add_string message "$message"
+	json_dump
+	json_cleanup
+}
+
+uci_get_default() {
+	local option="$1"
+	local default="$2"
+	local value
+
+	value="$(uci -q get "${SERVICE}.main.${option}" 2>/dev/null)"
+	printf '%s' "${value:-$default}"
+}
+
+service_pid() {
+	local service_json pid
+
+	if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+		service_json="$(ubus -S call service list "{\"name\":\"${SERVICE}\"}" 2>/dev/null)"
+		pid="$(printf '%s' "$service_json" | jsonfilter -q -e "@['${SERVICE}'].instances[*].pid" 2>/dev/null | head -n 1)"
+		case "$pid" in
+			''|*[!0-9]*) ;;
+			*) printf '%s' "$pid"; return 0 ;;
+		esac
+	fi
+
+	pid="$(pidof "$SERVICE" 2>/dev/null | awk '{ print $1 }')"
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+		*) printf '%s' "$pid" ;;
+	esac
+}
+
+uptime_seconds() {
+	local pid="$1"
+	local start_ticks system_uptime clock_ticks elapsed
+
+	[ -r "${IPKG_INSTROOT}/proc/${pid}/stat" ] || return 1
+	[ -r "${IPKG_INSTROOT}/proc/uptime" ] || return 1
+
+	start_ticks="$(sed 's/^.*) //' "${IPKG_INSTROOT}/proc/${pid}/stat" | awk '{ print $20 }')"
+	system_uptime="$(awk -F. '{ print $1 }' "${IPKG_INSTROOT}/proc/uptime")"
+	clock_ticks="$(getconf CLK_TCK 2>/dev/null || printf '100')"
+
+	case "$start_ticks:$system_uptime:$clock_ticks" in
+		*[!0-9:]*) return 1 ;;
+	esac
+	[ "$clock_ticks" -gt 0 ] || return 1
+
+	elapsed=$((system_uptime - start_ticks / clock_ticks))
+	[ "$elapsed" -ge 0 ] || elapsed=0
+	printf '%s' "$elapsed"
+}
+
+format_uptime() {
+	local total="$1"
+	local days hours minutes seconds
+
+	days=$((total / 86400))
+	hours=$(((total % 86400) / 3600))
+	minutes=$(((total % 3600) / 60))
+	seconds=$((total % 60))
+
+	if [ "$days" -gt 0 ]; then
+		printf '%d day%s %02d:%02d:%02d' "$days" "$([ "$days" -eq 1 ] || printf 's')" "$hours" "$minutes" "$seconds"
+	else
+		printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
+	fi
+}
+
+device_access_host() {
+	local network_json address hostname
+
+	if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+		network_json="$(ubus -S call network.interface.lan status 2>/dev/null)"
+		address="$(printf '%s' "$network_json" | jsonfilter -q -e '@["ipv4-address"][0].address' 2>/dev/null)"
+		if printf '%s' "$address" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+			printf '%s' "$address"
+			return 0
+		fi
+	fi
+
+	address="$(uci -q get network.lan.ipaddr 2>/dev/null)"
+	address="${address%%/*}"
+	if printf '%s' "$address" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+		printf '%s' "$address"
+		return 0
+	fi
+
+	hostname="$(uci -q get system.@system[0].hostname 2>/dev/null)"
+	if printf '%s' "$hostname" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'; then
+		printf '%s' "$hostname"
+		return 0
+	fi
+
+	return 1
+}
+
+validated_webui_url() {
+	local listen port public_base_url scheme rest authority host path_part
+
+	listen="$(uci_get_default host 0.0.0.0)"
+	port="$(uci_get_default port 9876)"
+	public_base_url="$(uci_get_default public_base_url '')"
+	case "$port" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$port" -ge 1 ] 2>/dev/null && [ "$port" -le 65535 ] || return 1
+
+	if [ -n "$public_base_url" ]; then
+		invalid_string "$public_base_url" && return 1
+		printf '%s' "$public_base_url" | grep -Eq '^https?://[^[:space:]@]+$' || return 1
+		scheme="${public_base_url%%://*}"
+		rest="${public_base_url#*://}"
+		authority="${rest%%/*}"
+		case "$authority" in
+			\[*) host="$(printf '%s' "$authority" | sed 's/^\(\[[^]]*\]\).*$/\1/')" ;;
+			*) host="${authority%%:*}" ;;
+		esac
+		[ -n "$host" ] || return 1
+		case "$rest" in */*) path_part="/${rest#*/}" ;; *) path_part="" ;; esac
+		printf '%s://%s:%s%s' "$scheme" "$host" "$port" "$path_part"
+		return 0
+	fi
+
+	case "$listen" in
+		0.0.0.0|::|\[::\]|127.*|localhost) host="$(device_access_host)" || return 1 ;;
+		*:*)
+			case "$listen" in \[*\]) host="$listen" ;; *) host="[$listen]" ;; esac
+		;;
+		*) host="$listen" ;;
+	esac
+	printf '%s' "$host" | grep -Eq '^\[[0-9A-Fa-f:]+\]$|^[A-Za-z0-9._-]+$' || return 1
+	printf 'http://%s:%s' "$host" "$port"
+}
+
+get_status() {
+	local pid version seconds uptime webui_url
+
+	pid="$(service_pid)"
+	version="$($PROGRAM version 2>/dev/null | head -n 1)"
+	[ -n "$version" ] || version="unknown"
+	webui_url="$(validated_webui_url)"
+
+	if [ -n "$pid" ] && [ -r "${IPKG_INSTROOT}/proc/${pid}/stat" ]; then
+		seconds="$(uptime_seconds "$pid")"
+		case "$seconds" in ''|*[!0-9]*) seconds=0 ;; esac
+		uptime="$(format_uptime "$seconds")"
+
+		json_init
+		json_add_boolean running 1
+		json_add_int pid "$pid"
+		json_add_string version "$version"
+		json_add_string uptime "$uptime"
+		json_add_int uptime_seconds "$seconds"
+		json_add_boolean webUiAvailable "$([ -n "$webui_url" ] && printf 1 || printf 0)"
+		json_add_string webUiUrl "$webui_url"
+		json_dump
+		json_cleanup
+	else
+		json_init
+		json_add_boolean running 0
+		json_add_int pid 0
+		json_add_string version "$version"
+		json_add_string uptime "00:00:00"
+		json_add_int uptime_seconds 0
+		json_add_boolean webUiAvailable 0
+		json_add_string webUiUrl "$webui_url"
+		json_dump
+		json_cleanup
+	fi
+}
+
+run_service_action() {
+	local action="$1"
+	local message
+
+	if [ ! -x "$INIT_SCRIPT" ]; then
+		json_result 0 "找不到服务启动脚本"
+		return
+	fi
+
+	case "$action" in
+		start) message="started" ;;
+		stop) message="stopped" ;;
+		restart) message="restarted" ;;
+	esac
+
+	if "$INIT_SCRIPT" "$action" >/dev/null 2>&1; then
+		json_result 1 "$message"
+	else
+		json_result 0 "服务操作失败"
+	fi
+}
+
+get_autostart() {
+	local enabled=0 available=0
+
+	if [ -x "$INIT_SCRIPT" ]; then
+		available=1
+		if "$INIT_SCRIPT" enabled >/dev/null 2>&1; then
+			enabled=1
+		fi
+	fi
+
+	json_init
+	json_add_boolean available "$available"
+	json_add_boolean enabled "$enabled"
+	json_dump
+	json_cleanup
+}
+
+set_autostart() {
+	local input type enabled action message
+
+	read -r input
+	if ! json_load "$input"; then
+		json_result 0 "请求格式无效"
+		return
+	fi
+
+	if ! json_get_type type enabled || [ "$type" != boolean ]; then
+		json_result 0 "开机启动参数无效"
+		json_cleanup
+		return
+	fi
+	json_get_var enabled enabled
+	json_cleanup
+
+	if [ ! -x "$INIT_SCRIPT" ]; then
+		json_result 0 "找不到服务启动脚本"
+		return
+	fi
+
+	if [ "$enabled" = 1 ]; then
+		action="enable"
+		message="autostart enabled"
+	else
+		action="disable"
+		message="autostart disabled"
+	fi
+
+	if "$INIT_SCRIPT" "$action" >/dev/null 2>&1; then
+		json_result 1 "$message"
+	else
+		json_result 0 "设置开机启动失败"
+	fi
+}
+
+get_config() {
+	local enabled listen port data_dir log_level public_base_url
+
+	enabled="$(uci_get_default enabled 1)"
+	listen="$(uci_get_default host 0.0.0.0)"
+	port="$(uci_get_default port 9876)"
+	data_dir="$(uci_get_default data_dir /etc/subconv-next/data)"
+	log_level="$(uci_get_default log_level info)"
+	public_base_url="$(uci_get_default public_base_url '')"
+
+	case "$port" in ''|*[!0-9]*) port=9876 ;; esac
+
+	json_init
+	json_add_boolean enabled "$([ "$enabled" = 1 ] && printf 1 || printf 0)"
+	json_add_string listen "$listen"
+	json_add_int port "$port"
+	json_add_string data_dir "$data_dir"
+	json_add_string log_level "$log_level"
+	json_add_string public_base_url "$public_base_url"
+	json_dump
+	json_cleanup
+}
+
+invalid_string() {
+	printf '%s' "$1" | grep -q '[[:cntrl:]]'
+}
+
+valid_data_dir() {
+	local path="$1"
+
+	[ -n "$path" ] || return 1
+	invalid_string "$path" && return 1
+	printf '%s' "$path" | grep -Eq '^/(etc/subconv-next|mnt|overlay)/[A-Za-z0-9._/-]+$' || return 1
+
+	case "$path" in
+		*//*|*/../*|*/..|*/./*|*/.) return 1 ;;
+	esac
+
+	case "$path" in
+		/etc/subconv-next/?*|/mnt/?*|/overlay/?*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+backup_valid_id() {
+	printf '%s' "$1" | grep -Eq '^[A-Za-z0-9]{6}$'
+}
+
+backup_upload_dir() {
+	local id="$1"
+
+	backup_valid_id "$id" || return 1
+	printf '/tmp/subconv-next-upload.%s' "$id"
+}
+
+backup_error() {
+	local message="$1"
+	local detail="$2"
+
+	[ -z "$detail" ] || logger -t subconv-next "backup: $detail"
+	json_result 0 "$message"
+}
+
+backup_export() {
+	local data_dir output command_output command_error path filename size sha256 id
+
+	data_dir="$(uci_get_default data_dir /etc/subconv-next/data)"
+	if ! valid_data_dir "$data_dir" || ! resolved_data_dir_safe "$data_dir"; then
+		backup_error "数据目录不在允许范围内" "unsafe export data directory"
+		return
+	fi
+	output="$(mktemp /tmp/subconv-next-backup.XXXXXX)" || {
+		backup_error "无法创建备份临时文件" "mktemp failed"
+		return
+	}
+	rm -f "$output"
+	command_error="$(mktemp "${output}.error.XXXXXX")" || {
+		backup_error "无法创建备份临时文件" "mktemp error file failed"
+		return
+	}
+	if ! command_output="$($PROGRAM backup export --config "${IPKG_INSTROOT}/etc/config/${SERVICE}" --data-dir "$data_dir" --output "$output" 2>"$command_error")"; then
+		backup_error "导出备份失败" "$(cat "$command_error" 2>/dev/null)"
+		rm -f "$output" "$command_error"
+		return
+	fi
+	rm -f "$command_error"
+	if ! json_load "$command_output"; then
+		backup_error "导出备份失败" "invalid export response"
+		rm -f "$output"
+		return
+	fi
+	json_get_var path path
+	json_get_var filename filename
+	json_get_var size size
+	json_get_var sha256 sha256
+	json_cleanup
+	[ "$path" = "$output" ] || {
+		backup_error "导出备份失败" "unexpected export path"
+		rm -f "$output"
+		return
+	}
+	id="${output##*.}"
+	json_init
+	json_add_boolean success 1
+	json_add_string id "$id"
+	json_add_string path "$output"
+	json_add_string filename "$filename"
+	json_add_int size "$size"
+	json_add_string sha256 "$sha256"
+	json_dump
+	json_cleanup
+}
+
+backup_export_cleanup() {
+	local input type id path
+
+	read -r input
+	json_load "$input" || { json_result 0 "请求格式无效"; return; }
+	json_get_type type id
+	[ "$type" = string ] || { json_cleanup; json_result 0 "备份标识无效"; return; }
+	json_get_var id id
+	json_cleanup
+	backup_valid_id "$id" || { json_result 0 "备份标识无效"; return; }
+	path="/tmp/subconv-next-backup.$id"
+	rm -f "$path" "${path}.error".*
+	json_result 1 "备份临时文件已清理"
+}
+
+backup_upload_begin() {
+	local dir id
+
+	dir="$(mktemp -d /tmp/subconv-next-upload.XXXXXX)" || {
+		backup_error "无法创建上传会话" "mktemp upload directory failed"
+		return
+	}
+	chmod 0700 "$dir"
+	if ! printf '0\n' >"$dir/next"; then
+		rm -rf "$dir"
+		backup_error "无法创建上传会话" "cannot initialize upload sequence"
+		return
+	fi
+	id="${dir##*.}"
+	json_init
+	json_add_boolean success 1
+	json_add_string upload_id "$id"
+	json_add_int max_size 16777216
+	json_add_int chunk_size 32768
+	json_dump
+	json_cleanup
+}
+
+backup_upload_chunk() {
+	local input type id index data dir expected lock chunk size current next
+
+	read -r input
+	json_load "$input" || { json_result 0 "上传数据格式无效"; return; }
+	json_get_type type upload_id
+	[ "$type" = string ] || { json_cleanup; json_result 0 "上传会话无效"; return; }
+	json_get_var id upload_id
+	json_get_type type index
+	[ "$type" = int ] || { json_cleanup; json_result 0 "上传顺序无效"; return; }
+	json_get_var index index
+	json_get_type type data
+	[ "$type" = string ] || { json_cleanup; json_result 0 "上传数据无效"; return; }
+	json_get_var data data
+	json_cleanup
+	dir="$(backup_upload_dir "$id")" || { json_result 0 "上传会话无效"; return; }
+	[ -d "$dir" ] && [ ! -L "$dir" ] || { json_result 0 "上传会话已失效"; return; }
+	lock="$dir/chunk.lock"
+	mkdir "$lock" 2>/dev/null || { json_result 0 "上传请求正在处理中"; return; }
+	expected="$(cat "$dir/next" 2>/dev/null)"
+	if [ "$index" != "$expected" ]; then
+		rmdir "$lock"
+		json_result 0 "上传数据顺序无效"
+		return
+	fi
+	chunk="$dir/chunk"
+	if ! printf '%s' "$data" | base64 -d >"$chunk" 2>/dev/null; then
+		rm -f "$chunk"
+		rmdir "$lock"
+		json_result 0 "上传数据编码无效"
+		return
+	fi
+	size="$(wc -c <"$chunk" | tr -d ' ')"
+	if [ -f "$dir/upload.tar.gz" ]; then
+		current="$(wc -c <"$dir/upload.tar.gz" | tr -d ' ')"
+	else
+		current=0
+	fi
+	case "$size:$current" in *[!0-9:]*) size=0; current=0 ;; esac
+	if [ "$size" -gt 32768 ] || [ $((current + size)) -gt 16777216 ]; then
+		rm -f "$chunk"
+		rmdir "$lock"
+		json_result 0 "上传文件超过大小限制"
+		return
+	fi
+	if ! cat "$chunk" >>"$dir/upload.tar.gz"; then
+		rm -f "$chunk"
+		rmdir "$lock"
+		json_result 0 "保存上传数据失败"
+		return
+	fi
+	rm -f "$chunk"
+	next=$((index + 1))
+	if ! printf '%s\n' "$next" >"$dir/next.tmp" || ! mv "$dir/next.tmp" "$dir/next"; then
+		rm -f "$dir/next.tmp"
+		rmdir "$lock"
+		json_result 0 "保存上传状态失败"
+		return
+	fi
+	rmdir "$lock"
+	json_init
+	json_add_boolean success 1
+	json_add_int received $((current + size))
+	json_add_int next_index "$next"
+	json_dump
+	json_cleanup
+}
+
+backup_check() {
+	local input type id filename declared_size dir archive actual_size actual_sha
+	local command_output command_error app_version created_at format_version files keys key count=0
+
+	read -r input
+	json_load "$input" || { json_result 0 "检查请求格式无效"; return; }
+	for key in upload_id filename; do
+		json_get_type type "$key"
+		[ "$type" = string ] || { json_cleanup; json_result 0 "备份文件信息无效"; return; }
+	done
+	json_get_type type size
+	[ "$type" = int ] || { json_cleanup; json_result 0 "备份文件大小无效"; return; }
+	json_get_var id upload_id
+	json_get_var filename filename
+	json_get_var declared_size size
+	json_cleanup
+	dir="$(backup_upload_dir "$id")" || { json_result 0 "上传会话无效"; return; }
+	[ -d "$dir" ] && [ ! -L "$dir" ] || { json_result 0 "上传会话已失效"; return; }
+	case "$filename" in *.tar.gz) ;; *) rm -rf "$dir"; json_result 0 "仅支持 tar.gz 备份文件"; return ;; esac
+	archive="$dir/upload.tar.gz"
+	[ -f "$archive" ] && [ ! -L "$archive" ] || { rm -rf "$dir"; json_result 0 "找不到上传的备份文件"; return; }
+	actual_size="$(wc -c <"$archive" | tr -d ' ')"
+	[ "$actual_size" = "$declared_size" ] && [ "$actual_size" -le 16777216 ] || { rm -rf "$dir"; json_result 0 "备份文件大小校验失败"; return; }
+	actual_sha="$(sha256sum "$archive" | awk '{ print $1 }')"
+	command_error="$dir/inspect.error"
+	if ! command_output="$($PROGRAM backup inspect --archive "$archive" 2>"$command_error")"; then
+		backup_error "备份检查未通过" "$(cat "$command_error" 2>/dev/null)"
+		rm -rf "$dir"
+		return
+	fi
+	rm -f "$command_error"
+	json_load "$command_output" || { backup_error "备份检查未通过" "invalid inspect response"; rm -rf "$dir"; return; }
+	json_get_var format_version format_version
+	json_get_var app_version app_version
+	json_get_var created_at created_at
+	json_select files
+	json_get_keys keys
+	for key in $keys; do count=$((count + 1)); done
+	json_cleanup
+	printf '%s\n' "$actual_sha" >"$dir/checked.sha256"
+	json_init
+	json_add_boolean success 1
+	json_add_int format_version "$format_version"
+	json_add_string app_version "$app_version"
+	json_add_string created_at "$created_at"
+	json_add_int files "$count"
+	json_add_int size "$actual_size"
+	json_dump
+	json_cleanup
+}
+
+backup_restore() {
+	local input type id dir archive checked actual_sha data_dir command_output command_error restored_files service_running
+
+	read -r input
+	json_load "$input" || { json_result 0 "恢复请求格式无效"; return; }
+	json_get_type type upload_id
+	[ "$type" = string ] || { json_cleanup; json_result 0 "上传会话无效"; return; }
+	json_get_var id upload_id
+	json_cleanup
+	dir="$(backup_upload_dir "$id")" || { json_result 0 "上传会话无效"; return; }
+	[ -d "$dir" ] && [ ! -L "$dir" ] || { json_result 0 "上传会话已失效"; return; }
+	archive="$dir/upload.tar.gz"
+	[ -f "$archive" ] && [ ! -L "$archive" ] || { json_result 0 "找不到上传的备份文件"; return; }
+	checked="$(cat "$dir/checked.sha256" 2>/dev/null)"
+	actual_sha="$(sha256sum "$archive" 2>/dev/null | awk '{ print $1 }')"
+	if [ -z "$checked" ] || [ "$checked" != "$actual_sha" ]; then
+		json_result 0 "请先重新检查备份"
+		return
+	fi
+	data_dir="$(uci_get_default data_dir /etc/subconv-next/data)"
+	if ! valid_data_dir "$data_dir" || ! resolved_data_dir_safe "$data_dir"; then
+		json_result 0 "当前数据目录不在允许范围内"
+		return
+	fi
+	command_error="$dir/restore.error"
+	if ! command_output="$($PROGRAM backup restore --archive "$archive" --config "${IPKG_INSTROOT}/etc/config/${SERVICE}" --data-dir "$data_dir" --init-script "$INIT_SCRIPT" --lock "${IPKG_INSTROOT}/tmp/subconv-next-restore.lock" 2>"$command_error")"; then
+		backup_error "恢复失败，当前数据已保持或回滚" "$(cat "$command_error" 2>/dev/null)"
+		rm -rf "$dir"
+		return
+	fi
+	json_load "$command_output" || { backup_error "恢复结果无效" "invalid restore response"; rm -rf "$dir"; return; }
+	json_get_var restored_files restored_files
+	json_get_var service_running service_running
+	json_cleanup
+	rm -rf "$dir"
+	json_init
+	json_add_boolean success 1
+	json_add_string message "备份恢复成功"
+	json_add_int restored_files "$restored_files"
+	json_add_boolean service_running "$service_running"
+	json_dump
+	json_cleanup
+}
+
+backup_upload_cancel() {
+	local input type id dir
+
+	read -r input
+	json_load "$input" || { json_result 0 "请求格式无效"; return; }
+	json_get_type type upload_id
+	[ "$type" = string ] || { json_cleanup; json_result 0 "上传会话无效"; return; }
+	json_get_var id upload_id
+	json_cleanup
+	dir="$(backup_upload_dir "$id")" || { json_result 0 "上传会话无效"; return; }
+	rm -rf "$dir"
+	json_result 1 "上传临时文件已清理"
+}
+
+resolved_data_dir_safe() {
+	local path="$1"
+	local full probe resolved
+
+	full="${IPKG_INSTROOT}${path}"
+	probe="$full"
+	while [ ! -e "$probe" ] && [ ! -L "$probe" ]; do
+		[ "$probe" != "${IPKG_INSTROOT}" ] && [ "$probe" != / ] || return 1
+		probe="${probe%/*}"
+		[ -n "$probe" ] || probe=/
+	done
+	resolved="$(readlink -f "$probe" 2>/dev/null)"
+	[ -n "$resolved" ] || return 1
+
+	case "$resolved" in
+		"${IPKG_INSTROOT}/etc/subconv-next"|"${IPKG_INSTROOT}/etc/subconv-next/"?*|\
+		"${IPKG_INSTROOT}/mnt"|"${IPKG_INSTROOT}/mnt/"?*|\
+		"${IPKG_INSTROOT}/overlay"|"${IPKG_INSTROOT}/overlay/"?*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+storage_check() {
+	local path storage_path permission owner available_kb temp_file
+	local safe=0 exists=0 is_directory=0 readable=0 writable=0
+
+	path="$(uci_get_default data_dir /etc/subconv-next/data)"
+	permission=""
+	owner=""
+	available_kb=0
+
+	if valid_data_dir "$path" && resolved_data_dir_safe "$path"; then
+		safe=1
+		storage_path="${IPKG_INSTROOT}${path}"
+
+		if [ -e "$storage_path" ]; then
+			exists=1
+			[ -d "$storage_path" ] && is_directory=1
+			[ -r "$storage_path" ] && readable=1
+			permission="$(stat -c '%a' "$storage_path" 2>/dev/null)"
+			owner="$(stat -c '%U:%G' "$storage_path" 2>/dev/null)"
+
+			if [ "$is_directory" -eq 1 ]; then
+				temp_file="$(umask 077; mktemp "$storage_path/.subconv-next-write-test.XXXXXX" 2>/dev/null)"
+				if [ -n "$temp_file" ] && [ -f "$temp_file" ] && [ ! -L "$temp_file" ]; then
+					writable=1
+					rm -f "$temp_file" 2>/dev/null || writable=0
+				fi
+				available_kb="$(df -Pk "$storage_path" 2>/dev/null | awk 'NR == 2 { print $4; exit }')"
+				case "$available_kb" in ''|*[!0-9]*) available_kb=0 ;; esac
+			fi
+		fi
+	fi
+
+	json_init
+	json_add_string path "$path"
+	json_add_boolean safe "$safe"
+	json_add_boolean exists "$exists"
+	json_add_boolean is_directory "$is_directory"
+	json_add_boolean readable "$readable"
+	json_add_boolean writable "$writable"
+	json_add_string permission "$permission"
+	json_add_string owner "$owner"
+	json_add_int available_kb "$available_kb"
+	if [ "$safe" -eq 0 ]; then
+		json_add_string message "configured data directory is outside allowed paths"
+	elif [ "$exists" -eq 0 ]; then
+		json_add_string message "data directory does not exist"
+	elif [ "$is_directory" -eq 0 ]; then
+		json_add_string message "configured path is not a directory"
+	else
+		json_add_string message "storage checked"
+	fi
+	json_dump
+	json_cleanup
+}
+
+logs_valid_source() {
+	case "$1" in
+		service|application) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+logs_sensitive_line() {
+	local line="$1"
+	local lower
+
+	lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+	case "$lower" in
+		*authorization*|*cookie*|*password*|*token*|*private-key*|*private_key*|*pre-shared-key*|*presharedkey*|*/s/*|*ss://*|*trojan://*|*anytls://*|*tuic://*|*vless://*|*vmess://*|*wireguard://*|*socks5://*) return 0 ;;
+		*'auth='*|*'sig='*|*'access_token='*) return 0 ;;
+	esac
+
+	printf '%s' "$line" | grep -Eq '://[^/@[:space:]]+@|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
+}
+
+logs_redact_line() {
+	if logs_sensitive_line "$1"; then
+		printf '%s' '[redacted sensitive log line]'
+	else
+		printf '%s' "$1"
+	fi
+}
+
+logs_application_dir() {
+	local data_dir logs_dir
+
+	data_dir="$(uci_get_default data_dir /etc/subconv-next/data)"
+	valid_data_dir "$data_dir" || return 1
+	resolved_data_dir_safe "$data_dir" || return 1
+	logs_dir="${IPKG_INSTROOT}${data_dir}/logs"
+	[ ! -L "$logs_dir" ] || return 1
+	printf '%s' "$logs_dir"
+}
+
+logs_collect() {
+	local source="$1"
+	local lines="$2"
+	local byte_limit="$3"
+	local output="$4"
+	local raw="${output}.raw"
+	local selected="${output}.selected"
+	local logs_dir file suffix size
+
+	LOGS_TRUNCATED=0
+	LOGS_ERROR=""
+	: >"$raw"
+
+	case "$source" in
+		service)
+			if [ ! -x "$LOGREAD" ]; then
+				LOGS_ERROR="系统日志读取工具不可用"
+				rm -f "$raw" "$selected" "$output"
+				return 1
+			fi
+			if ! timeout 3 "$LOGREAD" -e "$SERVICE" -l "$lines" >"$raw" 2>/dev/null; then
+				LOGS_ERROR="系统日志读取失败或超时"
+				rm -f "$raw" "$selected" "$output"
+				return 1
+			fi
+		;;
+		application)
+			logs_dir="$(logs_application_dir)" || {
+				LOGS_ERROR="应用日志目录不安全"
+				rm -f "$raw" "$selected" "$output"
+				return 1
+			}
+			if [ -d "$logs_dir" ]; then
+				for suffix in 3 2 1 ''; do
+					file="$logs_dir/app.log${suffix:+.$suffix}"
+					if [ -L "$file" ]; then
+						LOGS_ERROR="应用日志文件不能是符号链接"
+						rm -f "$raw" "$selected" "$output"
+						return 1
+					fi
+					if [ -f "$file" ]; then
+						if [ ! -r "$file" ] || ! tail -n "$lines" "$file" >>"$raw" 2>/dev/null; then
+							LOGS_ERROR="应用日志文件不可读"
+							rm -f "$raw" "$selected" "$output"
+							return 1
+						fi
+					fi
+				done
+			fi
+			tail -n "$lines" "$raw" >"$selected" 2>/dev/null
+			mv "$selected" "$raw"
+		;;
+	esac
+
+	size="$(wc -c <"$raw" | tr -d ' ')"
+	case "$size" in ''|*[!0-9]*) size=0 ;; esac
+	if [ "$size" -gt "$byte_limit" ]; then
+		LOGS_TRUNCATED=1
+		tail -c "$byte_limit" "$raw" | sed '1d' >"$output"
+	else
+		mv "$raw" "$output"
+	fi
+	rm -f "$raw" "$selected"
+	return 0
+}
+
+logs_emit_file() {
+	local source="$1"
+	local file="$2"
+	local truncated="$3"
+	local line redacted line_size returned=0
+
+	json_init
+	json_add_boolean success 1
+	json_add_string source "$source"
+	json_add_array lines
+	while IFS= read -r line || [ -n "$line" ]; do
+		line_size="$(printf '%s' "$line" | wc -c | tr -d ' ')"
+		case "$line_size" in ''|*[!0-9]*) line_size=0 ;; esac
+		if [ "$line_size" -gt 8192 ]; then
+			line="$(printf '%s' "$line" | head -c 8192)"
+			truncated=1
+		fi
+		redacted="$(logs_redact_line "$line")"
+		json_add_string '' "$redacted"
+		returned=$((returned + 1))
+	done <"$file"
+	json_close_array
+	json_add_int returned_lines "$returned"
+	json_add_boolean truncated "$truncated"
+	json_dump
+	json_cleanup
+}
+
+logs_error_response() {
+	local message="$1"
+	local source="$2"
+
+	json_init
+	json_add_boolean success 0
+	json_add_string source "$source"
+	json_add_string message "$message"
+	json_add_array lines
+	json_close_array
+	json_add_int returned_lines 0
+	json_add_boolean truncated 0
+	json_dump
+	json_cleanup
+}
+
+logs_read() {
+	local input type source="service" lines=100
+	local output
+
+	read -r input
+	[ -n "$input" ] || input='{}'
+	if ! json_load "$input"; then
+		logs_error_response "请求格式无效" "$source"
+		return
+	fi
+	if json_get_type type source; then
+		[ "$type" = string ] || { json_cleanup; logs_error_response "日志来源格式无效" "$source"; return; }
+		json_get_var source source
+	fi
+	if json_get_type type lines; then
+		[ "$type" = int ] || { json_cleanup; logs_error_response "日志行数必须是整数" "$source"; return; }
+		json_get_var lines lines
+	fi
+	json_cleanup
+
+	logs_valid_source "$source" || { logs_error_response "日志来源无效" "$source"; return; }
+	[ "$lines" -ge 1 ] 2>/dev/null && [ "$lines" -le 1000 ] || { logs_error_response "日志行数必须在 1 至 1000 之间" "$source"; return; }
+	output="$(mktemp /tmp/subconv-next-logs-read.XXXXXX)" || {
+		logs_error_response "无法创建日志临时文件" "$source"
+		return
+	}
+
+	if logs_collect "$source" "$lines" 262144 "$output"; then
+		logs_emit_file "$source" "$output" "$LOGS_TRUNCATED"
+	else
+		logs_error_response "$LOGS_ERROR" "$source"
+	fi
+	rm -f "$output" "${output}.raw" "${output}.selected"
+}
+
+logs_download() {
+	local input type source="service"
+	local output
+
+	read -r input
+	[ -n "$input" ] || input='{}'
+	if ! json_load "$input"; then
+		logs_error_response "请求格式无效" "$source"
+		return
+	fi
+	if json_get_type type source; then
+		[ "$type" = string ] || { json_cleanup; logs_error_response "日志来源格式无效" "$source"; return; }
+		json_get_var source source
+	fi
+	json_cleanup
+
+	logs_valid_source "$source" || { logs_error_response "日志来源无效" "$source"; return; }
+	output="$(mktemp /tmp/subconv-next-logs-download.XXXXXX)" || {
+		logs_error_response "无法创建日志临时文件" "$source"
+		return
+	}
+
+	if logs_collect "$source" 1000 524288 "$output"; then
+		logs_emit_file "$source" "$output" "$LOGS_TRUNCATED"
+	else
+		logs_error_response "$LOGS_ERROR" "$source"
+	fi
+	rm -f "$output" "${output}.raw" "${output}.selected"
+}
+
+logs_clear() {
+	local logs_dir file suffix
+
+	logs_dir="$(logs_application_dir)" || { json_result 0 "应用日志目录不安全"; return; }
+	[ -d "$logs_dir" ] || { json_result 1 "应用日志已经为空"; return; }
+
+	for suffix in '' 1 2 3; do
+		file="$logs_dir/app.log${suffix:+.$suffix}"
+		[ ! -L "$file" ] || { json_result 0 "应用日志文件不能是符号链接"; return; }
+	done
+
+	file="$logs_dir/app.log"
+	if [ -f "$file" ] && ! : >"$file" 2>/dev/null; then
+		json_result 0 "清空应用日志失败"
+		return
+	fi
+	for suffix in 1 2 3; do
+		file="$logs_dir/app.log.$suffix"
+		if [ -e "$file" ] && ! rm -f "$file" 2>/dev/null; then
+			json_result 0 "删除轮转日志失败"
+			return
+		fi
+	done
+	json_result 1 "应用日志已清空"
+}
+
+valid_public_base_url() {
+	local value="$1"
+	local rest authority host
+
+	[ -n "$value" ] || return 0
+	invalid_string "$value" && return 1
+	printf '%s' "$value" | grep -Eq '^https?://[^[:space:]@]+$' || return 1
+	rest="${value#*://}"
+	authority="${rest%%/*}"
+	case "$authority" in
+		\[*\]) host="$(printf '%s' "$authority" | sed 's/^\(\[[^]]*\]\).*$/\1/')" ;;
+		*) host="${authority%%:*}" ;;
+	esac
+	[ -n "$host" ] || return 1
+	printf '%s' "$host" | grep -Eq '^\[[0-9A-Fa-f:]+\]$|^[A-Za-z0-9._-]+$'
+}
+
+set_config() {
+	local input type
+	local has_enabled=0 has_listen=0 has_port=0 has_data_dir=0 has_log_level=0 has_public_base_url=0
+	local enabled listen port data_dir log_level public_base_url
+
+	read -r input
+	if ! json_load "$input"; then
+		json_result 0 "请求格式无效"
+		return
+	fi
+
+	if json_get_type type enabled; then
+		[ "$type" = boolean ] || { json_result 0 "启用参数无效"; json_cleanup; return; }
+		json_get_var enabled enabled
+		has_enabled=1
+	fi
+	if json_get_type type listen; then
+		[ "$type" = string ] || { json_result 0 "监听地址格式无效"; json_cleanup; return; }
+		json_get_var listen listen
+		has_listen=1
+	fi
+	if json_get_type type port; then
+		[ "$type" = int ] || { json_result 0 "端口必须是整数"; json_cleanup; return; }
+		json_get_var port port
+		has_port=1
+	fi
+	if json_get_type type data_dir; then
+		[ "$type" = string ] || { json_result 0 "数据目录格式无效"; json_cleanup; return; }
+		json_get_var data_dir data_dir
+		has_data_dir=1
+	fi
+	if json_get_type type log_level; then
+		[ "$type" = string ] || { json_result 0 "日志级别格式无效"; json_cleanup; return; }
+		json_get_var log_level log_level
+		has_log_level=1
+	fi
+	if json_get_type type public_base_url; then
+		[ "$type" = string ] || { json_result 0 "公共访问地址格式无效"; json_cleanup; return; }
+		json_get_var public_base_url public_base_url
+		has_public_base_url=1
+	fi
+	json_cleanup
+
+	[ "$has_enabled$has_listen$has_port$has_data_dir$has_log_level$has_public_base_url" != 000000 ] || {
+		json_result 0 "没有可保存的设置"
+		return
+	}
+
+	if [ "$has_listen" -eq 1 ]; then
+		[ -n "$listen" ] && printf '%s' "$listen" | grep -Eq '^[A-Za-z0-9._:%-]+$' || {
+			json_result 0 "监听地址无效"
+			return
+		}
+	fi
+	if [ "$has_port" -eq 1 ]; then
+		[ "$port" -ge 1 ] 2>/dev/null && [ "$port" -le 65535 ] || {
+			json_result 0 "端口必须在 1 至 65535 之间"
+			return
+		}
+	fi
+	if [ "$has_data_dir" -eq 1 ]; then
+		if ! valid_data_dir "$data_dir" || ! resolved_data_dir_safe "$data_dir"; then
+			json_result 0 "数据目录不在允许范围内"
+			return
+		fi
+	fi
+	if [ "$has_log_level" -eq 1 ]; then
+		case "$log_level" in debug|info|warn|error) ;; *) json_result 0 "日志级别无效"; return ;; esac
+	fi
+	if [ "$has_public_base_url" -eq 1 ] && [ -n "$public_base_url" ]; then
+		valid_public_base_url "$public_base_url" || {
+			json_result 0 "公共访问地址必须是有效的 HTTP(S) 地址"
+			return
+		}
+	fi
+
+	uci revert "$SERVICE" >/dev/null 2>&1 || true
+	[ "$has_enabled" -eq 0 ] || uci set "${SERVICE}.main.enabled=$enabled" || { uci revert "$SERVICE"; json_result 0 "保存启用设置失败"; return; }
+	[ "$has_listen" -eq 0 ] || uci set "${SERVICE}.main.host=$listen" || { uci revert "$SERVICE"; json_result 0 "保存监听地址失败"; return; }
+	[ "$has_port" -eq 0 ] || uci set "${SERVICE}.main.port=$port" || { uci revert "$SERVICE"; json_result 0 "保存端口失败"; return; }
+	[ "$has_data_dir" -eq 0 ] || uci set "${SERVICE}.main.data_dir=$data_dir" || { uci revert "$SERVICE"; json_result 0 "保存数据目录失败"; return; }
+	[ "$has_log_level" -eq 0 ] || uci set "${SERVICE}.main.log_level=$log_level" || { uci revert "$SERVICE"; json_result 0 "保存日志级别失败"; return; }
+	[ "$has_public_base_url" -eq 0 ] || uci set "${SERVICE}.main.public_base_url=$public_base_url" || { uci revert "$SERVICE"; json_result 0 "保存公共访问地址失败"; return; }
+
+	if uci commit "$SERVICE"; then
+		json_result 1 "设置已保存"
+	else
+		uci revert "$SERVICE" >/dev/null 2>&1 || true
+		json_result 0 "提交设置失败"
+	fi
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object status
+		json_close_object
+		json_add_object start
+		json_close_object
+		json_add_object stop
+		json_close_object
+		json_add_object restart
+		json_close_object
+		json_add_object get_config
+		json_close_object
+		json_add_object get_autostart
+		json_close_object
+		json_add_object storage_check
+		json_close_object
+		json_add_object logs_read
+		json_add_string source ""
+		json_add_int lines 0
+		json_close_object
+		json_add_object logs_download
+		json_add_string source ""
+		json_close_object
+		json_add_object logs_clear
+		json_close_object
+		json_add_object backup_export
+		json_close_object
+		json_add_object backup_export_cleanup
+		json_add_string id ""
+		json_close_object
+		json_add_object backup_upload_begin
+		json_close_object
+		json_add_object backup_upload_chunk
+		json_add_string upload_id ""
+		json_add_int index 0
+		json_add_string data ""
+		json_close_object
+		json_add_object backup_check
+		json_add_string upload_id ""
+		json_add_string filename ""
+		json_add_int size 0
+		json_close_object
+		json_add_object backup_restore
+		json_add_string upload_id ""
+		json_close_object
+		json_add_object backup_upload_cancel
+		json_add_string upload_id ""
+		json_close_object
+		json_add_object set_autostart
+		json_add_boolean enabled 0
+		json_close_object
+		json_add_object set_config
+		json_add_boolean enabled 0
+		json_add_string listen ""
+		json_add_int port 0
+		json_add_string data_dir ""
+		json_add_string log_level ""
+		json_add_string public_base_url ""
+		json_close_object
+		json_dump
+		json_cleanup
+	;;
+	call)
+		case "$2" in
+			status) get_status ;;
+			start) run_service_action start ;;
+			stop) run_service_action stop ;;
+			restart) run_service_action restart ;;
+			get_config) get_config ;;
+			get_autostart) get_autostart ;;
+			storage_check) storage_check ;;
+			logs_read) logs_read ;;
+			logs_download) logs_download ;;
+			logs_clear) logs_clear ;;
+			backup_export) backup_export ;;
+			backup_export_cleanup) backup_export_cleanup ;;
+			backup_upload_begin) backup_upload_begin ;;
+			backup_upload_chunk) backup_upload_chunk ;;
+			backup_check) backup_check ;;
+			backup_restore) backup_restore ;;
+			backup_upload_cancel) backup_upload_cancel ;;
+			set_autostart) set_autostart ;;
+			set_config) set_config ;;
+		esac
+	;;
+esac

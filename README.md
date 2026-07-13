@@ -1,38 +1,56 @@
 # SubConv Next
 
-## 项目简介
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-SubConv Next 是面向 Mihomo / Clash Meta 的现代订阅转换工具。它以单个 Go 二进制提供内置 Web UI，用于聚合上游订阅、编辑节点、生成 Mihomo YAML，并发布随机私密订阅链接。
+SubConv Next is a self-hosted subscription converter for Mihomo / Clash Meta. A single Go binary provides the conversion API and Web UI for aggregating upstream subscriptions, editing nodes, managing routing rules, generating validated Mihomo YAML, and publishing private subscription links.
 
-V1 重点面向自托管部署：Docker 运行形态、OpenWrt / Kwrt all-in-one IPK、订阅流量信息响应头、更安全的最终 YAML 校验，以及本地优先的 workspace 行为。
+It supports Docker deployments and a native OpenWrt integration built around procd, UCI, rpcd, ACLs, and LuCI JavaScript views.
 
-## 功能特性
+## Highlights
 
-- 支持多订阅源聚合，每个订阅源可设置名称和 Emoji。
-- 节点名保留上游 raw name，只在前面添加 `Emoji + sourceName` 前缀；重复最终名称追加 `#2`、`#3`。
-- 支持节点编辑、禁用、删除、恢复、批量改名和手动节点。
-- 生成 Mihomo / Clash Meta YAML，支持规则策略组、分流组 full 模式节点列表，不生成国家 / 地区策略组。
-- 聚合上游 `Subscription-Userinfo`，让 Clash / Mihomo 显示流量用量和到期时间。
-- 使用 `/s/{token}/mihomo.yaml` 随机私密订阅链接。
-- 支持本机浏览器草稿，且不保存完整发布 token。
-- 最终 YAML 校验覆盖 proxy-group 引用、过滤节点、自动选择组内容和 `MATCH` 顺序。
-- 默认 DNS 使用 OpenClash 兼容的 fake-ip + nameserver-policy 配置，默认 nameserver 走 `#RULES`，直连 DNS 和节点域名 DNS 分开处理。
-- Docker 镜像支持 `/data` 持久化，以及 `linux/amd64`、`linux/arm64`。
-- OpenWrt / Kwrt all-in-one IPK 包含后端服务、init.d、UCI 配置、procd、数据目录、LuCI 菜单和 LuCI 管理页。
+- Aggregate multiple subscription sources with stable source IDs, labels, and optional emoji prefixes.
+- Parse Base64 subscriptions, Clash/Mihomo YAML, and individual node URIs.
+- Edit, disable, delete, restore, bulk rename, and add manual nodes.
+- Configure built-in routing presets, custom rules, remote rule providers, and custom policy groups.
+- Generate optional country and country auto-test groups.
+- Preserve upstream `Subscription-Userinfo` metadata for traffic and expiration reporting.
+- Publish unguessable `/s/{token}/mihomo.yaml` subscription URLs.
+- Keep browser-local drafts without storing complete publication tokens.
+- Validate proxy references, rule providers, policy groups, filtered nodes, and final `MATCH` order before writing output.
+- Run on `linux/amd64` and `linux/arm64`, with persistent `/config` and `/data` volumes.
+- Manage OpenWrt service status, settings, backups, restores, and logs from LuCI.
 
-支持协议包括 `ss`、`ssr`、`vmess`、`vless`、`trojan`、`hysteria2`、`tuic`、`anytls`、`wireguard` 和 `mieru`。`anytls`、`wireguard` 和 `mieru` 在 V1 中输出 Mihomo 可用配置，不按实验性功能处理。
+Supported protocols include `ss`, `ssr`, `vmess`, `vless`, `trojan`, `hysteria2`, `tuic`, `anytls`, `wireguard`, and `mieru`.
 
 ## Screenshots
 
-| Web UI |
-|---|
-| ![SubConv Next main configuration page](docs/assets/screenshot-main.png) |
+### Web UI
 
-## 快速开始
+![SubConv Next Web UI](docs/assets/screenshot-main.png)
+
+<details>
+<summary>Mobile Web UI</summary>
+
+![SubConv Next mobile Web UI](docs/assets/screenshot-mobile.png)
+
+</details>
+
+### OpenWrt LuCI
+
+![SubConv Next OpenWrt LuCI overview](docs/assets/screenshot-luci.png)
+
+<details>
+<summary>Mobile LuCI</summary>
+
+![SubConv Next mobile LuCI overview](docs/assets/screenshot-luci-mobile.png)
+
+</details>
+
+## Quick Start
 
 ### Docker Compose
 
-创建 `docker-compose.yml`：
+Create `docker-compose.yml`:
 
 ```yaml
 services:
@@ -43,6 +61,7 @@ services:
     ports:
       - "9876:9876"
     volumes:
+      - ./config:/config
       - ./data:/data
     environment:
       SUBCONV_HOST: 0.0.0.0
@@ -51,83 +70,74 @@ services:
       SUBCONV_LOG_LEVEL: info
 ```
 
-启动：
+Start the service and check its health:
 
 ```sh
+mkdir -p config data
 docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-打开：
+Open <http://127.0.0.1:9876/>.
 
-```text
-http://127.0.0.1:9876/
-```
-
-固定版本建议使用 `ghcr.io/earl9/subconv-next:v1.0.0-9`；跟随最新发布版可使用 `ghcr.io/earl9/subconv-next:latest`。
+Use `ghcr.io/earl9/subconv-next:latest` to track releases, or pin a release tag for reproducible deployments.
 
 ### OpenWrt / Kwrt
 
-OpenWrt / Kwrt 支持以 all-in-one IPK 提供。`aarch64_generic` 已在 Kwrt 25.12.2 `rockchip/armv8` 上验证；其它 IPK 是实验性包。
+Install both the core service and LuCI package:
 
 ```sh
-opkg install /tmp/subconv-next_1.0.0-9_aarch64_generic.ipk
+opkg install \
+  /tmp/subconv-next_<version>_aarch64_generic.ipk \
+  /tmp/luci-app-subconv-next_<version>_all.ipk
+
+ubus call luci.subconv status
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-安装路径：
+The `aarch64_generic` package has been verified on Kwrt 25.12.2 `rockchip/armv8`. Check `opkg print-architecture` before selecting an asset for another device.
+
+Important paths:
 
 ```text
 /usr/bin/subconv-next
 /etc/init.d/subconv-next
 /etc/config/subconv-next
 /etc/subconv-next/data
+/usr/libexec/rpcd/luci.subconv
 /usr/share/luci/menu.d/luci-app-subconv-next.json
 /usr/share/rpcd/acl.d/luci-app-subconv-next.json
-/www/luci-static/resources/view/subconv-next/index.js
+/www/luci-static/resources/view/subconv-next/overview.js
 ```
 
-当 UCI `enabled=1` 时，安装后会自动 enable 并启动服务。LuCI 入口为 `Services / SubConv Next`。
+When UCI option `enabled` is `1`, installation enables and starts the service. The LuCI entry is **Services > SubConv Next**.
 
-Release Assets 中的多架构 IPK 是静态 Go 交叉编译二进制通过 `ipkg-build` 封装的包，不是使用每个目标平台官方 OpenWrt SDK 分别编译出的包。请按设备的 `opkg print-architecture` 选择文件。
+## Downloads
 
-## 下载
+Release artifacts are published through [GitHub Releases](https://github.com/Earl9/subconv-next/releases) and are not committed to the repository. Assets include Linux binaries, OpenWrt IPKs, the LuCI package, and `checksums.txt`.
 
-发布文件只放在 GitHub Release Assets，不提交到仓库：
+## Security
 
-- GitHub Releases: <https://github.com/Earl9/subconv-next/releases>
-- `subconv-next-linux-amd64`
-- `subconv-next-linux-arm64`
-- Verified IPK: `subconv-next_1.0.0-9_aarch64_generic.ipk`
-- Experimental IPK: `subconv-next_1.0.0-5_x86_64.ipk`
-- Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a7_neon-vfpv4.ipk`
-- Experimental IPK: `subconv-next_1.0.0-5_arm_cortex-a9_vfpv3-d16.ipk`
-- Experimental IPK: `subconv-next_1.0.0-5_mips_24kc.ipk`
-- Experimental IPK: `subconv-next_1.0.0-5_mipsel_24kc.ipk`
-- `checksums.txt`
+The standalone Web UI has no built-in account system. Run it on localhost or a trusted LAN, or place it behind HTTPS and an authenticated reverse proxy, VPN, or equivalent access control. LuCI access uses the router's existing authentication and rpcd ACL model.
 
-## 安全说明
+Published subscription URLs are bearer links. Anyone holding a valid `/s/{token}/mihomo.yaml` URL can retrieve its generated configuration. Rotate the link from the Web UI if it is exposed.
 
-SubConv Next V1 没有内置登录。请在本机或可信局域网中运行；如果需要暴露到可信网络之外，必须放在 HTTPS、认证、反向代理、VPN 或等效访问控制之后。
+Logs and API responses redact known secrets, including full tokens, upstream URL credentials, passwords, UUIDs, private keys, pre-shared keys, `Authorization`, and `Cookie` values. See [SECURITY.md](SECURITY.md) for the security model and reporting process.
 
-私密订阅 URL 是 bearer link：任何持有 `/s/{token}/mihomo.yaml` 的人都可以获取生成的 YAML。如果链接泄露，请在 Web UI 中重新生成私密链接。
+## Documentation
 
-日志和 API 会尽量脱敏完整 token、上游 URL 密钥、password、uuid、private-key、pre-shared-key、`Authorization` 和 `Cookie`。安全边界和漏洞报告方式见 [SECURITY.md](SECURITY.md)。
+- [Docker deployment](docs/docker.md)
+- [Configuration](docs/configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Release checklist](docs/release-checklist.md)
+- [OpenWrt build and packaging](docs/openwrt-build.md)
+- [Security details](docs/security.md)
+- [OpenWrt package notes](docs/03-openwrt-package.md)
+- [LuCI application notes](docs/10-luci-app.md)
 
-## 文档
+## Development
 
-- [Docker 部署](docs/docker.md)
-- [配置说明](docs/configuration.md)
-- [故障排查](docs/troubleshooting.md)
-- [发版检查清单](docs/release-checklist.md)
-- [OpenWrt / Kwrt 构建和打包](docs/openwrt-build.md)
-- [安全模型细节](docs/security.md)
-- [OpenWrt 包说明](docs/03-openwrt-package.md)
-- [LuCI 应用说明](docs/10-luci-app.md)
-
-## 开发
-
-需要 Go 1.22+。
+Go 1.22 or newer is required.
 
 ```sh
 go test ./...
@@ -135,7 +145,7 @@ go test -race ./...
 go vet ./...
 ```
 
-本地运行：
+Run locally:
 
 ```sh
 go run ./cmd/subconv-next serve \
@@ -145,12 +155,12 @@ go run ./cmd/subconv-next serve \
   --log-level info
 ```
 
-构建二进制：
+Build a local binary:
 
 ```sh
 go build -o subconv-next ./cmd/subconv-next
 ```
 
-## 许可证
+## License
 
-SubConv Next 使用 MIT License 发布，详见 [LICENSE](LICENSE)。
+SubConv Next is released under the [MIT License](LICENSE).

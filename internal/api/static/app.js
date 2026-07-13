@@ -261,6 +261,15 @@ const OUTPUT_OPTIONS = [
     icon: "list",
   },
   {
+    key: "enable_region_groups",
+    id: "opt-region-groups",
+    title: "生成国家代理组",
+    desc: "按国家生成两层代理组：国家选择组和国家自动测速组",
+    default: false,
+    icon: "globe",
+    groupOption: true,
+  },
+  {
     key: "sort_nodes",
     id: "opt-sort-nodes",
     title: "节点二次排序",
@@ -303,6 +312,11 @@ const OUTPUT_OPTION_GROUPS = [
     title: "输出内容",
     desc: "决定最终导出的配置中包含哪些附加信息。",
     items: ["include_info_node", "node_list", "insert_url"],
+  },
+  {
+    title: "代理组",
+    desc: "控制策略组展开方式和国家分组。",
+    items: ["enable_region_groups"],
   },
   {
     title: "节点处理",
@@ -562,9 +576,10 @@ const DEFAULT_RENDER = {
     template_label: "跟随当前服务模板",
     custom_url: "",
   },
-  rule_mode: "full",
-  enabled_rules: RULE_PRESETS.full,
+  rule_mode: "balanced",
+  enabled_rules: RULE_PRESETS.balanced,
   custom_rules: [],
+  additional_rules: [],
   subscription_info: {
     enabled: true,
     expose_header: true,
@@ -607,9 +622,10 @@ const state = {
   config: null,
   activeWorkspace: "config",
   activeSourceMode: "rules",
-  ruleMode: "full",
-  enabledRules: new Set(RULE_PRESETS.full),
+  ruleMode: "balanced",
+  enabledRules: new Set(RULE_PRESETS.balanced),
   customRules: [],
+  additionalRules: [],
   externalConfig: { ...DEFAULT_RENDER.external_config },
   generatedUrl: "",
   workspaceId: "",
@@ -865,6 +881,9 @@ function bindEvents() {
     .getElementById("rule-subtab-custom")
     .addEventListener("click", () => switchRuleSubtab("custom"));
   document
+    .getElementById("additional-rules-input")
+    .addEventListener("input", updateAdditionalRulesFromInput);
+  document
     .getElementById("save-custom-rule-btn")
     .addEventListener("click", saveCustomRuleFromDialog);
   document
@@ -874,14 +893,20 @@ function bindEvents() {
     .getElementById("custom-rule-key")
     .addEventListener("input", renderCustomRulePreview);
   document
+    .getElementById("custom-rule-key")
+    .addEventListener("blur", normalizeCustomRuleKeyField);
+  document
     .getElementById("custom-rule-label")
-    .addEventListener("input", renderCustomRulePreview);
+    .addEventListener("input", handleCustomRuleLabelInput);
   document
     .getElementById("custom-rule-emoji")
     .addEventListener("input", renderCustomRulePreview);
   document
     .getElementById("custom-rule-target-mode")
     .addEventListener("change", () => {
+      if (getValue("custom-rule-target-mode") !== "existing_group") {
+        setValue("custom-rule-target-group", "");
+      }
       syncCustomRuleFormVisibility();
       renderCustomRulePreview();
     });
@@ -892,26 +917,35 @@ function bindEvents() {
     .getElementById("custom-rule-source-type")
     .addEventListener("change", () => {
       syncCustomRuleFormVisibility();
+      syncCustomRuleCompatibility();
       renderCustomRulePreview();
     });
   document
     .getElementById("custom-rule-behavior")
     .addEventListener("change", () => {
       syncCustomRuleFormVisibility();
+      syncCustomRuleCompatibility();
       renderCustomRulePreview();
     });
   document
     .getElementById("custom-rule-format")
     .addEventListener("change", () => {
       syncCustomRuleFormVisibility();
+      syncCustomRuleCompatibility();
       renderCustomRulePreview();
     });
   document
     .getElementById("custom-rule-url")
-    .addEventListener("input", renderCustomRulePreview);
+    .addEventListener("input", () => {
+      syncCustomRuleCompatibility();
+      renderCustomRulePreview();
+    });
   document
     .getElementById("custom-rule-path")
-    .addEventListener("input", renderCustomRulePreview);
+    .addEventListener("input", () => {
+      syncCustomRuleCompatibility();
+      renderCustomRulePreview();
+    });
   document
     .getElementById("custom-rule-interval")
     .addEventListener("input", renderCustomRulePreview);
@@ -926,7 +960,16 @@ function bindEvents() {
     .addEventListener("change", renderCustomRulePreview);
   document
     .getElementById("custom-rule-payload")
-    .addEventListener("input", renderCustomRulePreview);
+    .addEventListener("input", () => {
+      syncCustomRuleCompatibility();
+      renderCustomRulePreview();
+    });
+  document
+    .getElementById("normalize-custom-rule-payload-btn")
+    .addEventListener("click", normalizeCustomRulePayloadInput);
+  document
+    .getElementById("clear-custom-rule-payload-btn")
+    .addEventListener("click", clearCustomRulePayloadInput);
 
   document
     .getElementById("open-node-editor-btn")
@@ -1146,10 +1189,15 @@ function applyDefaultState() {
     DEFAULT_RENDER.name_options.source_prefix_mode,
   );
   setValue("rule-group-node-mode", DEFAULT_RENDER.group_options.rule_group_node_mode);
+  setChecked(
+    "opt-region-groups",
+    DEFAULT_RENDER.group_options.enable_region_groups,
+  );
   syncSourcePrefixModeControl();
   setDNSFormFromConfig(DEFAULT_RENDER);
   setValue("template-select", DEFAULT_RENDER.external_config.template_key);
   setValue("custom-template-url", "");
+  setValue("additional-rules-input", "");
   setValue("batch-import-textarea", "");
   setChecked("yaml-wrap-toggle", true);
   setValue("yaml-search", "");
@@ -1160,9 +1208,10 @@ function applyDefaultState() {
   setValue("node-page-size", "25");
   state.activeWorkspace = "config";
   state.activeSourceMode = "rules";
-  state.ruleMode = "full";
-  state.enabledRules = new Set(RULE_PRESETS.full);
+  state.ruleMode = DEFAULT_RENDER.rule_mode;
+  state.enabledRules = new Set(DEFAULT_RENDER.enabled_rules);
   state.customRules = [];
+  state.additionalRules = [];
   state.externalConfig = { ...DEFAULT_RENDER.external_config };
   state.generatedUrl = "";
   state.workspaceId = "";
@@ -1224,6 +1273,7 @@ function applyDefaultState() {
   renderConfigNodeSummary();
   renderDiagnostics();
   renderSessionBanner();
+  resetCustomRuleForm();
   switchWorkspace("config");
 }
 
@@ -1732,6 +1782,7 @@ function buildRestoredPublishedDraftPayload(
 ) {
   const now = new Date().toISOString();
   const draftConfig = sanitizeLocalDraftConfig(config);
+  const cleanedNodeState = pruneLocalDraftDeletedNodes(nodeState, draftConfig);
   draftConfig.client_type = getValue("client-type") || "mihomo";
   draftConfig.backend_url = normalizeBackendOrigin(
     getValue("backend-origin") || window.location.origin,
@@ -1747,8 +1798,8 @@ function buildRestoredPublishedDraftPayload(
     source_count: countDraftSources(draftConfig),
     config: draftConfig,
   };
-  if (nodeState) {
-    payload.node_state = nodeState;
+  if (cleanedNodeState) {
+    payload.node_state = cleanedNodeState;
   }
   const publishRef = draftPublishRefFromPublished(published);
   if (publishRef) {
@@ -1848,7 +1899,10 @@ async function persistLocalDraft(isUpdate, options = {}) {
   config.backend_url = normalizeBackendOrigin(
     getValue("backend-origin") || window.location.origin,
   );
-  const nodeState = await loadNodeStateDraft();
+  const nodeState = pruneLocalDraftDeletedNodes(
+    await loadNodeStateDraft(),
+    config,
+  );
   const payload = {
     version: 2,
     draft_id:
@@ -2483,6 +2537,7 @@ function normalizeStableRenderConfig(render) {
       : stableDNS,
     profile: stableProfile,
     sniffer: stableSniffer,
+    additional_rules: normalizeAdditionalRuleLines(render?.additional_rules),
   };
   delete next.geox_url;
   return next;
@@ -2542,10 +2597,48 @@ function sanitizeLocalDraftNodeState(nodeState) {
     deleted_nodes: Array.isArray(nodeState.deleted_nodes)
       ? [...nodeState.deleted_nodes]
       : [],
+    deleted_node_sources:
+      nodeState.deleted_node_sources &&
+      typeof nodeState.deleted_node_sources === "object"
+        ? deepClone(nodeState.deleted_node_sources)
+        : {},
     custom_nodes: Array.isArray(nodeState.custom_nodes)
       ? deepClone(nodeState.custom_nodes)
       : [],
   };
+  return sanitized;
+}
+
+function pruneLocalDraftDeletedNodes(nodeState, config) {
+  const sanitized = sanitizeLocalDraftNodeState(nodeState);
+  if (!sanitized) return null;
+  const activeSources = new Set(
+    (Array.isArray(config?.subscriptions) ? config.subscriptions : [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean),
+  );
+  const removedNodeIDs = new Set();
+  Object.entries(sanitized.deleted_node_sources).forEach(
+    ([nodeID, sourceIDs]) => {
+      const sources = Array.isArray(sourceIDs)
+        ? sourceIDs
+            .map((sourceID) => String(sourceID || "").trim())
+            .filter(Boolean)
+        : [];
+      if (
+        sources.length &&
+        !sources.some((sourceID) => activeSources.has(sourceID))
+      ) {
+        removedNodeIDs.add(nodeID);
+        delete sanitized.deleted_node_sources[nodeID];
+      }
+    },
+  );
+  if (removedNodeIDs.size) {
+    sanitized.deleted_nodes = sanitized.deleted_nodes.filter(
+      (nodeID) => !removedNodeIDs.has(nodeID),
+    );
+  }
   return sanitized;
 }
 
@@ -2614,7 +2707,10 @@ function fillFormFromConfig(config) {
   setValue("exclude-keywords", render.exclude_keywords || "");
 
   for (const option of OUTPUT_OPTIONS) {
-    setChecked(option.id, render[option.key] ?? option.default);
+    const value = option.groupOption
+      ? render.group_options?.[option.key]
+      : render[option.key];
+    setChecked(option.id, value ?? option.default);
   }
   const prefixMode = normalizeSourcePrefixMode(
     render.name_options?.source_prefix_mode ||
@@ -2638,15 +2734,16 @@ function fillFormFromConfig(config) {
     (render.source_mode || render.template_rule_mode) === "template"
       ? "template"
       : "rules";
-  state.ruleMode = render.rule_mode || "full";
+  state.ruleMode = render.rule_mode || DEFAULT_RENDER.rule_mode;
   state.enabledRules = new Set(
     Array.isArray(render.enabled_rules) && render.enabled_rules.length
       ? render.enabled_rules
-      : RULE_PRESETS.full,
+      : RULE_PRESETS[state.ruleMode] || RULE_PRESETS.custom,
   );
   state.customRules = Array.isArray(render.custom_rules)
     ? render.custom_rules
     : [];
+  state.additionalRules = normalizeAdditionalRuleLines(render.additional_rules);
   state.externalConfig = {
     ...DEFAULT_RENDER.external_config,
     ...(render.external_config || {}),
@@ -2673,6 +2770,7 @@ function fillFormFromConfig(config) {
       DEFAULT_RENDER.external_config.template_key,
   );
   setValue("custom-template-url", state.externalConfig.custom_url || "");
+  setValue("additional-rules-input", state.additionalRules.join("\n"));
   renderRulePresetControl();
   renderRuleChips();
   renderRuleSubtab();
@@ -2727,7 +2825,7 @@ function renderOutputTiles() {
           .join("")}
       </div>
       ${group.items.includes("source_prefix") ? renderSourcePrefixModeControl() : ""}
-      ${group.items.includes("node_list") ? renderRuleGroupNodeModeControl() : ""}
+      ${group.items.includes("enable_region_groups") ? renderRuleGroupNodeModeControl() : ""}
     `;
     grid.appendChild(card);
   });
@@ -2825,9 +2923,49 @@ function renderRuleSubtab() {
     .getElementById("rule-custom-panel")
     .classList.toggle("hidden", isBuiltin);
   if (!isBuiltin) {
+    syncCustomRuleFormVisibility();
+    renderAdditionalRules();
     renderCustomRuleList();
     renderCustomRulePreview();
   }
+}
+
+function renderAdditionalRules() {
+  const input = document.getElementById("additional-rules-input");
+  if (!input) return;
+  input.value = state.additionalRules.join("\n");
+}
+
+function updateAdditionalRulesFromInput() {
+  state.additionalRules = normalizeAdditionalRuleLines(
+    getValue("additional-rules-input"),
+  );
+  state.ruleMode = "custom";
+  renderRulePresetControl();
+  updateSummary();
+}
+
+function normalizeAdditionalRuleLines(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(/\r?\n/);
+  const rules = [];
+  const seen = new Set();
+  source.forEach((item) => {
+    const rule = normalizeAdditionalRuleLine(item);
+    if (!rule || seen.has(rule)) return;
+    seen.add(rule);
+    rules.push(rule);
+  });
+  return rules;
+}
+
+function normalizeAdditionalRuleLine(value) {
+  let line = String(value || "").trim();
+  if (!line || line.startsWith("#")) return "";
+  line = line.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
+  if (!line || line.startsWith("#")) return "";
+  const commentIndex = line.indexOf(" #");
+  if (commentIndex >= 0) line = line.slice(0, commentIndex).trim();
+  return line;
 }
 
 function createRuleChip(rule) {
@@ -2938,6 +3076,10 @@ function currentTemplateOption() {
   );
 }
 
+function templateUsesRegionGroups(item) {
+  return (item?.groupProfile || "").includes("地区");
+}
+
 function selectTemplate(templateKey) {
   const selected =
     TEMPLATE_OPTIONS.find((item) => item.key === templateKey) ||
@@ -2947,6 +3089,9 @@ function selectTemplate(templateKey) {
   if (selected.key !== "custom_url") {
     state.externalConfig.custom_url = "";
     setValue("custom-template-url", "");
+  }
+  if (templateUsesRegionGroups(selected)) {
+    setChecked("opt-region-groups", true);
   }
   setValue("template-select", selected.key);
   renderTemplateOptions();
@@ -3067,7 +3212,7 @@ function fillCustomRuleForm(index) {
   setValue("custom-rule-interval", rule.interval || 86400);
   setValue(
     "custom-rule-insert-position",
-    rule.insert_position || "before_match",
+    "priority",
   );
   setChecked("custom-rule-enabled", rule.enabled !== false);
   setChecked("custom-rule-no-resolve", Boolean(rule.no_resolve));
@@ -3076,6 +3221,7 @@ function fillCustomRuleForm(index) {
     Array.isArray(rule.payload) ? rule.payload.join("\n") : "",
   );
   syncCustomRuleFormVisibility();
+  syncCustomRuleCompatibility();
   renderCustomRulePreview();
 }
 
@@ -3092,7 +3238,7 @@ function resetCustomRuleForm() {
   setValue("custom-rule-url", "");
   setValue("custom-rule-path", "");
   setValue("custom-rule-interval", "86400");
-  setValue("custom-rule-insert-position", "before_match");
+  setValue("custom-rule-insert-position", "priority");
   setChecked("custom-rule-enabled", true);
   setChecked("custom-rule-no-resolve", false);
   setValue("custom-rule-payload", "");
@@ -3100,13 +3246,61 @@ function resetCustomRuleForm() {
   renderCustomRulePreview();
 }
 
+function handleCustomRuleLabelInput() {
+  const key = getValue("custom-rule-key").trim();
+  if (!key) {
+    const generated = customRuleKeyFromLabel(getValue("custom-rule-label"));
+    if (generated) setValue("custom-rule-key", generated);
+  }
+  renderCustomRulePreview();
+}
+
+function normalizeCustomRuleKeyField() {
+  const current = getValue("custom-rule-key");
+  const normalized = customRuleKeyFromLabel(current);
+  if (current && current !== normalized) {
+    setValue("custom-rule-key", normalized);
+  }
+  renderCustomRulePreview();
+}
+
+function customRuleKeyFromLabel(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+}
+
+function normalizeCustomRulePayloadInput() {
+  const analysis = analyzeCustomRulePayloadInput(
+    getValue("custom-rule-payload"),
+  );
+  setValue("custom-rule-payload", analysis.lines.join("\n"));
+  syncCustomRuleCompatibility();
+  renderCustomRulePreview();
+  const details = [];
+  if (analysis.repaired) details.push(`拆分 ${analysis.repaired} 处粘连`);
+  if (analysis.duplicates) details.push(`移除 ${analysis.duplicates} 条重复`);
+  showToast(
+    analysis.lines.length
+      ? `已整理 ${analysis.lines.length} 条规则${details.length ? `，${details.join("，")}` : ""}。`
+      : "没有可整理的有效规则。",
+    !analysis.lines.length,
+  );
+}
+
+function clearCustomRulePayloadInput() {
+  setValue("custom-rule-payload", "");
+  renderCustomRulePreview();
+}
+
 function renderCustomRulePreview() {
   const draft = buildCustomRuleDraft();
   const preview = document.getElementById("custom-rule-preview");
-  if (!draft.key && !draft.label && !draft.icon) {
-    preview.textContent = "未填写";
-    return;
-  }
   const missing = [];
   if (!draft.key) missing.push("缺少规则 Key");
   if (!draft.label) missing.push("缺少显示名称");
@@ -3118,6 +3312,14 @@ function renderCustomRulePreview() {
     missing.push("缺少内联规则内容");
   if (draft.format === "mrs" && draft.behavior === "classical")
     missing.push("mrs 不能搭配 classical");
+
+  renderCustomRuleEditorSummary(draft, missing);
+  renderCustomRulePayloadMeta(draft);
+
+  if (!draft.key && !draft.label && !draft.icon) {
+    preview.textContent = "未填写";
+    return;
+  }
 
   if (missing.length) {
     preview.textContent = missing.join("\n");
@@ -3157,6 +3359,86 @@ function renderCustomRulePreview() {
   preview.textContent = lines.join("\n");
 }
 
+function renderCustomRuleEditorSummary(draft, missing = []) {
+  const summary = document.getElementById("custom-rule-editor-summary");
+  if (!summary) return;
+  const editIndex = getValue("custom-rule-edit-index");
+  const mode = editIndex === "" ? "新建" : `编辑 #${Number.parseInt(editIndex, 10) + 1}`;
+  const status = missing.length
+    ? `待补全 ${missing.length} 项`
+    : draft.enabled
+      ? "启用"
+      : "停用";
+  const sourceLabel = customRuleSourceTypeLabel(draft.source_type);
+  const ruleCount =
+    draft.source_type === "inline"
+      ? `${draft.payload.length} 条`
+      : draft.source_type === "group_only"
+        ? "不生成"
+        : "-";
+  const items = [
+    ["状态", `${mode} · ${status}`],
+    ["目标", resolveCustomRulePreviewTarget(draft)],
+    ["来源", sourceLabel],
+    ["行为", draft.source_type === "group_only" ? "-" : draft.behavior],
+    ["规则", ruleCount],
+    [
+      "位置",
+      draft.source_type === "group_only"
+        ? "-"
+        : customRuleInsertPositionLabel(draft.insert_position),
+    ],
+  ];
+  summary.innerHTML = items
+    .map(
+      ([label, value]) =>
+        `<span class="custom-rule-summary-pill">${escapeHtml(label)}<strong>${escapeHtml(value)}</strong></span>`,
+    )
+    .join("");
+}
+
+function renderCustomRulePayloadMeta(draft) {
+  const meta = document.getElementById("custom-rule-payload-meta");
+  if (!meta) return;
+  if (draft.source_type !== "inline") {
+    meta.textContent = "";
+    return;
+  }
+  const analysis = analyzeCustomRulePayloadInput(
+    getValue("custom-rule-payload"),
+  );
+  const parts = [`${analysis.lines.length} 条有效规则`];
+  if (analysis.entered) parts.push(`${analysis.entered} 行输入`);
+  if (analysis.repaired) parts.push(`${analysis.repaired} 处粘连已拆分`);
+  if (analysis.ignored) parts.push(`${analysis.ignored} 行无效或注释`);
+  if (analysis.duplicates) parts.push(`${analysis.duplicates} 条重复`);
+  if (analysis.classical) parts.push("已识别 classical");
+  meta.textContent = parts.join(" · ");
+}
+
+function customRuleSourceTypeLabel(value) {
+  return (
+    {
+      inline: "内联",
+      http: "远程",
+      file: "本地",
+      group_only: "仅代理组",
+    }[value] || value || "-"
+  );
+}
+
+function customRuleInsertPositionLabel(value) {
+  return (
+    {
+      priority: "优先匹配",
+      before_match: "优先匹配",
+      after_adblock: "优先匹配",
+      before_domestic: "优先匹配",
+      before_non_cn: "优先匹配",
+    }[value] || "优先匹配"
+  );
+}
+
 function saveCustomRuleFromDialog() {
   const indexValue = getValue("custom-rule-edit-index");
   const draft = buildCustomRuleDraft();
@@ -3186,13 +3468,14 @@ function saveCustomRuleFromDialog() {
     return;
   }
 
-  const duplicate = [...BUILTIN_RULES, ...state.customRules].some(
-    (item, index) => {
-      if (indexValue !== "" && index === Number.parseInt(indexValue, 10))
-        return false;
-      return item.key === draft.key;
-    },
-  );
+  const editIndex =
+    indexValue === "" ? -1 : Number.parseInt(indexValue, 10);
+  const duplicateBuiltin = BUILTIN_RULES.some((item) => item.key === draft.key);
+  const duplicateCustom = state.customRules.some((item, index) => {
+    if (index === editIndex) return false;
+    return item.key === draft.key;
+  });
+  const duplicate = duplicateBuiltin || duplicateCustom;
   if (duplicate) {
     showToast("规则 key 已存在。", true);
     return;
@@ -3246,43 +3529,283 @@ function syncCustomRuleFormVisibility() {
   document
     .getElementById("custom-rule-payload-wrap")
     .classList.toggle("hidden", sourceType !== "inline");
+  document
+    .getElementById("custom-rule-behavior-wrap")
+    .classList.toggle("hidden", sourceType === "group_only");
+  document
+    .getElementById("custom-rule-format-wrap")
+    .classList.toggle("hidden", sourceType === "group_only");
+  document
+    .getElementById("custom-rule-insert-position-wrap")
+    .classList.toggle("hidden", sourceType === "group_only");
+  document
+    .getElementById("custom-rule-no-resolve-wrap")
+    .classList.toggle("hidden", sourceType === "group_only");
+}
+
+function syncCustomRuleCompatibility() {
+  const sourceType = getValue("custom-rule-source-type");
+  let behavior = getValue("custom-rule-behavior");
+  let format = getValue("custom-rule-format");
+  if (sourceType === "group_only") return;
+
+  const payload = normalizeCustomRulePayloadLines(
+    getValue("custom-rule-payload"),
+  );
+  const hasClassicalPayload =
+    sourceType === "inline" && hasClassicalCustomRulePayload(payload);
+
+  if (hasClassicalPayload && behavior !== "classical") {
+    behavior = "classical";
+    setValue("custom-rule-behavior", behavior);
+  }
+  if (!hasClassicalPayload && behavior === "classical" && format === "mrs") {
+    behavior = "domain";
+    setValue("custom-rule-behavior", behavior);
+  }
+  if (hasClassicalPayload && format === "mrs") {
+    format = "text";
+    setValue("custom-rule-format", format);
+  }
+  if (sourceType === "http") {
+    const remoteShape = normalizeRemoteRuleProviderShape(
+      behavior,
+      format,
+      getValue("custom-rule-url"),
+      getValue("custom-rule-path"),
+    );
+    if (remoteShape.behavior !== behavior) {
+      behavior = remoteShape.behavior;
+      setValue("custom-rule-behavior", behavior);
+    }
+    if (remoteShape.format !== format) {
+      format = remoteShape.format;
+      setValue("custom-rule-format", format);
+    }
+  }
 }
 
 function buildCustomRuleDraft() {
+  const sourceType = getValue("custom-rule-source-type");
+  const payload = normalizeCustomRulePayloadLines(getValue("custom-rule-payload"));
+  let behavior = getValue("custom-rule-behavior");
+  let format = getValue("custom-rule-format");
+  const targetMode = getValue("custom-rule-target-mode");
+  const targetGroup = targetMode === "existing_group"
+    ? normalizePolicyTargetAlias(getValue("custom-rule-target-group"))
+    : "";
+  if (sourceType === "inline" && hasClassicalCustomRulePayload(payload)) {
+    behavior = "classical";
+    if (format === "mrs") format = "text";
+  }
+  if (sourceType === "http") {
+    const remoteShape = normalizeRemoteRuleProviderShape(
+      behavior,
+      format,
+      getValue("custom-rule-url"),
+      getValue("custom-rule-path"),
+    );
+    behavior = remoteShape.behavior;
+    format = remoteShape.format;
+  }
   return {
     key: getValue("custom-rule-key").trim().toLowerCase(),
     label: getValue("custom-rule-label").trim(),
     icon: getValue("custom-rule-emoji").trim(),
     enabled: getChecked("custom-rule-enabled"),
-    target_mode: getValue("custom-rule-target-mode"),
-    target_group: getValue("custom-rule-target-group").trim(),
-    source_type: getValue("custom-rule-source-type"),
-    behavior: getValue("custom-rule-behavior"),
-    format: getValue("custom-rule-format"),
+    target_mode: targetMode,
+    target_group: targetGroup,
+    source_type: sourceType,
+    behavior,
+    format,
     url: getValue("custom-rule-url").trim(),
     path: getValue("custom-rule-path").trim(),
     interval: Number.parseInt(getValue("custom-rule-interval"), 10) || 86400,
-    payload: getValue("custom-rule-payload")
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean),
-    insert_position: getValue("custom-rule-insert-position"),
+    payload,
+    insert_position: "before_match",
     no_resolve: getChecked("custom-rule-no-resolve"),
   };
+}
+
+function normalizeCustomRulePayloadLines(value) {
+  return analyzeCustomRulePayloadInput(value).lines;
+}
+
+function normalizeCustomRulePayloadLine(value) {
+  let line = prepareCustomRulePayloadLine(value);
+  if (!line) return "";
+  const parts = line.split(",");
+  if (parts.length >= 3) {
+    let targetIndex = parts.length - 1;
+    if (parts[targetIndex].trim().toLowerCase() === "no-resolve" && parts.length >= 4) {
+      targetIndex -= 1;
+    }
+    if (isPolicyTargetAlias(parts[targetIndex])) {
+      parts.splice(targetIndex, 1);
+      line = parts.join(",");
+    }
+  }
+  return line;
+}
+
+function prepareCustomRulePayloadLine(value) {
+  let line = String(value || "").trim();
+  if (!line || line.startsWith("#")) return "";
+  line = line.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
+  if (!line || line.startsWith("#")) return "";
+  const commentIndex = line.indexOf(" #");
+  if (commentIndex >= 0) line = line.slice(0, commentIndex).trim();
+  return line;
+}
+
+const CUSTOM_RULE_PAYLOAD_PREFIXES = [
+  "PROCESS-PATH-REGEX,", "PROCESS-NAME-REGEX,", "DOMAIN-SUFFIX,",
+  "DOMAIN-KEYWORD,", "DOMAIN-WILDCARD,", "DOMAIN-REGEX,", "SRC-IP-CIDR,",
+  "SRC-IP-SUFFIX,", "SRC-IP-ASN,", "PROCESS-NAME,", "PROCESS-PATH,",
+  "IP-CIDR6,", "IP-CIDR,", "IP-SUFFIX,", "IP-ASN,", "SRC-GEOIP,",
+  "DST-PORT,", "SRC-PORT,", "RULE-SET,", "SUB-RULE,", "GEOSITE,",
+  "GEOIP,", "DOMAIN,", "IN-TYPE,", "IN-USER,", "IN-NAME,", "NETWORK,",
+  "UID,", "AND,", "OR,", "NOT,",
+];
+
+const CUSTOM_RULE_PAYLOAD_NO_SPLIT_PREFIXES = [
+  "DOMAIN-REGEX,", "PROCESS-PATH-REGEX,", "PROCESS-NAME-REGEX,",
+  "AND,", "OR,", "NOT,",
+];
+
+function splitConcatenatedCustomRulePayloadLine(value) {
+  const line = prepareCustomRulePayloadLine(value);
+  if (!line) return [];
+  const upper = line.toUpperCase();
+  if (CUSTOM_RULE_PAYLOAD_NO_SPLIT_PREFIXES.some((prefix) => upper.startsWith(prefix))) {
+    return [line];
+  }
+  const boundaries = [0];
+  for (let index = 1; index < line.length; index += 1) {
+    if (!/[A-Za-z0-9._/-]/.test(line[index - 1])) continue;
+    if (CUSTOM_RULE_PAYLOAD_PREFIXES.some((prefix) => upper.startsWith(prefix, index))) {
+      boundaries.push(index);
+    }
+  }
+  boundaries.push(line.length);
+  return boundaries
+    .slice(0, -1)
+    .map((start, index) => line.slice(start, boundaries[index + 1]).trim())
+    .filter(Boolean);
+}
+
+function analyzeCustomRulePayloadInput(value) {
+  const lines = [];
+  const seen = new Set();
+  let entered = 0;
+  let ignored = 0;
+  let duplicates = 0;
+  let repaired = 0;
+  String(value || "")
+    .split(/\r?\n/)
+    .forEach((item) => {
+      if (!String(item || "").trim()) return;
+      entered += 1;
+      const segments = splitConcatenatedCustomRulePayloadLine(item);
+      if (!segments.length) {
+        ignored += 1;
+        return;
+      }
+      if (segments.length > 1) repaired += segments.length - 1;
+      segments.forEach((segment) => {
+        const line = normalizeCustomRulePayloadLine(segment);
+        if (!line) {
+          ignored += 1;
+          return;
+        }
+        if (seen.has(line)) {
+          duplicates += 1;
+          return;
+        }
+        seen.add(line);
+        lines.push(line);
+      });
+    });
+  return {
+    entered,
+    ignored,
+    duplicates,
+    repaired,
+    lines,
+    classical: lines.filter((line) => isClassicalCustomRulePayloadLine(line)).length,
+  };
+}
+
+function hasClassicalCustomRulePayload(payload) {
+  return payload.some((line) => isClassicalCustomRulePayloadLine(line));
+}
+
+function isClassicalCustomRulePayloadLine(line) {
+  const parts = String(line || "").trim().split(",");
+  if (parts.length < 2) return false;
+  return new Set([
+    "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "DOMAIN-REGEX",
+    "GEOSITE", "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "GEOIP", "SRC-GEOIP",
+    "SRC-IP-ASN", "SRC-IP-CIDR", "SRC-IP-SUFFIX", "DST-PORT", "SRC-PORT",
+    "PROCESS-NAME", "PROCESS-PATH", "PROCESS-PATH-REGEX", "PROCESS-NAME-REGEX",
+    "IN-TYPE", "IN-USER", "IN-NAME", "NETWORK", "UID", "SUB-RULE", "RULE-SET", "AND", "OR", "NOT",
+  ]).has(parts[0].trim().toUpperCase());
 }
 
 function resolveCustomRulePreviewTarget(rule) {
   if (rule.target_mode === "direct") return "DIRECT";
   if (rule.target_mode === "reject") return "REJECT";
   if (rule.target_mode === "existing_group")
-    return rule.target_group || "节点选择";
+    return normalizePolicyTargetAlias(rule.target_group) || "节点选择";
   return `${rule.icon ? `${rule.icon} ` : ""}${rule.label || "未命名规则"}`.trim();
+}
+
+function normalizePolicyTargetAlias(value) {
+  const target = String(value || "").trim();
+  return target.toUpperCase() === "PROXY" ? "🚀 节点选择" : target;
+}
+
+function isPolicyTargetAlias(value) {
+  const target = String(value || "").trim();
+  return ["PROXY", "DIRECT", "REJECT", "🚀 节点选择", "⚡ 自动选择", "🐟 漏网之鱼"].includes(target);
 }
 
 function previewFormatExt(format) {
   if (format === "mrs") return "mrs";
   if (format === "text") return "txt";
   return "yaml";
+}
+
+function normalizeRemoteRuleProviderShape(behavior, format, url, path) {
+  let nextBehavior = String(behavior || "").trim().toLowerCase() || "domain";
+  let nextFormat =
+    String(format || "").trim().toLowerCase() ||
+    inferRuleProviderFormatFromSource(url, path) ||
+    "text";
+  if (isClassicalYAMLRuleProviderSource(url, path)) {
+    nextBehavior = "classical";
+    nextFormat = "yaml";
+  }
+  if (nextBehavior === "classical" && nextFormat === "mrs") {
+    nextFormat = "yaml";
+  }
+  return { behavior: nextBehavior, format: nextFormat };
+}
+
+function inferRuleProviderFormatFromSource(url, path) {
+  const source = String(path || url || "").trim().toLowerCase();
+  if (source.endsWith(".mrs")) return "mrs";
+  if (source.endsWith(".yaml") || source.endsWith(".yml")) return "yaml";
+  if (source.endsWith(".txt") || source.endsWith(".text")) return "text";
+  return "";
+}
+
+function isClassicalYAMLRuleProviderSource(url, path) {
+  const source = `${url || ""} ${path || ""}`.trim().toLowerCase();
+  return (
+    source.includes("/rule/clash/") ||
+    source.includes("blackmatrix7/ios_rule_script")
+  );
 }
 
 function sourceDomainFromUrl(rawUrl) {
@@ -4485,7 +5008,7 @@ function buildConfigFromForm(options = {}) {
     source_prefix: prefixMode !== "none",
     group_options: {
       ...(base.render?.group_options || DEFAULT_RENDER.group_options),
-      enable_region_groups: false,
+      enable_region_groups: getChecked("opt-region-groups"),
       rule_group_node_mode: ruleGroupNodeMode,
       include_real_nodes_in_rule_groups: ruleGroupNodeMode === "full",
       special_groups_use_compact: true,
@@ -4509,6 +5032,10 @@ function buildConfigFromForm(options = {}) {
     enabled_rules:
       !activeOnly || activeMode === "rules" ? Array.from(state.enabledRules) : [],
     custom_rules: !activeOnly || activeMode === "rules" ? state.customRules : [],
+    additional_rules:
+      !activeOnly || activeMode === "rules"
+        ? normalizeAdditionalRuleLines(getValue("additional-rules-input"))
+        : [],
   };
   base.render = normalizeStableRenderConfig(base.render);
 

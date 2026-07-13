@@ -295,13 +295,18 @@ func (s *Server) deleteWorkspace(id string) error {
 }
 
 func (s *Server) removeWorkspace(ref workspaceRef) error {
-	_ = os.Remove(ref.OutputPath)
-	_ = os.RemoveAll(ref.CacheDir)
+	var cleanupErrors []error
+	if err := os.Remove(ref.OutputPath); err != nil && !os.IsNotExist(err) {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove workspace output: %w", err))
+	}
+	if err := os.RemoveAll(ref.CacheDir); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove workspace cache: %w", err))
+	}
 	if err := os.RemoveAll(ref.Dir); err != nil {
-		return err
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove workspace data: %w", err))
 	}
 	s.forgetWorkspace(ref.Hash)
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 func (s *Server) forgetWorkspace(workspaceHash string) {
@@ -323,22 +328,26 @@ func (s *Server) cleanupExpiredWorkspaces() error {
 		}
 		return err
 	}
+	var cleanupErrors []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		ref, err := s.loadWorkspaceByHash(entry.Name())
 		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("load workspace %s: %w", entry.Name(), err))
 			continue
 		}
 		if s.workspaceHasPublishedRefreshBinding(ref) {
 			continue
 		}
 		if s.workspaceExpired(ref.Meta) {
-			_ = s.removeWorkspace(ref)
+			if err := s.removeWorkspace(ref); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove expired workspace %s: %w", entry.Name(), err))
+			}
 		}
 	}
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 func (s *Server) workspaceHasPublishedRefreshBinding(ref workspaceRef) bool {

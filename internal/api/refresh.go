@@ -348,8 +348,12 @@ func (s *Server) StartScheduler(stop <-chan struct{}) {
 				timer.Stop()
 				return
 			case <-timer.C:
-				_ = s.cleanupExpiredWorkspaces()
-				_ = s.cleanupStalePublished()
+				if err := s.cleanupExpiredWorkspaces(); err != nil {
+					s.appendLog("workspace cleanup failed: " + err.Error())
+				}
+				if err := s.cleanupStalePublished(); err != nil {
+					s.appendLog("published cleanup failed: " + err.Error())
+				}
 			}
 		}
 	}()

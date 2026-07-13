@@ -120,26 +120,35 @@ func ValidateMihomoConfig(cfg mihomoConfig) []ValidationWarning {
 				})
 				continue
 			}
-			if _, ok := providerNames[parts[1]]; !ok {
+			providerName := strings.TrimSpace(parts[1])
+			target := strings.TrimSpace(parts[2])
+			if _, ok := providerNames[providerName]; !ok {
 				warnings = append(warnings, ValidationWarning{
 					Code:    "missing_rule_provider_reference",
-					Message: fmt.Sprintf("rule %q references missing rule-provider %q", rule, parts[1]),
+					Message: fmt.Sprintf("rule %q references missing rule-provider %q", rule, providerName),
 				})
 			}
-			if _, ok := groupNames[parts[2]]; !ok {
+			if isBuiltinProxyReference(target) {
+				continue
+			}
+			if _, ok := groupNames[target]; !ok {
 				warnings = append(warnings, ValidationWarning{
 					Code:    "missing_rule_target",
-					Message: fmt.Sprintf("rule %q references unknown group %q", rule, parts[2]),
+					Message: fmt.Sprintf("rule %q references unknown group %q", rule, target),
 				})
 			}
 		case "MATCH":
 			matchIndex = index
 		default:
-			if len(parts) >= 3 && !isBuiltinProxyReference(parts[2]) {
-				if _, ok := groupNames[parts[2]]; !ok {
+			if len(parts) >= 3 {
+				target := strings.TrimSpace(parts[2])
+				if isBuiltinProxyReference(target) {
+					continue
+				}
+				if _, ok := groupNames[target]; !ok {
 					warnings = append(warnings, ValidationWarning{
 						Code:    "missing_rule_target",
-						Message: fmt.Sprintf("rule %q references unknown group %q", rule, parts[2]),
+						Message: fmt.Sprintf("rule %q references unknown group %q", rule, target),
 					})
 				}
 			}
@@ -269,7 +278,7 @@ func splitCSVRule(rule string) []string {
 }
 
 func isBuiltinProxyReference(value string) bool {
-	switch value {
+	switch strings.TrimSpace(value) {
 	case "DIRECT", "REJECT", "REJECT-DROP", "PASS":
 		return true
 	default:

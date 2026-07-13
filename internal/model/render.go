@@ -90,7 +90,7 @@ func DefaultRenderOptions() RenderOptions {
 			TemplateKey:   "none",
 			TemplateLabel: "不选择，由接口提供方提供",
 		},
-		RuleMode:         "custom",
+		RuleMode:         "balanced",
 		EnabledRules:     []string{},
 		CustomRules:      []CustomRule{},
 		SubscriptionInfo: DefaultSubscriptionInfoConfig(),

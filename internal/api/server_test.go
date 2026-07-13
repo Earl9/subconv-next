@@ -2983,6 +2983,9 @@ func TestNodeStateDraftAPI(t *testing.T) {
 		},
 		DisabledNodes: []string{"node-2"},
 		DeletedNodes:  []string{"node-3"},
+		DeletedNodeSources: map[string][]string{
+			"node-3": {"source-removed"},
+		},
 		CustomNodes: []model.NodeIR{
 			{
 				ID:     "custom-node-1",
@@ -3042,6 +3045,9 @@ func TestNodeStateDraftAPI(t *testing.T) {
 	}
 	if !containsString(getBody.State.DisabledNodes, "node-2") || !containsString(getBody.State.DeletedNodes, "node-3") {
 		t.Fatalf("state disabled/deleted = %#v/%#v", getBody.State.DisabledNodes, getBody.State.DeletedNodes)
+	}
+	if !containsString(getBody.State.DeletedNodeSources["node-3"], "source-removed") {
+		t.Fatalf("deleted node sources = %#v, want source-removed", getBody.State.DeletedNodeSources)
 	}
 	if len(getBody.State.CustomNodes) != 1 {
 		t.Fatalf("len(CustomNodes) = %d, want 1", len(getBody.State.CustomNodes))
@@ -3144,5 +3150,18 @@ func TestStyleCSSServed(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(".app-shell")) {
 		t.Fatalf("body = %q, want stylesheet content", rec.Body.String())
+	}
+}
+
+func TestDecodeJSONBodyRejectsOversizedTrailingWhitespace(t *testing.T) {
+	body := `{"value":"ok"}` + strings.Repeat(" ", (1<<20)+1)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	var payload struct {
+		Value string `json:"value"`
+	}
+
+	err := decodeJSONBody(req, &payload)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
+		t.Fatalf("decodeJSONBody() error = %v, want size limit error", err)
 	}
 }

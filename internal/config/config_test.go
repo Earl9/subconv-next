@@ -8,6 +8,19 @@ import (
 	"subconv-next/internal/model"
 )
 
+func TestNormalizeRuleModeDefaultsToBalanced(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.RuleMode = ""
+	if got := Normalize(cfg).Render.RuleMode; got != "balanced" {
+		t.Fatalf("empty rule mode normalized to %q, want balanced", got)
+	}
+
+	cfg.Render.RuleMode = "full"
+	if got := Normalize(cfg).Render.RuleMode; got != "full" {
+		t.Fatalf("explicit rule mode normalized to %q, want full", got)
+	}
+}
+
 func TestLoadJSONAndUCIParity(t *testing.T) {
 	jsonPath := filepath.Join("..", "..", "testdata", "config", "basic.json")
 	uciPath := filepath.Join("..", "..", "testdata", "config", "basic.uci")
@@ -85,7 +98,7 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 				CustomURL:     "",
 			},
 			TemplateRuleMode: "rules",
-			RuleMode:         "custom",
+			RuleMode:         "balanced",
 			EnabledRules:     []string{},
 			CustomRules:      []model.CustomRule{},
 			DNS: &model.DNSConfig{
@@ -398,6 +411,121 @@ func TestNormalizePreservesCustomDNS(t *testing.T) {
 	}
 	if got.Render.DNS.NameserverPolicy["geosite:cn,private"][0] != "https://dns.alidns.com/dns-query" {
 		t.Fatalf("NameserverPolicy = %#v, want custom policy", got.Render.DNS.NameserverPolicy)
+	}
+}
+
+func TestNormalizeMigratesLegacyCustomRulePriority(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.CustomRules = []model.CustomRule{
+		{
+			Key:            "direct-sites",
+			Label:          "Direct Sites",
+			Enabled:        true,
+			TargetMode:     "direct",
+			SourceType:     "inline",
+			Behavior:       "domain",
+			Format:         "text",
+			Payload:        []string{"DOMAIN-SUFFIX,example.com"},
+			InsertPosition: "priority",
+		},
+	}
+
+	got := Normalize(cfg)
+	if got.Render.CustomRules[0].InsertPosition != "before_match" {
+		t.Fatalf("InsertPosition = %q, want before_match", got.Render.CustomRules[0].InsertPosition)
+	}
+	if err := Validate(got); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestNormalizeRepairsConcatenatedCustomRulePayload(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.CustomRules = []model.CustomRule{
+		{
+			Key:        "downloads",
+			Label:      "Downloads",
+			Enabled:    true,
+			TargetMode: "direct",
+			SourceType: "inline",
+			Behavior:   "classical",
+			Format:     "text",
+			Payload: []string{
+				"DOMAIN-SUFFIX,windowsupdate.comDOMAIN-SUFFIX,7-zip.org",
+				"DOMAIN-SUFFIX,windowsupdate.com",
+				"DOMAIN-SUFFIX,7-zip.org",
+			},
+		},
+	}
+
+	got := Normalize(cfg)
+	want := []string{
+		"DOMAIN-SUFFIX,windowsupdate.com",
+		"DOMAIN-SUFFIX,7-zip.org",
+	}
+	if !reflect.DeepEqual(got.Render.CustomRules[0].Payload, want) {
+		t.Fatalf("Payload = %#v, want %#v", got.Render.CustomRules[0].Payload, want)
+	}
+	if err := Validate(got); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestNormalizeRepairsNewGroupWithStaleTarget(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.CustomRules = []model.CustomRule{
+		{
+			Key:         "download",
+			Label:       "download",
+			Icon:        "💾",
+			Enabled:     true,
+			TargetMode:  "new_group",
+			TargetGroup: "🚀 节点选择",
+			SourceType:  "inline",
+			Behavior:    "classical",
+			Format:      "text",
+			Payload:     []string{"DOMAIN-SUFFIX,example.com"},
+		},
+	}
+
+	got := Normalize(cfg)
+	rule := got.Render.CustomRules[0]
+	if rule.TargetMode != "new_group" {
+		t.Fatalf("TargetMode = %q, want new_group", rule.TargetMode)
+	}
+	if rule.TargetGroup != "💾 download" {
+		t.Fatalf("TargetGroup = %q, want rule display name", rule.TargetGroup)
+	}
+	if err := Validate(got); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestNormalizeDoesNotSplitNestedClassicalRule(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Render.CustomRules = []model.CustomRule{
+		{
+			Key:        "nested",
+			Label:      "Nested",
+			Enabled:    true,
+			TargetMode: "direct",
+			SourceType: "inline",
+			Behavior:   "classical",
+			Format:     "text",
+			Payload: []string{
+				"AND,((DOMAIN-SUFFIX,example.com),(NETWORK,TCP))",
+				"DOMAIN-REGEX,^fooDOMAIN-SUFFIX,bar$",
+			},
+		},
+	}
+
+	got := Normalize(cfg)
+	want := []string{
+		"AND,((DOMAIN-SUFFIX,example.com),(NETWORK,TCP))",
+		"DOMAIN-REGEX,^fooDOMAIN-SUFFIX,bar$",
+	}
+	if !reflect.DeepEqual(got.Render.CustomRules[0].Payload, want) {
+		t.Fatalf("Payload = %#v, want %#v", got.Render.CustomRules[0].Payload, want)
 	}
 }
 

@@ -29,6 +29,7 @@ type Source struct {
 	Enabled            bool
 	InsecureSkipVerify bool
 	AllowPrivateHosts  bool
+	CacheTTL           time.Duration
 }
 
 type FetchedSubscription struct {
@@ -109,6 +110,15 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 	currentURL, err := validateFetchURL(source.URL)
 	if err != nil {
 		return FetchedSubscription{}, nil, err
+	}
+	if source.CacheTTL > 0 {
+		if cached, cacheErr := f.readCache(source.URL); cacheErr == nil {
+			age := time.Since(cached.FetchedAt)
+			if age >= 0 && age < source.CacheTTL {
+				cached.FromCache = true
+				return cached, []string{fmt.Sprintf("using fresh cached content for %s", source.Name)}, nil
+			}
+		}
 	}
 
 	fetched, err := f.fetchNetwork(ctx, currentURL, source)
@@ -269,6 +279,16 @@ func (f *Fetcher) readCache(rawURL string) (FetchedSubscription, error) {
 	var meta CacheMeta
 	if err := json.Unmarshal(metaBytes, &meta); err != nil {
 		return FetchedSubscription{}, fmt.Errorf("decode cache meta: %w", err)
+	}
+	expectedHash := urlHash(rawURL)
+	if meta.URLHash != expectedHash || strings.TrimSpace(meta.OriginalURL) != strings.TrimSpace(rawURL) {
+		return FetchedSubscription{}, fmt.Errorf("cache metadata does not match source URL")
+	}
+	if meta.Size < 0 || meta.Size != len(body) || int64(len(body)) > f.opts.MaxBodyBytes {
+		return FetchedSubscription{}, fmt.Errorf("cache body size does not match metadata")
+	}
+	if meta.FetchedAt.IsZero() {
+		return FetchedSubscription{}, fmt.Errorf("cache metadata is missing fetch time")
 	}
 
 	return FetchedSubscription{

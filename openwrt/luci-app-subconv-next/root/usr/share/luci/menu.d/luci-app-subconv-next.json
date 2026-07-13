@@ -3,8 +3,51 @@
 		"title": "SubConv Next",
 		"order": 60,
 		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-subconv-next" ]
+		}
+	},
+	"admin/services/subconv-next/overview": {
+		"title": "概览",
+		"order": 10,
+		"action": {
 			"type": "view",
-			"path": "subconv-next/index"
+			"path": "subconv-next/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-subconv-next" ]
+		}
+	},
+	"admin/services/subconv-next/settings": {
+		"title": "设置",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "subconv-next/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-subconv-next" ]
+		}
+	},
+	"admin/services/subconv-next/backup": {
+		"title": "备份与恢复",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "subconv-next/backup"
+		},
+		"depends": {
+			"acl": [ "luci-app-subconv-next" ]
+		}
+	},
+	"admin/services/subconv-next/logs": {
+		"title": "日志",
+		"order": 40,
+		"action": {
+			"type": "view",
+			"path": "subconv-next/logs"
 		},
 		"depends": {
 			"acl": [ "luci-app-subconv-next" ]

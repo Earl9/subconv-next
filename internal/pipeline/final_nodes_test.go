@@ -166,11 +166,12 @@ func TestValidateOutputNoLeakRejectsUnsupportedBuiltinReference(t *testing.T) {
 proxies:
   - {name: "US Node", type: ss, server: us.example.com, port: 443, cipher: aes-256-gcm, password: p}
 proxy-groups:
-  - {name: "🚀 节点选择", type: select, proxies: ["US Node", REJECT-DROP]}
+  - {name: "🚀 节点选择", type: select, proxies: ["⚡ 自动选择", DIRECT, REJECT, "US Node", UNKNOWN-POLICY]}
+  - {name: "⚡ 自动选择", type: url-test, proxies: ["US Node"], url: "https://www.gstatic.com/generate_204", interval: 300}
 rules:
   - MATCH,🚀 节点选择
 `)
-	if err := ValidateOutputNoLeak(yamlBytes, finalSet, model.AuditReport{}, renderer.OptionsFromConfig(cfg)); err == nil || !strings.Contains(err.Error(), "REJECT-DROP") {
+	if err := ValidateOutputNoLeak(yamlBytes, finalSet, model.AuditReport{}, renderer.OptionsFromConfig(cfg)); err == nil || !strings.Contains(err.Error(), "UNKNOWN-POLICY") {
 		t.Fatalf("ValidateOutputNoLeak() error = %v, want unsupported builtin reference failure", err)
 	}
 }
@@ -273,8 +274,32 @@ proxy-groups:
 rules:
   - MATCH,🚀 节点选择
 `)
-	if err := ValidateOutputNoLeak(yamlBytes, finalSet, model.AuditReport{}, renderer.OptionsFromConfig(cfg)); err == nil || !strings.Contains(err.Error(), "region proxy-group") {
-		t.Fatalf("ValidateOutputNoLeak() error = %v, want region proxy-group failure", err)
+	if err := ValidateOutputNoLeak(yamlBytes, finalSet, model.AuditReport{}, renderer.OptionsFromConfig(cfg)); err == nil || !strings.Contains(err.Error(), "must not reference policy group") {
+		t.Fatalf("ValidateOutputNoLeak() error = %v, want region policy reference failure", err)
+	}
+}
+
+func TestValidateOutputNoLeakAllowsRegionGroups(t *testing.T) {
+	cfg := model.DefaultConfig()
+	hkNode := model.NormalizeNode(model.NodeIR{Name: "HK Node", Type: model.ProtocolSS, Server: "hk.example.com", Port: 443, Auth: model.Auth{Password: "p"}, Raw: map[string]interface{}{"method": "aes-256-gcm"}})
+	jpNode := model.NormalizeNode(model.NodeIR{Name: "JP Node", Type: model.ProtocolSS, Server: "jp.example.com", Port: 443, Auth: model.Auth{Password: "p"}, Raw: map[string]interface{}{"method": "aes-256-gcm"}})
+	finalSet := FinalNodeSet{Nodes: []model.NodeIR{hkNode, jpNode}}
+	yamlBytes := []byte(`
+proxies:
+  - {name: "HK Node", type: ss, server: hk.example.com, port: 443, cipher: aes-256-gcm, password: p}
+  - {name: "JP Node", type: ss, server: jp.example.com, port: 443, cipher: aes-256-gcm, password: p}
+proxy-groups:
+  - {name: "🚀 节点选择", type: select, proxies: ["⚡ 自动选择", DIRECT, REJECT, "🇭🇰 香港", "🇯🇵 日本", "HK Node", "JP Node"]}
+  - {name: "⚡ 自动选择", type: url-test, proxies: ["HK Node", "JP Node"]}
+  - {name: "⚡ 香港自动", type: url-test, proxies: ["HK Node"]}
+  - {name: "🇭🇰 香港", type: select, proxies: ["⚡ 香港自动", DIRECT, "HK Node"]}
+  - {name: "⚡ 日本自动", type: url-test, proxies: ["JP Node"]}
+  - {name: "🇯🇵 日本", type: select, proxies: ["⚡ 日本自动", DIRECT, "JP Node"]}
+rules:
+  - MATCH,🚀 节点选择
+`)
+	if err := ValidateOutputNoLeak(yamlBytes, finalSet, model.AuditReport{}, renderer.OptionsFromConfig(cfg)); err != nil {
+		t.Fatalf("ValidateOutputNoLeak() error = %v, want nil", err)
 	}
 }
 

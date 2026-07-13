@@ -518,6 +518,328 @@ func TestRenderRulesLinePerItem(t *testing.T) {
 	if !strings.Contains(text, "\nrules:\n  - ") || !strings.Contains(text, "MATCH,🐟 漏网之鱼") {
 		t.Fatalf("rules should remain one line per item:\n%s", text)
 	}
+	assertRulesUseDoubleQuotes(t, text)
+}
+
+func assertRulesUseDoubleQuotes(t *testing.T, rendered string) {
+	t.Helper()
+	rulesIndex := strings.Index(rendered, "\nrules:\n")
+	if rulesIndex < 0 {
+		t.Fatalf("rendered output has no rules section:\n%s", rendered)
+	}
+	for _, line := range strings.Split(rendered[rulesIndex+len("\nrules:\n"):], "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, `  - "`) || !strings.HasSuffix(line, `"`) {
+			t.Fatalf("rule line is not consistently double quoted: %q", line)
+		}
+	}
+}
+
+func TestRenderRulesAlwaysUseDoubleQuotes(t *testing.T) {
+	rendered, err := renderConfig(mihomoConfig{Rules: []string{
+		"RULE-SET,adobe,REJECT",
+		"DOMAIN-KEYWORD,tracker,DIRECT",
+		"RULE-SET,microsoft,Ⓜ️ 微软服务",
+		"RULE-SET,a,😶‍🌫️ 18+",
+	}})
+	if err != nil {
+		t.Fatalf("renderConfig() error = %v", err)
+	}
+
+	text := string(rendered)
+	for _, rule := range []string{
+		"RULE-SET,adobe,REJECT",
+		"DOMAIN-KEYWORD,tracker,DIRECT",
+		"RULE-SET,microsoft,Ⓜ️ 微软服务",
+		"RULE-SET,a,😶‍🌫️ 18+",
+	} {
+		if !strings.Contains(text, `  - "`+rule+`"`) {
+			t.Fatalf("rendered output does not double quote %q:\n%s", rule, text)
+		}
+	}
+	assertRulesUseDoubleQuotes(t, text)
+}
+
+func TestRenderAdditionalRulesNormalizesPastedList(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.AdditionalRules = []string{
+		"- DOMAIN-KEYWORD,tracker,PROXY",
+		"##- IP-CIDR,0.0.0.0/0,PROXY",
+		"DOMAIN-SUFFIX,39.la,DIRECT # direct site",
+		"",
+		"# Adobe block",
+		"- RULE-SET,Adobe,REJECT",
+	}
+	opts.RuleProviders = []model.RuleProviderConfig{
+		{Name: "Adobe", Type: "http", Behavior: "classical", URL: "https://example.com/adobe.yaml"},
+	}
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	for _, want := range []string{
+		"DOMAIN-KEYWORD,tracker,🚀 节点选择",
+		"DOMAIN-SUFFIX,39.la,DIRECT",
+		"RULE-SET,Adobe,REJECT",
+	} {
+		if !containsString(cfg.Rules, want) {
+			t.Fatalf("rules = %#v, want %q", cfg.Rules, want)
+		}
+	}
+	for _, rule := range cfg.Rules {
+		if strings.Contains(rule, "0.0.0.0/0") {
+			t.Fatalf("disabled rule leaked into output: %#v", cfg.Rules)
+		}
+	}
+	if got := cfg.Rules[len(cfg.Rules)-1]; !strings.HasPrefix(got, "MATCH,") {
+		t.Fatalf("last rule = %q, want MATCH", got)
+	}
+}
+
+func TestCustomRulesPrecedeBuiltInRules(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"adblock", "domestic", "non_cn", "priority_one", "priority_two"}
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "priority_one",
+			Label:          "Priority One",
+			Enabled:        true,
+			TargetMode:     "direct",
+			SourceType:     "inline",
+			Behavior:       "domain",
+			Format:         "text",
+			Payload:        []string{"priority-one.example"},
+			InsertPosition: "before_match",
+		},
+		{
+			Key:            "priority_two",
+			Label:          "Priority Two",
+			Enabled:        true,
+			TargetMode:     "reject",
+			SourceType:     "inline",
+			Behavior:       "domain",
+			Format:         "text",
+			Payload:        []string{"priority-two.example"},
+			InsertPosition: "after_adblock",
+		},
+	}
+	opts.AdditionalRules = []string{"DOMAIN-SUFFIX,additional.example,DIRECT"}
+	opts.RuleProviders = []model.RuleProviderConfig{
+		{
+			Name:     "legacy_custom",
+			Type:     "http",
+			Behavior: "domain",
+			URL:      "https://example.com/legacy-custom.yaml",
+			Policy:   "DIRECT",
+			Enabled:  true,
+		},
+	}
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	wantPrefix := []string{
+		"RULE-SET,priority_one,DIRECT",
+		"RULE-SET,priority_two,REJECT",
+		"DOMAIN-SUFFIX,additional.example,DIRECT",
+		"RULE-SET,legacy_custom,DIRECT",
+	}
+	if len(cfg.Rules) < len(wantPrefix)+1 {
+		t.Fatalf("rules = %#v, want priority rules and built-in rules", cfg.Rules)
+	}
+	for index, want := range wantPrefix {
+		if cfg.Rules[index] != want {
+			t.Fatalf("rules[%d] = %q, want %q; rules = %#v", index, cfg.Rules[index], want, cfg.Rules)
+		}
+	}
+	if got := cfg.Rules[len(wantPrefix)]; got != "RULE-SET,category-ads-all,🛑 广告拦截" {
+		t.Fatalf("first built-in rule = %q, want adblock after custom rules", got)
+	}
+	if got := cfg.Rules[len(cfg.Rules)-1]; !strings.HasPrefix(got, "MATCH,") {
+		t.Fatalf("last rule = %q, want MATCH", got)
+	}
+}
+
+func TestRenderAdditionalRuleSetBuiltinTargets(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.AdditionalRules = []string{
+		"RULE-SET,adobe,DIRECT",
+		"RULE-SET,adobe,REJECT",
+	}
+	opts.RuleProviders = []model.RuleProviderConfig{
+		{Name: "adobe", Type: "http", Behavior: "classical", URL: "https://example.com/adobe.yaml", Policy: "DIRECT", Enabled: true},
+	}
+
+	got := string(mustRender(t, nodes, opts))
+	for _, want := range []string{
+		"RULE-SET,adobe,DIRECT",
+		"RULE-SET,adobe,REJECT",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderCustomRuleExistingProxyAlias(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "one",
+			Label:          "One",
+			Enabled:        true,
+			TargetMode:     "existing_group",
+			TargetGroup:    "PROXY",
+			SourceType:     "inline",
+			Behavior:       "domain",
+			Format:         "text",
+			Payload:        []string{"DOMAIN-SUFFIX,javdb.com,PROXY"},
+			InsertPosition: "before_match",
+		},
+	}
+	opts.EnabledRules = append(opts.EnabledRules, "one")
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	if !containsString(cfg.Rules, "RULE-SET,one,One") {
+		t.Fatalf("rules = %#v, want custom rule target group", cfg.Rules)
+	}
+	if containsString(cfg.Rules, "RULE-SET,one,PROXY") || containsString(cfg.Rules, "RULE-SET,one,🚀 节点选择") {
+		t.Fatalf("rules = %#v, raw PROXY/main target should not remain", cfg.Rules)
+	}
+	if group := findProxyGroup(t, cfg.ProxyGroups, "One"); group.Name != "One" || len(group.Proxies) == 0 {
+		t.Fatalf("proxy-groups = %#v, want custom rule group One", cfg.ProxyGroups)
+	}
+	provider, ok := cfg.RuleProviders["one"]
+	if !ok {
+		t.Fatalf("missing custom rule provider: %#v", cfg.RuleProviders)
+	}
+	if !containsString(provider.Payload, "DOMAIN-SUFFIX,javdb.com") || containsString(provider.Payload, "DOMAIN-SUFFIX,javdb.com,PROXY") {
+		t.Fatalf("provider payload = %#v, want policy target stripped", provider.Payload)
+	}
+	if provider.Behavior != "classical" {
+		t.Fatalf("provider behavior = %q, want classical for full rule payload", provider.Behavior)
+	}
+	if provider.Format != "text" {
+		t.Fatalf("provider format = %q, want text", provider.Format)
+	}
+}
+
+func TestGeneratedCustomRuleGroupsIncludeRegionGroups(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "media",
+			Label:          "Media",
+			Enabled:        true,
+			TargetMode:     "new_group",
+			SourceType:     "inline",
+			Behavior:       "classical",
+			Format:         "text",
+			Payload:        []string{"DOMAIN-SUFFIX,example.com"},
+			InsertPosition: "before_match",
+		},
+	}
+	opts.EnabledRules = append(opts.EnabledRules, "media")
+	opts.GroupOptions = model.NormalizeGroupOptions(model.GroupOptions{
+		EnableRegionGroups: true,
+		RuleGroupNodeMode:  "full",
+	})
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	japan := findProxyGroup(t, cfg.ProxyGroups, "🇯🇵 日本")
+	us := findProxyGroup(t, cfg.ProxyGroups, "🇺🇸 美国")
+	if japan.Type != "select" || us.Type != "select" {
+		t.Fatalf("region groups = %#v %#v, want select", japan, us)
+	}
+	assertEqualProxies(t, japan.Proxies, []string{"⚡ 日本自动", "DIRECT", "JP Node"})
+	assertEqualProxies(t, us.Proxies, []string{"⚡ 美国自动", "DIRECT", "US Node"})
+
+	japanAuto := findProxyGroup(t, cfg.ProxyGroups, "⚡ 日本自动")
+	usAuto := findProxyGroup(t, cfg.ProxyGroups, "⚡ 美国自动")
+	if japanAuto.Type != "url-test" || usAuto.Type != "url-test" {
+		t.Fatalf("region auto groups = %#v %#v, want url-test", japanAuto, usAuto)
+	}
+	assertEqualProxies(t, japanAuto.Proxies, []string{"JP Node"})
+	assertEqualProxies(t, usAuto.Proxies, []string{"US Node"})
+
+	custom := findProxyGroup(t, cfg.ProxyGroups, "Media")
+	for _, want := range []string{"🇯🇵 日本", "🇺🇸 美国", "JP Node", "US Node"} {
+		assertContainsProxy(t, custom.Proxies, want)
+	}
+	main := findProxyGroup(t, cfg.ProxyGroups, groupNodeSelect)
+	for _, want := range []string{"🇯🇵 日本", "🇺🇸 美国"} {
+		assertContainsProxy(t, main.Proxies, want)
+	}
+}
+
+func TestRenderNewCustomGroupDoesNotReuseReservedTargetName(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "download",
+			Label:          "download",
+			Icon:           "💾",
+			Enabled:        true,
+			TargetMode:     "new_group",
+			TargetGroup:    "💾 download",
+			SourceType:     "inline",
+			Behavior:       "classical",
+			Format:         "text",
+			Payload:        []string{"DOMAIN-SUFFIX,example.com"},
+			InsertPosition: "before_match",
+		},
+	}
+	opts.EnabledRules = append(opts.EnabledRules, "download")
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	if !containsString(cfg.Rules, "RULE-SET,download,💾 download") {
+		t.Fatalf("rules = %#v, want download rule to target its own group", cfg.Rules)
+	}
+	if containsString(cfg.Rules, "RULE-SET,download,🚀 节点选择 2") {
+		t.Fatalf("rules = %#v, stale reserved target name must not be reused", cfg.Rules)
+	}
+	findProxyGroup(t, cfg.ProxyGroups, "💾 download")
+}
+
+func TestRenderCustomHTTPRuleInfersClassicalYAMLShape(t *testing.T) {
+	nodes := []model.NodeIR{testSSNode("Test Node", "example.com")}
+	opts := standardRenderOptions()
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "adobe",
+			Label:          "Adobe",
+			Enabled:        true,
+			TargetMode:     "reject",
+			SourceType:     "http",
+			Behavior:       "domain",
+			Format:         "text",
+			URL:            "https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/Adobe/Adobe.yaml",
+			Interval:       86400,
+			InsertPosition: "before_match",
+		},
+	}
+	opts.RuleMode = "custom"
+	opts.EnabledRules = append(opts.EnabledRules, "adobe")
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	provider, ok := cfg.RuleProviders["adobe"]
+	if !ok {
+		t.Fatalf("missing adobe provider: %#v", cfg.RuleProviders)
+	}
+	if provider.Behavior != "classical" || provider.Format != "yaml" || provider.Path != "./ruleset/adobe.yaml" {
+		t.Fatalf("adobe provider = %#v, want classical yaml", provider)
+	}
+	if !containsString(cfg.Rules, "RULE-SET,adobe,REJECT") {
+		t.Fatalf("rules = %#v, want adobe reject rule", cfg.Rules)
+	}
 }
 
 func TestRenderTemplateModeAppliesPreset(t *testing.T) {
@@ -601,7 +923,7 @@ func TestNoRegionGroupsGenerated(t *testing.T) {
 	opts.EnabledRules = []string{"ai"}
 
 	cfg := mustRenderConfig(t, nodes, opts)
-	regionGroupNames := []string{"🇭🇰 香港", "🇯🇵 日本", "🇺🇸 美国", "🇸🇬 新加坡", "🇹🇼 台湾", "🇬🇧 英国", "🇩🇪 德国", "🇳🇱 荷兰", "🇷🇺 俄罗斯", "🇰🇷 韩国"}
+	regionGroupNames := []string{"🇭🇰 香港", "🇯🇵 日本", "🇺🇸 美国", "🇸🇬 新加坡", "🇹🇼 台湾", "🇬🇧 英国", "🇩🇪 德国", "🇳🇱 荷兰", "🇷🇺 俄罗斯", "🇰🇷 韩国", "⚡ 香港自动", "⚡ 日本自动", "⚡ 美国自动", "⚡ 新加坡自动", "⚡ 台湾自动", "⚡ 英国自动", "⚡ 德国自动", "⚡ 荷兰自动", "⚡ 俄罗斯自动", "⚡ 韩国自动"}
 	for _, name := range regionGroupNames {
 		assertNoProxyGroup(t, cfg.ProxyGroups, name)
 	}
@@ -620,6 +942,46 @@ func TestNoRegionGroupsGenerated(t *testing.T) {
 	ai := findProxyGroup(t, cfg.ProxyGroups, "🤖 AI 服务")
 	for _, name := range []string{groupNodeSelect, groupAutoSelect, "DIRECT", "REJECT"} {
 		assertContainsProxy(t, ai.Proxies, name)
+	}
+}
+
+func TestRegionGroupsRespectEnableSwitch(t *testing.T) {
+	nodes := model.NormalizeNodes([]model.NodeIR{
+		testSSNode("JP Node", "jp.example.com"),
+		testSSNode("US Node", "us.example.com"),
+	})
+	opts := standardRenderOptions()
+	opts.CustomRules = []model.CustomRule{
+		{
+			Key:            "media",
+			Label:          "Media",
+			Enabled:        true,
+			TargetMode:     "new_group",
+			SourceType:     "inline",
+			Behavior:       "classical",
+			Format:         "text",
+			Payload:        []string{"DOMAIN-SUFFIX,example.com"},
+			InsertPosition: "before_match",
+		},
+	}
+	opts.EnabledRules = append(opts.EnabledRules, "media")
+	opts.GroupProxyMode = "regional"
+	opts.GroupOptions = model.NormalizeGroupOptions(model.GroupOptions{
+		EnableRegionGroups: false,
+		RuleGroupNodeMode:  "full",
+	})
+
+	cfg := mustRenderConfig(t, nodes, opts)
+	for _, name := range []string{"🇯🇵 日本", "🇺🇸 美国", "⚡ 日本自动", "⚡ 美国自动"} {
+		assertNoProxyGroup(t, cfg.ProxyGroups, name)
+	}
+
+	custom := findProxyGroup(t, cfg.ProxyGroups, "Media")
+	for _, forbidden := range []string{"🇯🇵 日本", "🇺🇸 美国", "⚡ 日本自动", "⚡ 美国自动"} {
+		assertNotContainsProxy(t, custom.Proxies, forbidden)
+	}
+	for _, want := range []string{"JP Node", "US Node"} {
+		assertContainsProxy(t, custom.Proxies, want)
 	}
 }
 
@@ -680,7 +1042,7 @@ func TestSpecialRuleGroupsRemainCompactInFullMode(t *testing.T) {
 	assertEqualProxies(t, findProxyGroup(t, cfg.ProxyGroups, "🔒 国内服务").Proxies, []string{"DIRECT", "REJECT", groupNodeSelect, groupAutoSelect})
 }
 
-func TestFinalYAMLSerializationSanitizesRegionGroups(t *testing.T) {
+func TestFinalYAMLSerializationPreservesRegionGroups(t *testing.T) {
 	cfg := mihomoConfig{
 		Proxies: []mihomoProxy{
 			{Name: "HK Node", Type: "ss", Server: "hk.example.com", Port: 443},
@@ -698,7 +1060,11 @@ func TestFinalYAMLSerializationSanitizesRegionGroups(t *testing.T) {
 		Rules: []string{"MATCH," + groupNodeSelect},
 	}
 
-	yamlText := string(renderConfig(cfg))
+	rendered, err := renderConfig(cfg)
+	if err != nil {
+		t.Fatalf("renderConfig() error = %v", err)
+	}
+	yamlText := string(rendered)
 	var out struct {
 		ProxyGroups []mihomoProxyGroup `yaml:"proxy-groups"`
 	}
@@ -706,17 +1072,17 @@ func TestFinalYAMLSerializationSanitizesRegionGroups(t *testing.T) {
 		t.Fatalf("yaml.Unmarshal() error = %v\n%s", err, yamlText)
 	}
 
-	assertNoProxyGroup(t, out.ProxyGroups, "🇭🇰 香港")
-	assertNoProxyGroup(t, out.ProxyGroups, "🇯🇵 日本")
-	assertNoProxyGroup(t, out.ProxyGroups, "⚡ 香港自动")
-	assertNoProxyGroup(t, out.ProxyGroups, "⚡ 日本自动")
+	findProxyGroup(t, out.ProxyGroups, "🇭🇰 香港")
+	findProxyGroup(t, out.ProxyGroups, "🇯🇵 日本")
 
 	globalAuto := findProxyGroup(t, out.ProxyGroups, groupAutoSelect)
 	assertEqualProxies(t, globalAuto.Proxies, []string{"HK Node"})
+	hkAuto := findProxyGroup(t, out.ProxyGroups, "⚡ 香港自动")
+	assertEqualProxies(t, hkAuto.Proxies, []string{"HK Node"})
 
 	main := findProxyGroup(t, out.ProxyGroups, groupNodeSelect)
-	for _, forbidden := range []string{"🇭🇰 香港", "🇯🇵 日本", "⚡ 香港自动", "⚡ 日本自动"} {
-		assertNotContainsProxy(t, main.Proxies, forbidden)
+	for _, want := range []string{"🇭🇰 香港", "🇯🇵 日本"} {
+		assertContainsProxy(t, main.Proxies, want)
 	}
 
 	ai := findProxyGroup(t, out.ProxyGroups, "🤖 AI 服务")

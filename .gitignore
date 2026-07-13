@@ -4,6 +4,8 @@ data/
 *.ipk
 *.apk
 checksums.txt
+HANDOFF.md
+/artifacts/
 subconv-next-linux-*
 .tmpinspect/
 !openwrt/

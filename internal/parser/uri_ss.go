@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"subconv-next/internal/model"
@@ -64,8 +63,4 @@ func parseSS(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	setRaw(&node, "method", method)
 
 	return node, nil
-}
-
-func escapeSSUserInfo(method, password string) string {
-	return url.UserPassword(method, password).String()
 }

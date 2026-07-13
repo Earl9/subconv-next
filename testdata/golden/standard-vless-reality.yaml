@@ -122,8 +122,8 @@ rules:
   - "RULE-SET,github,🐱 代码托管"
   - "RULE-SET,gitlab,🐱 代码托管"
   - "RULE-SET,atlassian,🐱 代码托管"
-  - RULE-SET,onedrive,☁️ 微软云盘
-  - RULE-SET,microsoft,Ⓜ️ 微软服务
+  - "RULE-SET,onedrive,☁️ 微软云盘"
+  - "RULE-SET,microsoft,Ⓜ️ 微软服务"
   - "RULE-SET,apple,🍏 苹果服务"
   - "RULE-SET,icloud,🍏 苹果服务"
   - "RULE-SET,netflix,🎬 奈飞"

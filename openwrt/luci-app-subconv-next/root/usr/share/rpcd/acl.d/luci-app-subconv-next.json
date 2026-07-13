@@ -1,17 +1,18 @@
 {
 	"luci-app-subconv-next": {
-		"description": "Grant access to SubConv Next configuration and service control",
+		"description": "Grant access to the SubConv Next service RPC",
 		"read": {
-			"uci": [ "subconv-next" ],
+			"cgi-io": [ "download" ],
+			"file": {
+				"/tmp/subconv-next-backup.*": [ "read" ]
+			},
 			"ubus": {
-				"luci": [ "setInitAction" ],
-				"service": [ "list" ]
+				"luci.subconv": [ "status", "get_config", "get_autostart", "logs_read", "logs_download", "backup_export" ]
 			}
 		},
 		"write": {
-			"uci": [ "subconv-next" ],
 			"ubus": {
-				"luci": [ "setInitAction" ]
+				"luci.subconv": [ "start", "stop", "restart", "set_config", "set_autostart", "logs_clear", "backup_export_cleanup", "backup_upload_begin", "backup_upload_chunk", "backup_check", "backup_restore", "backup_upload_cancel" ]
 			}
 		}
 	}

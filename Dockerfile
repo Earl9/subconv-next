@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.22 AS build
+FROM --platform=$BUILDPLATFORM golang:1.25.12-alpine AS build
 
 WORKDIR /src
 
@@ -16,11 +16,11 @@ COPY testdata ./testdata
 RUN go test ./...
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/subconv-next ./cmd/subconv-next
 
-FROM --platform=$BUILDPLATFORM alpine:3.20 AS runtime-deps
+FROM --platform=$BUILDPLATFORM alpine:3.23 AS runtime-deps
 
 RUN apk add --no-cache ca-certificates tzdata
 
-FROM alpine:3.20
+FROM alpine:3.23
 
 ARG VERSION=dev
 ARG SOURCE_REPOSITORY=""
