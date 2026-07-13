@@ -1,6 +1,6 @@
 # SubConv Next
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) | [简体中文](docs/README.zh-CN.md)
 
 SubConv Next is a self-hosted subscription converter for Mihomo / Clash Meta. A single Go binary provides the conversion API and Web UI for aggregating upstream subscriptions, editing nodes, managing routing rules, generating validated Mihomo YAML, and publishing private subscription links.
 

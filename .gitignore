@@ -5,6 +5,7 @@ data/
 *.apk
 checksums.txt
 HANDOFF.md
+IMPLEMENTATION*.md
 /artifacts/
 subconv-next-linux-*
 .tmpinspect/
