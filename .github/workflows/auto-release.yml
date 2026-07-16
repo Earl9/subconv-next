@@ -1,33 +1,23 @@
-name: auto-release
+name: release
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       release_version:
-        description: Optional version override, for example 1.0.4
-        required: false
-        default: ""
+        description: Release version, for example 1.0.7
+        required: true
         type: string
-      reset_v1_versions:
-        description: Delete v1.0.1+ releases/tags before publishing
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
   packages: write
 
 concurrency:
-  group: auto-release-main
+  group: release-main
   cancel-in-progress: true
 
 jobs:
   release:
-    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -43,42 +33,6 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Reset v1 release versions
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_v1_versions }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_tags="$(
-            gh release list --limit 100 --json tagName --jq '.[].tagName' |
-              sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1 &/p' |
-              awk '$1 > 0 {print $2}'
-          )"
-          git_tags="$(
-            git ls-remote --tags origin 'refs/tags/v1.0.*' |
-              awk '{print $2}' |
-              sed 's#refs/tags/##; s#\\^{}##' |
-              sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1 &/p' |
-              awk '$1 > 0 {print $2}'
-          )"
-          stale_tags="$(
-            printf '%s\n%s\n' "${release_tags}" "${git_tags}" |
-              sed '/^$/d' |
-              sort -u
-          )"
-          for tag in ${stale_tags}; do
-            if gh release view "${tag}" >/dev/null 2>&1; then
-              echo "Deleting stale failed release: ${tag}"
-              gh release delete "${tag}" --cleanup-tag --yes
-            fi
-            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-              echo "Deleting stale failed release tag: ${tag}"
-              git push origin ":refs/tags/${tag}"
-            fi
-            git tag -d "${tag}" >/dev/null 2>&1 || true
-          done
-
       - name: Compute version
         id: version
         env:
@@ -86,26 +40,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --force --tags origin 'refs/tags/v1.0.*:refs/tags/v1.0.*'
           requested_version="${RELEASE_VERSION#v}"
-          if [ -n "${requested_version}" ]; then
-            if [[ ! "${requested_version}" =~ ^1\.0\.[0-9]+$ ]]; then
-              echo "release_version must match 1.0.N (for example 1.0.4)" >&2
-              exit 1
-            fi
-            version="${requested_version}"
-          else
-            latest_patch="$(
-              git tag --list 'v1.0.*' |
-                sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1/p' |
-                sort -n |
-                tail -n 1
-            )"
-            if [ -z "${latest_patch}" ]; then
-              latest_patch=0
-            fi
-            version="1.0.$((latest_patch + 1))"
+          if [[ ! "${requested_version}" =~ ^1\.0\.[0-9]+$ ]]; then
+            echo "release_version must match 1.0.N (for example 1.0.7)" >&2
+            exit 1
           fi
+          version="${requested_version}"
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
