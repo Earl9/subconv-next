@@ -6,6 +6,11 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Optional version override, for example 1.0.4
+        required: false
+        default: ""
+        type: string
       reset_v1_versions:
         description: Delete v1.0.1+ releases/tags before publishing
         required: false
@@ -76,20 +81,31 @@ jobs:
 
       - name: Compute version
         id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch --force --tags origin 'refs/tags/v1.0.*:refs/tags/v1.0.*'
-          latest_patch="$(
-            git tag --list 'v1.0.*' |
-              sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1/p' |
-              sort -n |
-              tail -n 1
-          )"
-          if [ -z "${latest_patch}" ]; then
-            latest_patch=0
+          requested_version="${RELEASE_VERSION#v}"
+          if [ -n "${requested_version}" ]; then
+            if [[ ! "${requested_version}" =~ ^1\.0\.[0-9]+$ ]]; then
+              echo "release_version must match 1.0.N (for example 1.0.4)" >&2
+              exit 1
+            fi
+            version="${requested_version}"
+          else
+            latest_patch="$(
+              git tag --list 'v1.0.*' |
+                sed -n 's/^v1\.0\.\([0-9][0-9]*\)$/\1/p' |
+                sort -n |
+                tail -n 1
+            )"
+            if [ -z "${latest_patch}" ]; then
+              latest_patch=0
+            fi
+            version="1.0.$((latest_patch + 1))"
           fi
-          version="1.0.$((latest_patch + 1))"
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
