@@ -229,27 +229,23 @@ jobs:
           - \`checksums.txt\`
           EOF_NOTES
 
-      - name: Create Git tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists. Refusing to overwrite an existing release tag." >&2
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin "${TAG}"
-
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists. Refusing to overwrite it." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists. Refusing to overwrite it." >&2
+            exit 1
+          fi
           gh release create "${TAG}" \
+            --draft \
+            --target "${GITHUB_SHA}" \
             --title "SubConv Next ${TAG}" \
             --notes-file release-notes.md \
             dist/subconv-next-linux-amd64 \
@@ -259,3 +255,9 @@ jobs:
             dist/subconv-next-linux-mipsle-softfloat \
             "dist/subconv-next_${{ steps.version.outputs.version }}-1_aarch64_generic.ipk" \
             dist/checksums.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release edit "${TAG}" --draft=false --latest
