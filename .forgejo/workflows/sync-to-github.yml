@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: sync-main-to-github
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
 
       - name: Push main only to GitHub
         env:
@@ -31,7 +32,11 @@ jobs:
           git config user.name "forgejo-actions"
           git config user.email "forgejo-actions@example.local"
 
+          git fetch --force origin \
+            +refs/heads/main:refs/remotes/origin/main
+
           git remote remove github 2>/dev/null || true
           git remote add github "https://x-access-token:${GH_TOKEN}@github.com/Earl9/subconv-next.git"
 
-          git push github +HEAD:refs/heads/main
+          git push github \
+            +refs/remotes/origin/main:refs/heads/main
