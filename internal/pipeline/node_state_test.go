@@ -252,3 +252,42 @@ func TestApplyRenderPreferencesPreservesExplicitUDPFalse(t *testing.T) {
 		t.Fatalf("missing UDP should be filled from render default: %#v", got[1].UDP)
 	}
 }
+
+func TestApplyRenderPreferencesKeepsHysteriaPortSpecsWithoutSinglePort(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol model.Protocol
+		raw      map[string]interface{}
+	}{
+		{name: "hysteria ports", protocol: model.ProtocolHysteria, raw: map[string]interface{}{"ports": "20000-50000"}},
+		{name: "hysteria2 ports", protocol: model.ProtocolHysteria2, raw: map[string]interface{}{"ports": "20000-50000"}},
+		{name: "hysteria2 mport", protocol: model.ProtocolHysteria2, raw: map[string]interface{}{"mport": "20000-50000"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := model.NormalizeNode(model.NodeIR{
+				Name:   tt.name,
+				Type:   tt.protocol,
+				Server: "hy.example.com",
+				Auth:   model.Auth{Password: "secret"},
+				Raw:    tt.raw,
+			})
+
+			got := applyRenderPreferences([]model.NodeIR{node}, model.RenderConfig{FilterIllegal: true})
+			if len(got) != 1 {
+				t.Fatalf("applyRenderPreferences() len = %d, want port-hopping node preserved", len(got))
+			}
+		})
+	}
+
+	invalid := model.NormalizeNode(model.NodeIR{
+		Name:   "hysteria2 missing ports",
+		Type:   model.ProtocolHysteria2,
+		Server: "hy.example.com",
+		Auth:   model.Auth{Password: "secret"},
+	})
+	if got := applyRenderPreferences([]model.NodeIR{invalid}, model.RenderConfig{FilterIllegal: true}); len(got) != 0 {
+		t.Fatalf("applyRenderPreferences() = %#v, want node without port or port spec filtered", got)
+	}
+}

@@ -304,6 +304,8 @@ func parseMihomoProxy(proxy mihomoYAMLProxy, source model.SourceInfo) (model.Nod
 		}
 		setRaw(&node, "obfs", strings.TrimSpace(proxy.Obfs))
 		setRaw(&node, "obfsParam", strings.TrimSpace(proxy.ObfsParam))
+		setRaw(&node, "ports", mihomoOriginalFieldString(proxy.OriginalFields, "ports"))
+		setRaw(&node, "mport", mihomoOriginalFieldString(proxy.OriginalFields, "mport"))
 	case model.ProtocolHysteria2:
 		node.Auth.Password = strings.TrimSpace(proxy.Password)
 		node.TLS.Enabled = true
@@ -314,6 +316,8 @@ func parseMihomoProxy(proxy mihomoYAMLProxy, source model.SourceInfo) (model.Nod
 		}
 		setRaw(&node, "obfs", strings.TrimSpace(proxy.Obfs))
 		setRaw(&node, "obfsPassword", strings.TrimSpace(proxy.ObfsPassword))
+		setRaw(&node, "ports", mihomoOriginalFieldString(proxy.OriginalFields, "ports"))
+		setRaw(&node, "mport", mihomoOriginalFieldString(proxy.OriginalFields, "mport"))
 	case model.ProtocolTUIC:
 		node.Auth.UUID = strings.TrimSpace(proxy.UUID)
 		node.Auth.Password = strings.TrimSpace(proxy.Password)

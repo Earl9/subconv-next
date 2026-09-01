@@ -478,6 +478,11 @@ proxies:
 			t.Fatalf("hy2 original field %s = %q, want %q", key, got, want)
 		}
 	}
+	for key, want := range map[string]string{"ports": "20000-50000", "mport": "20000-50000"} {
+		if got := fmt.Sprint(hy2.Raw[key]); got != want {
+			t.Fatalf("hy2 normalized raw field %s = %q, want %q", key, got, want)
+		}
+	}
 }
 
 func TestParseContentMihomoYAMLFlexibleScalarTypes(t *testing.T) {

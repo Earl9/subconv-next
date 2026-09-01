@@ -400,7 +400,9 @@ func isRenderableNode(node model.NodeIR) bool {
 		return true
 	}
 	hasMieruPortRange := node.Type == model.ProtocolMieru && strings.TrimSpace(rawNodeString(node.Raw, "portRange")) != ""
-	if strings.TrimSpace(node.Server) == "" || (node.Port <= 0 && !hasMieruPortRange) {
+	hasHysteriaPortSpec := (node.Type == model.ProtocolHysteria || node.Type == model.ProtocolHysteria2) &&
+		(rawNodeString(node.Raw, "ports") != "" || rawNodeString(node.Raw, "mport") != "")
+	if strings.TrimSpace(node.Server) == "" || (node.Port <= 0 && !hasMieruPortRange && !hasHysteriaPortSpec) {
 		return false
 	}
 
