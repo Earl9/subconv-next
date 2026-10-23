@@ -165,6 +165,9 @@ const BUILTIN_RULES = [
   { key: "onedrive", label: "微软云盘" },
   { key: "microsoft", label: "微软服务" },
   { key: "ai", label: "AI 服务" },
+  { key: "ai_cn", label: "国内 AI 直连" },
+  { key: "ai_extended", label: "扩展 AI 服务" },
+  { key: "aethersailor_direct", label: "上游专项规则" },
   { key: "apple", label: "苹果服务" },
   { key: "bilibili", label: "哔哩哔哩" },
   { key: "social", label: "社交媒体" },
@@ -178,8 +181,20 @@ const BUILTIN_RULES = [
   { key: "finance", label: "金融服务" },
   { key: "telegram", label: "电报消息" },
   { key: "cloud", label: "云服务" },
+  { key: "communication", label: "即时通讯" },
+  { key: "containers", label: "容器服务" },
+  { key: "emby", label: "Emby" },
+  { key: "entertainment", label: "国外媒体" },
+  { key: "game_direct", label: "游戏 CDN 直连" },
+  { key: "game_platforms", label: "游戏平台" },
+  { key: "google_fcm", label: "谷歌 FCM" },
   { key: "github", label: "Github" },
+  { key: "gfw", label: "GFW 代理" },
   { key: "non_cn", label: "非中国" },
+  { key: "nonstandard_port", label: "非标端口" },
+  { key: "pt", label: "PT 站点" },
+  { key: "social_media", label: "海外社交媒体" },
+  { key: "speedtest", label: "测速工具" },
 ];
 
 const RULE_PRESETS = {
@@ -453,6 +468,9 @@ const RULE_ICON_MAP = {
   onedrive: "cloud",
   microsoft: "server",
   ai: "spark",
+  ai_cn: "spark",
+  ai_extended: "spark",
+  aethersailor_direct: "tag",
   apple: "target",
   bilibili: "film",
   social: "globe",
@@ -466,8 +484,20 @@ const RULE_ICON_MAP = {
   finance: "wallet",
   telegram: "send",
   cloud: "cloud",
+  communication: "send",
+  containers: "server",
+  emby: "film",
+  entertainment: "film",
+  game_direct: "gamepad",
+  game_platforms: "gamepad",
+  google_fcm: "send",
   github: "code",
+  gfw: "shield",
   non_cn: "globe",
+  nonstandard_port: "server",
+  pt: "tag",
+  social_media: "globe",
+  speedtest: "refresh",
 };
 
 function icon(name, className = "") {
@@ -659,6 +689,8 @@ const state = {
   resultNodeCount: 0,
   resultRuleCount: 0,
   yamlPreview: "",
+  yamlError: "",
+  yamlRequest: null,
   yamlSearch: "",
   yamlWrap: true,
   lastGeneratedAt: "",
@@ -683,8 +715,9 @@ const state = {
   nodeById: new Map(),
   selectedNodeCache: new Map(),
   nodeCacheStale: false,
-  nodeRequestSeq: 0,
+  nodeRequest: null,
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
+  nodeFetchNotices: [],
   nodeSourceOptions: [],
   selectedNodeIds: new Set(),
   activeNodeDeletePopoverId: "",
@@ -1303,6 +1336,7 @@ function switchWorkspace(workspace, options = {}) {
 }
 
 function applyDefaultState() {
+  cancelWorkspaceViewRequests();
   state.logsText = "";
   state.logsDisplay = "";
   setValue("client-type", "mihomo");
@@ -1355,6 +1389,10 @@ function applyDefaultState() {
   state.lastGeneratedAt = "";
   state.resultNodeCount = 0;
   state.resultRuleCount = 0;
+  state.yamlPreview = "";
+  state.yamlError = "";
+  state.yamlSearch = "";
+  state.yamlWrap = true;
   state.published = null;
   state.ruleChipsExpanded = false;
   state.activeRuleSubtab = "builtin";
@@ -1371,10 +1409,15 @@ function applyDefaultState() {
   state.manualNodesEnabled = true;
   state.allNodes = [];
   state.filteredNodes = [];
+  state.nodes = [];
+  state.nodeSummary = { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 };
+  state.nodeFetchNotices = [];
+  state.nodeSourceOptions = [];
+  state.editingNode = null;
+  state.nodeValidationWarnings = [];
   state.nodeById = new Map();
   state.selectedNodeCache = new Map();
   state.nodeCacheStale = false;
-  state.nodeRequestSeq = 0;
   state.subscriptionMeta = { aggregate: null, sources: [] };
   state.nodeFilters = {
     q: "",
@@ -1397,6 +1440,7 @@ function applyDefaultState() {
   renderResult();
   renderSubscriptionMeta();
   renderNodeEditor();
+  renderYamlViewer();
   renderConfigNodeSummary();
   renderDiagnostics();
   renderSessionBanner();
@@ -2240,6 +2284,8 @@ async function reloadWorkspaceData() {
   ]);
   updateSummary();
   renderDiagnostics();
+  if (state.activeWorkspace === "nodes") await loadNodes();
+  if (state.activeWorkspace === "yaml") await loadYamlPreview();
 }
 
 function loadLocalDraft(id = "") {
@@ -5033,6 +5079,9 @@ function renderConfigNodeSummary() {
 }
 
 function markNodeCacheStale() {
+  state.nodeRequest?.controller.abort();
+  state.nodeRequest = null;
+  setNodeLoading(false);
   state.nodeCacheStale = true;
   renderConfigNodeSummary();
 }
@@ -5386,6 +5435,8 @@ async function generateSubscription() {
       return;
     }
 
+    state.yamlRequest?.controller.abort();
+    state.yamlRequest = null;
     state.config = config;
     state.generatedUrl = refreshResult.subscription_url || buildSubscriptionURL();
     state.published = {
@@ -5965,14 +6016,48 @@ function focusGenerationError() {
 
 function previewYAMLWorkspace() {
   switchWorkspace("yaml");
-  loadYamlPreview();
 }
 
-async function loadNodes() {
-  const requestSeq = ++state.nodeRequestSeq;
-  const response = await fetchJSON(`/api/nodes?${buildNodeQueryParams()}`);
-  if (requestSeq !== state.nodeRequestSeq) return;
+function cancelWorkspaceViewRequests() {
+  state.nodeRequest?.controller.abort();
+  state.yamlRequest?.controller.abort();
+  state.nodeRequest = null;
+  state.yamlRequest = null;
+  setNodeLoading(false);
+}
+
+function setNodeLoading(loading) {
+  document.getElementById("refresh-nodes-btn").disabled = loading;
+  const body = document.getElementById("node-table-body");
+  body.setAttribute("aria-busy", String(loading));
+  if (loading && !state.nodes.length) {
+    body.innerHTML = '<tr><td colspan="7" class="table-empty">正在加载节点...</td></tr>';
+  }
+}
+
+function loadNodes() {
+  if (!state.workspaceId) return Promise.resolve();
+  const url = `/api/nodes?${buildNodeQueryParams()}`;
+  if (state.nodeRequest?.url === url && state.nodeRequest.workspaceId === state.workspaceId) {
+    return state.nodeRequest.promise;
+  }
+  state.nodeRequest?.controller.abort();
+  const request = { url, workspaceId: state.workspaceId, controller: new AbortController() };
+  state.nodeRequest = request;
+  setNodeLoading(true);
+  request.promise = loadNodePage(request).finally(() => {
+    if (state.nodeRequest !== request) return;
+    state.nodeRequest = null;
+    setNodeLoading(false);
+  });
+  return request.promise;
+}
+
+async function loadNodePage(request) {
+  const response = await fetchJSON(request.url, { signal: request.controller.signal });
+  if (state.nodeRequest !== request) return;
   if (!response?.ok) {
+    state.nodeCacheStale = true;
     document.getElementById("node-table-body").innerHTML =
       `<tr><td colspan="7" class="table-empty">${escapeHtml(readAPIError(response) || "加载节点失败。")}</td></tr>`;
     showToast(readAPIError(response) || "加载节点失败。", true);
@@ -5999,6 +6084,12 @@ async function loadNodes() {
     await loadNodes();
     return;
   }
+  state.nodeFetchNotices = [
+    ...(Array.isArray(response.warnings) ? response.warnings : []),
+    ...(Array.isArray(response.errors)
+      ? response.errors.map((item) => item?.message || String(item))
+      : []),
+  ].filter(Boolean);
   buildNodeIndexes();
   state.nodeCacheStale = false;
   state.nodeSourceOptions = Array.isArray(response.source_options)
@@ -6103,9 +6194,29 @@ function summarizeNodeItems(nodes) {
 
 function renderNodeEditor() {
   renderNodeStatsStrip();
+  renderNodeFetchNotices();
   renderNodeBulkActionBar();
   renderNodeTable();
   renderNodePagination();
+}
+
+function renderNodeFetchNotices() {
+  const box = document.getElementById("node-fetch-notices");
+  if (!box) return;
+  const notices = Array.isArray(state.nodeFetchNotices)
+    ? state.nodeFetchNotices.slice(0, 5)
+    : [];
+  box.classList.toggle("hidden", !notices.length);
+  if (!notices.length) {
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = notices
+    .map(
+      (notice) =>
+        `<div class="node-fetch-notice">${escapeHtml(String(notice))}</div>`,
+    )
+    .join("");
 }
 
 function renderNodeStatsStrip() {
@@ -7233,22 +7344,41 @@ function resetAddNodeForm() {
   setChecked("manual-node-udp", true);
 }
 
-async function loadYamlPreview() {
+function loadYamlPreview() {
+  if (!state.workspaceId) return Promise.resolve();
+  const url = withWorkspace("/api/preview-yaml");
+  if (state.yamlRequest?.url === url) return state.yamlRequest.promise;
+  state.yamlRequest?.controller.abort();
+  const request = { url, controller: new AbortController() };
+  state.yamlRequest = request;
+  state.yamlError = "";
+  renderYamlViewer();
+  request.promise = fetchYamlPreview(request).finally(() => {
+    if (state.yamlRequest !== request) return;
+    state.yamlRequest = null;
+    renderYamlViewer();
+  });
+  return request.promise;
+}
+
+async function fetchYamlPreview(request) {
   try {
-    const previewUrl = state.generatedUrl
-      ? `${state.generatedUrl}${state.generatedUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`
-      : withWorkspace(`/api/preview-yaml?_ts=${Date.now()}`);
-    const response = await fetch(previewUrl);
-    if (!response.ok) {
-      state.yamlPreview = `加载失败：HTTP ${response.status}`;
-      state.generateStatus =
-        state.generateStatus === "generating" ? "error" : state.generateStatus;
-      state.lastError = `YAML 预览加载失败：HTTP ${response.status}`;
-      renderYamlViewer();
-      renderResult();
+    const response = await fetch(request.url, {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: request.controller.signal,
+    });
+    if (state.yamlRequest !== request) return;
+    if (response.status === 401) {
+      redirectToLogin();
       return;
     }
-    state.yamlPreview = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const yaml = await response.text();
+    if (state.yamlRequest !== request) return;
+    state.yamlPreview = yaml;
     const generatedAt = response.headers.get("X-SubConv-Generated-At");
     const nodeCount = response.headers.get("X-SubConv-Node-Count");
     const refreshStatus = response.headers.get("X-SubConv-Refresh-Status");
@@ -7267,15 +7397,10 @@ async function loadYamlPreview() {
     if (state.generatedUrl) {
       state.generateStatus = "success";
     }
-    renderYamlViewer();
     renderResult();
   } catch (error) {
-    state.yamlPreview = `加载失败：${error.message}`;
-    state.generateStatus =
-      state.generateStatus === "generating" ? "error" : state.generateStatus;
-    state.lastError = `YAML 预览加载失败：${error.message}`;
-    renderYamlViewer();
-    renderResult();
+    if (state.yamlRequest !== request || error.name === "AbortError") return;
+    state.yamlError = `YAML 预览加载失败：${error.message}`;
   }
 }
 
@@ -7286,6 +7411,7 @@ function renderYamlViewer() {
   const searchInput = document.getElementById("yaml-search");
   const wrapToggle = document.getElementById("yaml-wrap-toggle");
   const copyButton = document.getElementById("copy-yaml-btn");
+  const loading = Boolean(state.yamlRequest);
   const hasYaml = Boolean(String(state.yamlPreview || "").trim());
   const visibleText = limitLines(
     state.yamlPreview || "",
@@ -7294,6 +7420,8 @@ function renderYamlViewer() {
   const lines = hasYaml ? String(visibleText).split("\n") : [];
   viewer.classList.toggle("is-empty", !hasYaml);
   viewer.classList.toggle("wrapped", state.yamlWrap);
+  viewer.setAttribute("aria-busy", String(loading));
+  document.getElementById("refresh-yaml-btn").disabled = loading;
 
   if (searchInput) {
     searchInput.disabled = !hasYaml;
@@ -7308,7 +7436,7 @@ function renderYamlViewer() {
 
   if (!hasYaml) {
     gutter.textContent = "";
-    code.textContent = "生成配置后显示 YAML";
+    code.textContent = state.yamlError || (loading ? "正在加载 YAML..." : "生成配置后显示 YAML");
     renderYamlPreviewMeta(0, 0);
     return;
   }
@@ -7357,6 +7485,10 @@ function syncYamlGutter() {
 function renderYamlPreviewMeta(previewLines, totalLines, options = {}) {
   const meta = document.getElementById("yaml-search-meta");
   if (!meta) return;
+  if (state.yamlError || state.yamlRequest) {
+    meta.textContent = state.yamlError || "正在加载 YAML...";
+    return;
+  }
   const hasYaml = Boolean(String(state.yamlPreview || "").trim());
   if (!hasYaml) {
     meta.textContent = "生成配置后可在此查看、搜索和复制 YAML。";
@@ -7641,6 +7773,7 @@ function clearLogsDisplay() {
 }
 
 async function refreshNodesAfterGenerate() {
+  markNodeCacheStale();
   await loadNodes();
   await validateNodes();
 }

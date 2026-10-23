@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.25.12
+          go-version: 1.27.3
 
       - uses: docker/setup-qemu-action@v3
 
@@ -91,6 +91,30 @@ jobs:
           install -m0755 dist/subconv-next-linux-arm64 dist/openwrt-arm64/subconv-next
           VERSION="${VERSION}" RELEASE=1 ARCH=aarch64_generic \
             ./scripts/package-openwrt-ipk-portable.sh dist/openwrt-arm64/subconv-next
+
+      - name: Build OpenWrt APK
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_version=25.12.2
+          sdk_target=rockchip/armv8
+          sdk_name="openwrt-sdk-${sdk_version}-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64"
+          sdk_url="https://downloads.openwrt.org/releases/${sdk_version}/targets/${sdk_target}/${sdk_name}.tar.zst"
+          sdk_checksums="https://downloads.openwrt.org/releases/${sdk_version}/targets/${sdk_target}/sha256sums"
+          sdk_root="${RUNNER_TEMP}/${sdk_name}"
+          mkdir -p "${RUNNER_TEMP}"
+          curl --fail --location --retry 3 --output "${RUNNER_TEMP}/${sdk_name}.tar.zst" "${sdk_url}"
+          curl --fail --location --retry 3 --output "${RUNNER_TEMP}/sha256sums" "${sdk_checksums}"
+          (
+            cd "${RUNNER_TEMP}"
+            grep -F "*${sdk_name}.tar.zst" sha256sums > sdk-checksum
+            sha256sum --check sdk-checksum
+          )
+          tar --use-compress-program=zstd -xf "${RUNNER_TEMP}/${sdk_name}.tar.zst" -C "${RUNNER_TEMP}"
+          SDK_DIR="${sdk_root}" VERSION="${VERSION}" RELEASE=1 ARCH=aarch64_generic \
+            ./scripts/package-openwrt-apk-sdk.sh
 
       - name: Generate checksums
         run: |
@@ -166,6 +190,7 @@ jobs:
           - \`subconv-next-linux-mips-softfloat\`
           - \`subconv-next-linux-mipsle-softfloat\`
           - \`subconv-next_${VERSION}-1_aarch64_generic.ipk\`
+          - \`subconv-next-${VERSION}-r1.apk\` (all-in-one service and LuCI package)
           - \`checksums.txt\`
           EOF_NOTES
 
@@ -194,6 +219,7 @@ jobs:
             dist/subconv-next-linux-mips-softfloat \
             dist/subconv-next-linux-mipsle-softfloat \
             "dist/subconv-next_${{ steps.version.outputs.version }}-1_aarch64_generic.ipk" \
+            "dist/subconv-next-${{ steps.version.outputs.version }}-r1.apk" \
             dist/checksums.txt
 
       - name: Publish GitHub Release

@@ -600,3 +600,22 @@ func TestBuiltinRulesExposeOneDriveSeparately(t *testing.T) {
 		t.Fatalf("OneDrive rule should be listed before Microsoft rule")
 	}
 }
+
+func TestBuiltinRulesExposeAethersailorAdditions(t *testing.T) {
+	app := readAppJS(t)
+
+	for _, marker := range []string{
+		`{ key: "aethersailor_direct", label: "上游专项规则" }`,
+		`{ key: "ai_extended", label: "扩展 AI 服务" }`,
+		`{ key: "game_direct", label: "游戏 CDN 直连" }`,
+		`{ key: "communication", label: "即时通讯" }`,
+		`{ key: "google_fcm", label: "谷歌 FCM" }`,
+		`{ key: "gfw", label: "GFW 代理" }`,
+		`{ key: "nonstandard_port", label: "非标端口" }`,
+		`full: BUILTIN_RULES.map((item) => item.key)`,
+	} {
+		if !strings.Contains(app, marker) {
+			t.Fatalf("app.js missing upstream rule UI marker %q", marker)
+		}
+	}
+}

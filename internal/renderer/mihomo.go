@@ -863,6 +863,9 @@ func buildProxyGroups(nodes []model.NodeIR, template string, customGroups []mode
 
 	if len(enabledRules) > 0 || len(resolvedCustomRules) > 0 {
 		for _, category := range orderedRuleCategories(enabledRules) {
+			if strings.TrimSpace(category.GroupName) == "" || isRulePolicyTarget(category.GroupName) {
+				continue
+			}
 			if err := addGroup(mihomoProxyGroup{
 				Name:    category.GroupName,
 				Type:    "select",
@@ -1105,6 +1108,9 @@ func resolveCustomRules(rules []model.CustomRule, enabledRules []string, regionG
 		reserved[region] = struct{}{}
 	}
 	for _, category := range orderedRuleCategories(enabledRules) {
+		if strings.TrimSpace(category.GroupName) == "" {
+			continue
+		}
 		reserved[category.GroupName] = struct{}{}
 	}
 	for _, group := range customGroups {
@@ -1374,9 +1380,10 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 	}
 
 	var baseRules []string
+	var trailingRules []string
 	enabled := normalizeEnabledRuleKeys(enabledRules)
 	resolvedCustomRules := resolveCustomRules(customRules, enabled, nil, customGroups)
-	for _, category := range orderedRuleCategories(enabled) {
+	for _, category := range orderedRuleCategoriesForRules(enabled) {
 		if category.Key == "domestic" {
 			for _, spec := range category.Rules {
 				baseRules = append(baseRules, renderRuleSet(spec))
@@ -1384,7 +1391,12 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 			continue
 		}
 		for _, spec := range category.Rules {
-			baseRules = append(baseRules, renderRuleSet(spec))
+			line := renderRuleSet(spec)
+			if category.Key == "nonstandard_port" {
+				trailingRules = append(trailingRules, line)
+				continue
+			}
+			baseRules = append(baseRules, line)
 		}
 	}
 	if containsString(enabled, "domestic") {
@@ -1393,6 +1405,7 @@ func buildRules(template string, finalPolicy string, enabledRules []string, addi
 			TargetGroup: "🔒 国内服务",
 		}))
 	}
+	baseRules = append(baseRules, trailingRules...)
 
 	baseRules = append(baseRules, fmt.Sprintf("MATCH,%s", normalizeFinalPolicyName(finalPolicy)))
 	return mergeRules(baseRules, customRuleLines(resolvedCustomRules), additionalRules, providerRules(providers))

@@ -3308,6 +3308,57 @@ func TestWorkspaceCleanupRemovesWorkspaceButKeepsPublished(t *testing.T) {
 	}
 }
 
+func TestEditorAccessKeepsExpiredPublishedWorkspace(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczdAZXhhbXBsZS5jb206NDQz#expired-published"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	ref := createWorkspaceRefForTest(t, server, cfg)
+
+	refreshReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", ref.ID), nil)
+	refreshRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh status code = %d; body=%s", refreshRec.Code, refreshRec.Body.String())
+	}
+
+	backdate := func(ref workspaceRef) workspaceRef {
+		loaded, err := server.loadWorkspaceByHash(ref.Hash)
+		if err != nil {
+			t.Fatalf("loadWorkspaceByHash() error = %v", err)
+		}
+		loaded.Meta.LastAccessAt = time.Now().UTC().Add(-48 * time.Hour)
+		// saveWorkspaceMeta keeps the newer access time, so write directly.
+		if err := server.writeWorkspaceMetaUnlocked(loaded); err != nil {
+			t.Fatalf("writeWorkspaceMetaUnlocked() error = %v", err)
+		}
+		return loaded
+	}
+
+	// A workspace backing a live published subscription must survive editor
+	// access even when its access-based TTL has passed.
+	expiredPublished := backdate(ref)
+	loaded, err := server.loadWorkspace(expiredPublished.ID)
+	if err != nil {
+		t.Fatalf("loadWorkspace(expired published) error = %v", err)
+	}
+	if _, err := os.Stat(loaded.Dir); err != nil {
+		t.Fatalf("published workspace dir was removed on access: err=%v", err)
+	}
+
+	// Without a published binding the expired workspace is still reclaimed.
+	plain := createWorkspaceRefForTest(t, server, cfg)
+	expiredPlain := backdate(plain)
+	if _, err := server.loadWorkspace(expiredPlain.ID); err == nil {
+		t.Fatal("loadWorkspace(expired plain workspace) error = nil, want not found")
+	}
+	if _, err := os.Stat(expiredPlain.Dir); !os.IsNotExist(err) {
+		t.Fatalf("expired plain workspace dir still exists: err=%v", err)
+	}
+}
+
 func TestDeletePublishedInvalidatesLink(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")

@@ -301,7 +301,10 @@ func (s *Server) loadWorkspaceNoTouch(id string) (workspaceRef, error) {
 	if ref.Meta.LastAccessAt.IsZero() {
 		ref.Meta.LastAccessAt = legacyWorkspaceLastAccess(ref.Meta, s.snapshotConfig().Service.WorkspaceTTLSeconds)
 	}
-	if s.workspaceExpired(ref.Meta) {
+	// Keep the deletion policy consistent with cleanupExpiredWorkspaces:
+	// workspaces backing a live published subscription are pinned and must
+	// survive both periodic cleanup and read-time expiry handling.
+	if expired := s.workspaceExpired(ref.Meta); expired && !s.workspaceHasPublishedRefreshBinding(ref) {
 		_ = s.removeWorkspace(ref)
 		return workspaceRef{}, errWorkspaceNotFound
 	}

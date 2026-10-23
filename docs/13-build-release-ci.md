@@ -71,8 +71,9 @@ Codex 优先保证路线 B 可用。
 
 - 用该版本号构建 Linux 多架构二进制。
 - 使用仓库内 portable `ipkg-build` 打包 `aarch64_generic` all-in-one OpenWrt IPK，不需要配置 OpenWrt SDK URL。
+- 使用官方 OpenWrt 25.12.2 rockchip/armv8 SDK 打包 `aarch64_generic` APK。
 - 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。GHCR 推送失败不会阻断 GitHub Release 和 OpenWrt IPK 上传。
-- 先创建 Draft Release 并上传二进制、OpenWrt IPK 与 `checksums.txt`，再发布 Release，由 GitHub 创建并锁定 tag。
+- 先创建 Draft Release 并上传二进制、OpenWrt IPK、APK 与 `checksums.txt`，再发布 Release，由 GitHub 创建并锁定 tag。
 
 GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontainers.image.source` 以关联当前仓库。如果 GHCR 返回 `permission_denied: write_package`，需要在 package 设置中给当前仓库 Actions 写入权限，或配置 repository secrets。GHCR 推送失败时，Release 构建和上传仍会继续。
 
@@ -92,6 +93,7 @@ subconv-next-linux-armv7
 subconv-next-linux-mips-softfloat
 subconv-next-linux-mipsle-softfloat
 subconv-next_<version>-1_aarch64_generic.ipk
+subconv-next-<version>-r<release>.apk
 checksums.txt
 ```
 

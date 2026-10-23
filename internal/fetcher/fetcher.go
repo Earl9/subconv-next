@@ -30,7 +30,13 @@ type Source struct {
 	InsecureSkipVerify bool
 	AllowPrivateHosts  bool
 	CacheTTL           time.Duration
+	PreferCache        bool
 }
+
+// ErrCacheMiss is returned when PreferCache is set but no cached content
+// exists yet. Callers that prefer cache deliberately avoid the network, so a
+// missing cache entry must fail fast instead of blocking on an upstream fetch.
+var ErrCacheMiss = errors.New("no cached subscription content")
 
 type FetchedSubscription struct {
 	Name                 string
@@ -56,6 +62,7 @@ type CacheMeta struct {
 
 type Options struct {
 	CacheDir          string
+	SharedCacheDir    string
 	Timeout           time.Duration
 	MaxBodyBytes      int64
 	MaxRedirects      int
@@ -79,6 +86,7 @@ type Fetcher struct {
 func OptionsFromConfig(cfg model.Config) Options {
 	return Options{
 		CacheDir:          cfg.Service.CacheDir,
+		SharedCacheDir:    SharedCacheDir(cfg.Service.CacheDir),
 		Timeout:           time.Duration(cfg.Service.FetchTimeoutSeconds) * time.Second,
 		MaxBodyBytes:      int64(cfg.Service.MaxSubscriptionBytes),
 		MaxRedirects:      3,
@@ -86,6 +94,22 @@ func OptionsFromConfig(cfg model.Config) Options {
 		AllowPrivateHosts: cfg.Service.AllowLAN,
 		PublicMode:        cfg.Service.PublicConverter,
 	}
+}
+
+// SharedCacheDir is the cross-workspace cache location derived from a cache
+// directory: subscriptions with the same URL share the most recently
+// downloaded content across workspaces (draft sessions create workspaces
+// constantly). Workspace cache dirs live under a shared ".../workspaces"
+// root, so their fallback location is a sibling "shared" dir of that root.
+func SharedCacheDir(cacheDir string) string {
+	cacheDir = strings.TrimSpace(cacheDir)
+	if cacheDir == "" {
+		return ""
+	}
+	if filepath.Base(filepath.Dir(cacheDir)) == "workspaces" {
+		return filepath.Join(filepath.Dir(filepath.Dir(cacheDir)), "shared")
+	}
+	return filepath.Join(cacheDir, "shared")
 }
 
 func New(opts Options) *Fetcher {
@@ -99,11 +123,10 @@ func New(opts Options) *Fetcher {
 		opts.MaxRedirects = 3
 	}
 	if opts.Resolver == nil {
-		if opts.PublicMode {
-			opts.Resolver = newPublicHostResolver(net.DefaultResolver)
-		} else {
-			opts.Resolver = net.DefaultResolver
-		}
+		// Router proxy DNS often returns Fake-IP addresses (198.18.0.0/15).
+		// Keep the router resolver for split-DNS environments, then retry with
+		// public DNS only when it returns no usable public address.
+		opts.Resolver = newPublicHostResolver(net.DefaultResolver)
 	}
 	return &Fetcher{opts: opts}
 }
@@ -176,6 +199,17 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 	if err != nil {
 		return FetchedSubscription{}, nil, err
 	}
+	if source.PreferCache {
+		if cached, cacheErr := f.readCache(source.URL); cacheErr == nil {
+			cached.FromCache = true
+			return cached, nil, nil
+		}
+		if cached, ok := f.readSharedCache(source.URL); ok {
+			cached.FromCache = true
+			return cached, nil, nil
+		}
+		return FetchedSubscription{}, nil, fmt.Errorf("%w for %s (offline view; run a refresh to fetch it)", ErrCacheMiss, source.Name)
+	}
 	if source.CacheTTL > 0 {
 		if cached, cacheErr := f.readCache(source.URL); cacheErr == nil {
 			age := time.Since(cached.FetchedAt)
@@ -204,6 +238,7 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 			warnings = append(warnings, fmt.Sprintf("cache write failed for %s: %v", source.Name, cacheErr))
 			return fetched, warnings, nil
 		}
+		f.writeSharedCache(source.URL, fetched)
 		return fetched, warnings, nil
 	}
 
@@ -211,6 +246,10 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 	if cacheErr == nil {
 		cached.FromCache = true
 		return cached, []string{fmt.Sprintf("using cached subscription for %s after fetch failure", source.Name)}, nil
+	}
+	if shared, ok := f.readSharedCache(source.URL); ok {
+		shared.FromCache = true
+		return shared, []string{fmt.Sprintf("using shared cached subscription for %s after fetch failure", source.Name)}, nil
 	}
 
 	return FetchedSubscription{}, nil, err
@@ -357,7 +396,25 @@ func (f *Fetcher) resolveHost(ctx context.Context, host string, allowPrivateHost
 }
 
 func (f *Fetcher) readCache(rawURL string) (FetchedSubscription, error) {
-	bodyPath, metaPath := cachePaths(f.opts.CacheDir, rawURL)
+	return f.readCacheFrom(f.opts.CacheDir, rawURL)
+}
+
+// readSharedCache falls back to the cross-workspace shared copy of a
+// subscription. It reports ok=false when sharing is disabled or no copy
+// exists, which callers treat the same as a normal cache miss.
+func (f *Fetcher) readSharedCache(rawURL string) (FetchedSubscription, bool) {
+	if strings.TrimSpace(f.opts.SharedCacheDir) == "" || f.opts.SharedCacheDir == f.opts.CacheDir {
+		return FetchedSubscription{}, false
+	}
+	cached, err := f.readCacheFrom(f.opts.SharedCacheDir, rawURL)
+	if err != nil {
+		return FetchedSubscription{}, false
+	}
+	return cached, true
+}
+
+func (f *Fetcher) readCacheFrom(dir, rawURL string) (FetchedSubscription, error) {
+	bodyPath, metaPath := cachePaths(dir, rawURL)
 
 	body, err := os.ReadFile(bodyPath)
 	if err != nil {
@@ -394,11 +451,25 @@ func (f *Fetcher) readCache(rawURL string) (FetchedSubscription, error) {
 }
 
 func (f *Fetcher) writeCache(rawURL string, fetched FetchedSubscription) error {
-	if strings.TrimSpace(f.opts.CacheDir) == "" {
+	return writeCacheDir(f.opts.CacheDir, rawURL, fetched)
+}
+
+// writeSharedCache mirrors a successful fetch into the cross-workspace shared
+// directory. It is best effort: failures are ignored because the workspace
+// cache remains the authoritative copy.
+func (f *Fetcher) writeSharedCache(rawURL string, fetched FetchedSubscription) {
+	if strings.TrimSpace(f.opts.SharedCacheDir) == "" || f.opts.SharedCacheDir == f.opts.CacheDir {
+		return
+	}
+	_ = writeCacheDir(f.opts.SharedCacheDir, rawURL, fetched)
+}
+
+func writeCacheDir(dir, rawURL string, fetched FetchedSubscription) error {
+	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
 
-	bodyPath, metaPath := cachePaths(f.opts.CacheDir, rawURL)
+	bodyPath, metaPath := cachePaths(dir, rawURL)
 	if err := storage.AtomicWriteFile(bodyPath, fetched.Content, 0o600); err != nil {
 		return err
 	}

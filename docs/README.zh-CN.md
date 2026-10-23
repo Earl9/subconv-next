@@ -69,18 +69,18 @@ curl -fsS http://127.0.0.1:9876/healthz
 
 ### OpenWrt / Kwrt
 
-同时安装核心服务包和 LuCI 包：
+安装完整包即可同时获得后台服务和 LuCI 页面：
 
 ```sh
-opkg install \
-  /tmp/subconv-next_<version>_aarch64_generic.ipk \
-  /tmp/luci-app-subconv-next_<version>_all.ipk
+opkg install /tmp/subconv-next_<版本>-<发行号>_aarch64_generic.ipk
 
 ubus call luci.subconv status
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
 `aarch64_generic` 已在 Kwrt 25.12.2 `rockchip/armv8` 上验证。其它设备请先检查 `opkg print-architecture`。
+
+官方 OpenWrt 25.12 的 APK 固件请安装对应的完整 APK 包：`apk add --allow-untrusted /tmp/subconv-next-<版本>-r<发行号>.apk`。使用 opkg 的 Kwrt 设备不能安装 APK。
 
 主要安装路径：
 
@@ -99,7 +99,7 @@ curl -fsS http://127.0.0.1:9876/healthz
 
 ## 下载
 
-发布文件通过 [GitHub Releases](https://github.com/Earl9/subconv-next/releases) 提供，不提交到仓库。发布资产包括 Linux 二进制、OpenWrt IPK、LuCI 包和 `checksums.txt`。
+发布文件通过 [GitHub Releases](https://github.com/Earl9/subconv-next/releases) 提供，不提交到仓库。发布资产包括 Linux 二进制、包含后台和 LuCI 页面的 OpenWrt IPK 与 APK 完整包，以及 `checksums.txt`。
 
 ## 安全说明
 

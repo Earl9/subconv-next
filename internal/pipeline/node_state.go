@@ -32,7 +32,8 @@ func SaveNodeState(cfg model.Config, state model.NodeState) error {
 }
 
 func CollectNodesWithState(cfg model.Config, state model.NodeState, applyFilters bool, excludeDisabled bool) StatefulCollectResult {
-	collected := collectNodes(cfg, applyFilters)
+	// Editor operations use the last downloaded subscriptions; rendering refreshes them.
+	collected := collectNodes(cfg, applyFilters, true)
 	state = model.NormalizeNodeState(state)
 
 	nodes := model.CloneNodes(collected.Nodes)

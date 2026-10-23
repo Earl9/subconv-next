@@ -42,7 +42,7 @@ must install an IPK:
 opkg install /tmp/subconv-next_*.ipk
 ```
 
-Official OpenWrt 25.12 SDKs can enable `CONFIG_USE_APK=y` and produce APK packages such as `subconv-next-1.0.0-r1.apk`. That APK is valid only for APK-based firmware and is not the final target for Kwrt/opkg devices.
+Official OpenWrt 25.12 SDKs can enable `CONFIG_USE_APK=y` and produce all-in-one APK packages such as `subconv-next-1.0.7-r2.apk`. That APK is valid only for APK-based firmware and is not the final target for Kwrt/opkg devices.
 
 ## Runtime Layout
 
@@ -55,7 +55,11 @@ Installed files:
 /etc/subconv-next/data
 /usr/share/luci/menu.d/luci-app-subconv-next.json
 /usr/share/rpcd/acl.d/luci-app-subconv-next.json
-/www/luci-static/resources/view/subconv-next/index.js
+/usr/libexec/rpcd/luci.subconv
+/www/luci-static/resources/view/subconv-next/overview.js
+/www/luci-static/resources/view/subconv-next/settings.js
+/www/luci-static/resources/view/subconv-next/backup.js
+/www/luci-static/resources/view/subconv-next/logs.js
 ```
 
 Runtime data under `/etc/subconv-next/data` includes:
@@ -86,6 +90,8 @@ subconv-next serve \
 
 The init script reads `/etc/config/subconv-next`, creates the data directory, and starts the service through `procd`. It passes `/etc/subconv-next/config.json` as the application config path. If that file does not exist, the binary starts from built-in defaults and CLI overrides from UCI.
 
+The OpenWrt package defaults to passwordless Web UI access at `http://<router-address>:9876/`. The UCI option `subconv-next.main.allow_insecure_public` defaults to `1`, including when absent from an older configuration, and the init script passes `SUBCONV_ALLOW_INSECURE_PUBLIC=true`. No access token is generated in this mode. To require authentication, set this option to `0` and restart the service; an empty `main.access_token` is then populated with a persistent random token. Upgrades preserve an explicit `0`. LuCI continues to use the router's own login.
+
 ## Package Files
 
 Package source files live in this repository:
@@ -96,7 +102,7 @@ openwrt/subconv-next/files/subconv-next.init
 openwrt/subconv-next/files/subconv-next.config
 openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json
 openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json
-openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js
+openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/overview.js
 ```
 
 The Makefile builds from a local checkout through `SUBCONV_NEXT_SRC`. It uses the OpenWrt SDK and `golang-package.mk`, but does not fetch source from a remote Git repository.
@@ -156,10 +162,26 @@ bin/packages/aarch64_generic/base/subconv-next_1.0.0-1_aarch64_generic.ipk
 The official `openwrt-sdk-25.12.2-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64` SDK enables `CONFIG_USE_APK=y` by default and outputs APK:
 
 ```text
-bin/packages/aarch64_generic/base/subconv-next-1.0.0-r1.apk
+bin/packages/aarch64_generic/base/subconv-next-1.0.7-r2.apk
 ```
 
-This APK should be documented as the official OpenWrt 25.12 SDK artifact only. Do not use it as the target package for Kwrt/opkg devices.
+Build the release APK from the same arm64 binary used for IPK packaging:
+
+```sh
+SDK_DIR=/path/to/openwrt-sdk-25.12.2-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64 \
+VERSION=1.0.7 \
+RELEASE=1 \
+ARCH=aarch64_generic \
+./scripts/package-openwrt-apk-sdk.sh dist/openwrt-arm64/subconv-next
+```
+
+The script enables `CONFIG_USE_APK`, builds the package through the SDK, and copies the generated APK to:
+
+```text
+dist/subconv-next-1.0.7-r2.apk
+```
+
+Install this package only on APK-based OpenWrt firmware, for example with `apk add --allow-untrusted`. Do not use it on Kwrt/opkg devices or rename it to an IPK.
 
 Attempting to force IPK in that official SDK:
 
@@ -176,7 +198,7 @@ Validated result for the official SDK above:
 
 - `make defconfig` re-enabled `CONFIG_USE_APK=y`.
 - A compile after attempting to disable APK still invoked `apk mkpkg`.
-- The artifact was `bin/packages/aarch64_generic/base/subconv-next-1.0.0-r1.apk`.
+- The artifact is an all-in-one `subconv-next-<version>-r<release>.apk` package.
 - No `subconv-next_*.ipk` was produced by that official SDK.
 
 For Kwrt/opkg devices, use a Kwrt/IPK SDK or the SDK `ipkg-build` packaging script below.
@@ -221,7 +243,7 @@ It installs:
 /etc/subconv-next/data
 /usr/share/luci/menu.d/luci-app-subconv-next.json
 /usr/share/rpcd/acl.d/luci-app-subconv-next.json
-/www/luci-static/resources/view/subconv-next/index.js
+/www/luci-static/resources/view/subconv-next/overview.js
 ```
 
 The control metadata is:
@@ -239,7 +261,7 @@ Description: Modern subscription converter for Mihomo / Clash Meta.
 
 The main package includes `postinst` and `prerm` scripts:
 
-- `postinst` enables `/etc/init.d/subconv-next` after install, starts it when `subconv-next.main.enabled` is unset or `1`, and clears LuCI caches without restarting `rpcd` or `uhttpd`.
+- `postinst` enables `/etc/init.d/subconv-next` after install, starts it when `subconv-next.main.enabled` is unset or `1`, clears LuCI caches, and reloads `rpcd`.
 - `prerm` stops and disables the service before package removal.
 - Both scripts exit immediately during image/rootfs builds when `IPKG_INSTROOT` is set.
 - Runtime data under `/etc/subconv-next/data` is never removed by package scripts.
@@ -267,42 +289,7 @@ tar -tzf data.tar.gz
 
 Do not rename an APK to IPK. Also do not use the older `scripts/package-openwrt-ipk.sh` hand-built ar path as the default Kwrt package path; that ar package was rejected by Kwrt/opkg as malformed.
 
-## Optional Split LuCI App Packaging
-
-The default release artifact is the all-in-one `subconv-next` package above. The split `luci-app-subconv-next` package is kept only as an advanced packaging option. Normal Kwrt users should not install it separately when using `subconv-next_1.0.0-3_aarch64_generic.ipk`.
-
-Package files:
-
-```text
-openwrt/luci-app-subconv-next/Makefile
-openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json
-openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json
-openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js
-```
-
-Build the LuCI IPK with:
-
-```sh
-SDK_DIR=/root/openwrt-sdk/openwrt-sdk-25.12.2-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64 \
-VERSION=1.0.0 \
-RELEASE=1 \
-ARCH=all \
-./scripts/package-openwrt-luci-ipk-sdk.sh
-```
-
-Default output:
-
-```text
-dist/luci-app-subconv-next_1.0.0-1_all.ipk
-```
-
-The LuCI package installs:
-
-```text
-/usr/share/luci/menu.d/luci-app-subconv-next.json
-/usr/share/rpcd/acl.d/luci-app-subconv-next.json
-/www/luci-static/resources/view/subconv-next/index.js
-```
+The LuCI source files live under `openwrt/luci-app-subconv-next/` and are copied into the all-in-one package during the main package build.
 
 LuCI menu path:
 
@@ -462,12 +449,6 @@ Stop, disable, and remove the all-in-one package:
 /etc/init.d/subconv-next stop
 /etc/init.d/subconv-next disable
 opkg remove subconv-next
-```
-
-If you installed the optional split LuCI package in an older test build, remove it separately:
-
-```sh
-opkg remove luci-app-subconv-next
 ```
 
 For APK-based systems:

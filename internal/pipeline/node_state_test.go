@@ -2,11 +2,48 @@ package pipeline
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"subconv-next/internal/model"
 )
+
+func TestCollectNodesWithStateDoesNotFetchUncachedSubscriptions(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#cold-node"))
+	}))
+	defer upstream.Close()
+
+	cfg := model.DefaultConfig()
+	cfg.Service.CacheDir = filepath.Join(t.TempDir(), "cache")
+	cfg.Subscriptions = []model.SubscriptionConfig{
+		{Name: "cold-source", Enabled: true, URL: upstream.URL, AllowLAN: true},
+	}
+
+	result := CollectNodesWithState(cfg, model.NodeState{}, true, false)
+
+	if requests.Load() != 0 {
+		t.Fatalf("editor collect hit the network %d times, want 0", requests.Load())
+	}
+	if len(result.Nodes) != 0 {
+		t.Fatalf("nodes = %#v, want none without cache", result.Nodes)
+	}
+	joined := strings.Join(result.Warnings, "\n")
+	if !strings.Contains(joined, "尚无本地缓存") {
+		t.Fatalf("warnings = %#v, want cache-miss notice", result.Warnings)
+	}
+	for _, parseErr := range result.Errors {
+		if parseErr.Kind == "FETCH_FAILED" {
+			t.Fatalf("cache miss surfaced as FETCH_FAILED: %#v", result.Errors)
+		}
+	}
+}
 
 func TestApplyNodeOverrides(t *testing.T) {
 	node := model.NormalizeNode(model.NodeIR{
@@ -126,7 +163,7 @@ func TestRenderConfigUsesOverrideValues(t *testing.T) {
 		},
 	}
 
-	base := collectNodes(cfg, true)
+	base := collectNodes(cfg, true, false)
 	nodeID := base.Nodes[0].ID
 	err := SaveNodeState(cfg, model.NodeState{
 		NodeOverrides: map[string]model.NodeOverride{
@@ -169,7 +206,7 @@ func TestRenderConfigSkipsDisabledAndIncludesCustomNodes(t *testing.T) {
 		},
 	}
 
-	base := collectNodes(cfg, true)
+	base := collectNodes(cfg, true, false)
 	nodeID := base.Nodes[0].ID
 	custom := model.NormalizeNode(model.NodeIR{
 		Name:   "custom-vless",

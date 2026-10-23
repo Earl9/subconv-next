@@ -46,14 +46,14 @@ type RenderResult struct {
 }
 
 func CollectNodes(cfg model.Config) CollectResult {
-	return collectNodes(cfg, true)
+	return collectNodes(cfg, true, false)
 }
 
 func CollectPreviewNodes(cfg model.Config) CollectResult {
-	return collectNodes(cfg, false)
+	return collectNodes(cfg, false, true)
 }
 
-func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
+func collectNodes(cfg model.Config, applyFilters, preferCache bool) CollectResult {
 	result := CollectResult{
 		SubscriptionMeta: map[string]model.SubscriptionMeta{},
 	}
@@ -107,9 +107,14 @@ func collectNodes(cfg model.Config, applyFilters bool) CollectResult {
 					Enabled:            sub.Enabled,
 					InsecureSkipVerify: sub.InsecureSkipVerify,
 					AllowPrivateHosts:  sub.AllowLAN,
+					PreferCache:        preferCache,
 				})
 				collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, warnings...)
 				if err != nil {
+					if preferCache && errors.Is(err, fetcher.ErrCacheMiss) {
+						collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, fmt.Sprintf("%s: 尚无本地缓存，编辑视图不联网抓取，请先执行一次刷新", sub.Name))
+						return
+					}
 					collectedByIndex[index].errors = append(collectedByIndex[index].errors, parser.ParseError{
 						Kind:    "FETCH_FAILED",
 						Message: fmt.Sprintf("%s: %v", sub.Name, err),
@@ -177,7 +182,7 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 	if onStage != nil {
 		onStage("fetching")
 	}
-	collected := collectNodes(cfg, true)
+	collected := collectNodes(cfg, true, false)
 	if onStage != nil {
 		onStage("rendering")
 	}

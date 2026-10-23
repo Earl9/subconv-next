@@ -113,6 +113,7 @@ rule-providers:
   stripe: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/stripe.mrs', path: ./ruleset/stripe.mrs, interval: 86400, format: mrs}
   wise: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/wise.mrs', path: ./ruleset/wise.mrs, interval: 86400, format: mrs}
   binance: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/binance.mrs', path: ./ruleset/binance.mrs, interval: 86400, format: mrs}
+  category-cryptocurrency: {type: http, behavior: domain, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/category-cryptocurrency.mrs', path: ./ruleset/category-cryptocurrency.mrs, interval: 86400, format: mrs}
 
 rules:
   - "RULE-SET,twitter,🐦 推特/X"
@@ -159,4 +160,5 @@ rules:
   - "RULE-SET,stripe,💳 支付平台"
   - "RULE-SET,wise,💳 支付平台"
   - "RULE-SET,binance,₿ 加密货币"
+  - "RULE-SET,category-cryptocurrency,₿ 加密货币"
   - "MATCH,🐟 漏网之鱼"

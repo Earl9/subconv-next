@@ -16,7 +16,7 @@ reload_service() {
 }
 
 start_service() {
-	local enabled host port data_dir public_base_url log_level
+	local enabled host port data_dir public_base_url log_level access_token allow_insecure_public
 
 	config_load "$CONFIG"
 	config_get_bool enabled main enabled 1
@@ -27,11 +27,30 @@ start_service() {
 	config_get data_dir main data_dir "/etc/subconv-next/data"
 	config_get public_base_url main public_base_url ""
 	config_get log_level main log_level "info"
+	config_get access_token main access_token ""
+	config_get_bool allow_insecure_public main allow_insecure_public 1
+	if [ "$allow_insecure_public" -eq 1 ]; then
+		allow_insecure_public=true
+	else
+		allow_insecure_public=false
+	fi
 
 	[ -n "$host" ] || host="0.0.0.0"
 	[ -n "$port" ] || port="9876"
 	[ -n "$data_dir" ] || data_dir="/etc/subconv-next/data"
 	[ -n "$log_level" ] || log_level="info"
+
+	# Keep the management credential across restarts and package upgrades.
+	chmod 0600 "/etc/config/$CONFIG" || return 1
+	if [ "$allow_insecure_public" = false ] && [ -z "$access_token" ]; then
+		access_token="$(hexdump -v -n 32 -e '1/1 "%02x"' /dev/urandom)"
+		if [ "${#access_token}" -ne 64 ]; then
+			logger -t subconv-next "Unable to generate management access token"
+			return 1
+		fi
+		uci set "$CONFIG.main.access_token=$access_token" && uci commit "$CONFIG" || return 1
+		logger -t subconv-next "Generated management access token in /etc/config/$CONFIG (main.access_token)"
+	fi
 
 	mkdir -p "$data_dir"
 
@@ -43,13 +62,17 @@ start_service() {
 			SUBCONV_PORT="$port" \
 			SUBCONV_DATA_DIR="$data_dir" \
 			SUBCONV_LOG_LEVEL="$log_level" \
+			SUBCONV_ACCESS_TOKEN="$access_token" \
+			SUBCONV_ALLOW_INSECURE_PUBLIC="$allow_insecure_public" \
 			SUBCONV_PUBLIC_BASE_URL="$public_base_url"
 	else
 		procd_set_param env \
 			SUBCONV_HOST="$host" \
 			SUBCONV_PORT="$port" \
 			SUBCONV_DATA_DIR="$data_dir" \
-			SUBCONV_LOG_LEVEL="$log_level"
+			SUBCONV_LOG_LEVEL="$log_level" \
+			SUBCONV_ACCESS_TOKEN="$access_token" \
+			SUBCONV_ALLOW_INSECURE_PUBLIC="$allow_insecure_public"
 	fi
 	procd_set_param file "/etc/config/$CONFIG"
 	procd_set_param respawn 3600 5 5

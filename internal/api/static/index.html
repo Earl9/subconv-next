@@ -26,6 +26,13 @@
           </div>
         </div>
 
+        <nav class="workspace-tabs app-tabs" aria-label="主工作区">
+          <button id="workspace-tab-config" class="workspace-tab active" type="button" data-workspace="config" data-button-icon="settings" aria-keyshortcuts="G C">配置生成</button>
+          <button id="workspace-tab-nodes" class="workspace-tab" type="button" data-workspace="nodes" data-button-icon="nodes" aria-keyshortcuts="G N">节点编辑</button>
+          <button id="workspace-tab-yaml" class="workspace-tab" type="button" data-workspace="yaml" data-button-icon="code" aria-keyshortcuts="G Y">YAML 预览</button>
+          <button id="workspace-tab-diagnostics" class="workspace-tab" type="button" data-workspace="diagnostics" data-button-icon="terminal" aria-keyshortcuts="G D">诊断日志</button>
+        </nav>
+
         <div class="header-actions">
           <span id="backend-badge" class="status-badge online">
             <span class="dot"></span>
@@ -45,13 +52,6 @@
           </button>
         </div>
       </header>
-
-      <nav class="workspace-tabs app-tabs" aria-label="主工作区">
-        <button id="workspace-tab-config" class="workspace-tab active" type="button" data-workspace="config" data-button-icon="settings" aria-keyshortcuts="G C">配置生成</button>
-        <button id="workspace-tab-nodes" class="workspace-tab" type="button" data-workspace="nodes" data-button-icon="nodes" aria-keyshortcuts="G N">节点编辑</button>
-        <button id="workspace-tab-yaml" class="workspace-tab" type="button" data-workspace="yaml" data-button-icon="code" aria-keyshortcuts="G Y">YAML 预览</button>
-        <button id="workspace-tab-diagnostics" class="workspace-tab" type="button" data-workspace="diagnostics" data-button-icon="terminal" aria-keyshortcuts="G D">诊断日志</button>
-      </nav>
 
       <section id="session-banner" class="panel side-card session-banner"></section>
 
@@ -623,6 +623,8 @@ time.*</textarea>
           </div>
 
           <div id="node-bulk-action-bar" class="bulk-action-bar node-bulk-action-bar hidden"></div>
+
+          <div id="node-fetch-notices" class="node-fetch-notices hidden" role="status"></div>
 
           <div class="node-table-wrap tall-table">
             <table class="node-table modern-node-table">

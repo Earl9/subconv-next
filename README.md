@@ -69,18 +69,18 @@ Use `ghcr.io/earl9/subconv-next:latest` to track releases, or pin a release tag 
 
 ### OpenWrt / Kwrt
 
-Install both the core service and LuCI package:
+Install the all-in-one package, which includes the service and LuCI pages:
 
 ```sh
-opkg install \
-  /tmp/subconv-next_<version>_aarch64_generic.ipk \
-  /tmp/luci-app-subconv-next_<version>_all.ipk
+opkg install /tmp/subconv-next_<version>-<release>_aarch64_generic.ipk
 
 ubus call luci.subconv status
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
 The `aarch64_generic` package has been verified on Kwrt 25.12.2 `rockchip/armv8`. Check `opkg print-architecture` before selecting an asset for another device.
+
+For APK-based official OpenWrt 25.12 firmware, install the matching all-in-one release APK with `apk add --allow-untrusted /tmp/subconv-next-<version>-r<release>.apk`. Do not install an APK on an opkg-based Kwrt device.
 
 Important paths:
 
@@ -99,7 +99,7 @@ When UCI option `enabled` is `1`, installation enables and starts the service. T
 
 ## Downloads
 
-Release artifacts are published through [GitHub Releases](https://github.com/Earl9/subconv-next/releases) and are not committed to the repository. Assets include Linux binaries, OpenWrt IPKs, the LuCI package, and `checksums.txt`.
+Release artifacts are published through [GitHub Releases](https://github.com/Earl9/subconv-next/releases) and are not committed to the repository. Assets include Linux binaries, all-in-one OpenWrt IPK and APK packages, and `checksums.txt`.
 
 ## Security
 

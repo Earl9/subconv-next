@@ -10,7 +10,7 @@ ARCH="${ARCH:-aarch64_generic}"
 PKG_NAME="${PKG_NAME:-subconv-next}"
 MAINTAINER="${MAINTAINER:-SubConv Next Maintainers}"
 DIST="${DIST:-$ROOT_DIR/dist}"
-GO_BUILDER_IMAGE="${GO_BUILDER_IMAGE:-golang:1.25.12-alpine}"
+GO_BUILDER_IMAGE="${GO_BUILDER_IMAGE:-golang:1.27.3-alpine}"
 USE_DOCKER_GO="${USE_DOCKER_GO:-auto}"
 BIN_PATH="${1:-${SUBCONV_NEXT_BIN:-$ROOT_DIR/dist/openwrt-arm64/subconv-next}}"
 USE_PROVIDED_BIN=0
@@ -23,6 +23,7 @@ IPKG_BUILD="$SDK_DIR/scripts/ipkg-build"
 IPK_PATH="$DIST/${PKG_NAME}_${PKG_VERSION}_${ARCH}.ipk"
 INIT_FILE="$ROOT_DIR/openwrt/subconv-next/files/subconv-next.init"
 CONFIG_FILE="$ROOT_DIR/openwrt/subconv-next/files/subconv-next.config"
+LUCI_ROOT="$ROOT_DIR/openwrt/luci-app-subconv-next"
 
 need_cmd() {
 	if ! command -v "$1" >/dev/null 2>&1; then
@@ -56,6 +57,24 @@ if [ ! -f "$CONFIG_FILE" ]; then
 	echo "missing UCI config: $CONFIG_FILE" >&2
 	exit 1
 fi
+
+for path in \
+	"$LUCI_ROOT/root/usr/share/luci/menu.d/luci-app-subconv-next.json" \
+	"$LUCI_ROOT/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json" \
+	"$LUCI_ROOT/root/usr/libexec/rpcd/luci.subconv" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/overview.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/settings.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/backup.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/logs.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/api.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/network-validation.js" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/app.css" \
+	"$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/logs.css"; do
+	if [ ! -f "$path" ]; then
+		echo "missing LuCI file: $path" >&2
+		exit 1
+	fi
+done
 
 if [ "$USE_PROVIDED_BIN" -eq 0 ]; then
 	echo "building linux/arm64 binary: $BIN_PATH"
@@ -109,12 +128,28 @@ mkdir -p \
 	"$PKGROOT/etc/init.d" \
 	"$PKGROOT/etc/config" \
 	"$PKGROOT/etc/subconv-next/data" \
-	"$PKGROOT/usr/share/subconv-next"
+	"$PKGROOT/usr/share/subconv-next" \
+	"$PKGROOT/usr/share/luci/menu.d" \
+	"$PKGROOT/usr/share/rpcd/acl.d" \
+	"$PKGROOT/usr/libexec/rpcd" \
+	"$PKGROOT/www/luci-static/resources/subconv-next" \
+	"$PKGROOT/www/luci-static/resources/view/subconv-next"
 
 install -m0755 "$BIN_PATH" "$PKGROOT/usr/bin/subconv-next"
 install -m0755 "$INIT_FILE" "$PKGROOT/etc/init.d/subconv-next"
-install -m0644 "$CONFIG_FILE" "$PKGROOT/etc/config/subconv-next"
+install -m0600 "$CONFIG_FILE" "$PKGROOT/etc/config/subconv-next"
 install -m0644 "$CONFIG_FILE" "$PKGROOT/usr/share/subconv-next/subconv-next.config"
+install -m0644 "$LUCI_ROOT/root/usr/share/luci/menu.d/luci-app-subconv-next.json" "$PKGROOT/usr/share/luci/menu.d/luci-app-subconv-next.json"
+install -m0644 "$LUCI_ROOT/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json" "$PKGROOT/usr/share/rpcd/acl.d/luci-app-subconv-next.json"
+install -m0755 "$LUCI_ROOT/root/usr/libexec/rpcd/luci.subconv" "$PKGROOT/usr/libexec/rpcd/luci.subconv"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/overview.js" "$PKGROOT/www/luci-static/resources/view/subconv-next/overview.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/settings.js" "$PKGROOT/www/luci-static/resources/view/subconv-next/settings.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/backup.js" "$PKGROOT/www/luci-static/resources/view/subconv-next/backup.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/view/subconv-next/logs.js" "$PKGROOT/www/luci-static/resources/view/subconv-next/logs.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/api.js" "$PKGROOT/www/luci-static/resources/subconv-next/api.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/network-validation.js" "$PKGROOT/www/luci-static/resources/subconv-next/network-validation.js"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/app.css" "$PKGROOT/www/luci-static/resources/subconv-next/app.css"
+install -m0644 "$LUCI_ROOT/htdocs/luci-static/resources/subconv-next/logs.css" "$PKGROOT/www/luci-static/resources/subconv-next/logs.css"
 chmod 0755 "$PKGROOT/etc/subconv-next/data"
 
 cat >"$PKGROOT/CONTROL/control" <<EOF_CONTROL
@@ -124,7 +159,7 @@ Architecture: $ARCH
 Maintainer: $MAINTAINER
 Section: net
 Priority: optional
-Depends: ca-bundle, uci
+Depends: ca-bundle, luci-base, rpcd, uci
 Description: Modern subscription converter for Mihomo / Clash Meta.
 EOF_CONTROL
 
@@ -139,6 +174,7 @@ persistent_backup="$root/etc/config/subconv-next-opkg.backup"
 if [ -f "$config_path" ]; then
 	mkdir -p "$root/tmp"
 	cp "$config_path" "$backup_path" || true
+	chmod 0600 "$backup_path" 2>/dev/null || true
 	cp "$config_path" "$persistent_backup" || true
 	chmod 0600 "$persistent_backup" 2>/dev/null || true
 fi
@@ -158,17 +194,17 @@ persistent_backup="$root/etc/config/subconv-next-opkg.backup"
 if [ -f "$backup_path" ]; then
 	mkdir -p "$root/etc/config"
 	cp "$backup_path" "$config_path"
-	chmod 0644 "$config_path"
+	chmod 0600 "$config_path"
 	cp "$config_path" "$persistent_backup" || true
 	chmod 0600 "$persistent_backup" 2>/dev/null || true
 elif [ -f "$persistent_backup" ]; then
 	mkdir -p "$root/etc/config"
 	cp "$persistent_backup" "$config_path"
-	chmod 0644 "$config_path"
+	chmod 0600 "$config_path"
 elif [ ! -e "$config_path" ] && [ -f "$default_config" ]; then
 	mkdir -p "$root/etc/config"
 	cp "$default_config" "$config_path"
-	chmod 0644 "$config_path"
+	chmod 0600 "$config_path"
 fi
 [ ! -f "$persistent_backup" ] || chmod 0600 "$persistent_backup" 2>/dev/null || true
 rm -f "$backup_path"
@@ -182,6 +218,12 @@ if [ -x /etc/init.d/subconv-next ]; then
 	if [ "$enabled" = 1 ]; then
 		/etc/init.d/subconv-next start >/dev/null 2>&1 || true
 	fi
+fi
+
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+rm -rf /tmp/luci-modulecache /tmp/luci-modulecache/
+if [ -x /etc/init.d/rpcd ]; then
+	/etc/init.d/rpcd reload >/dev/null 2>&1 || true
 fi
 
 exit 0
@@ -227,9 +269,20 @@ check_mode() {
 
 check_mode usr/bin/subconv-next 755
 check_mode etc/init.d/subconv-next 755
-check_mode etc/config/subconv-next 644
+check_mode etc/config/subconv-next 600
 check_mode etc/subconv-next/data 755
 check_mode usr/share/subconv-next/subconv-next.config 644
+check_mode usr/share/luci/menu.d/luci-app-subconv-next.json 644
+check_mode usr/share/rpcd/acl.d/luci-app-subconv-next.json 644
+check_mode usr/libexec/rpcd/luci.subconv 755
+check_mode www/luci-static/resources/view/subconv-next/overview.js 644
+check_mode www/luci-static/resources/view/subconv-next/settings.js 644
+check_mode www/luci-static/resources/view/subconv-next/backup.js 644
+check_mode www/luci-static/resources/view/subconv-next/logs.js 644
+check_mode www/luci-static/resources/subconv-next/api.js 644
+check_mode www/luci-static/resources/subconv-next/network-validation.js 644
+check_mode www/luci-static/resources/subconv-next/app.css 644
+check_mode www/luci-static/resources/subconv-next/logs.css 644
 
 mkdir -p "$DIST"
 rm -f "$IPK_PATH"
@@ -326,8 +379,19 @@ check_data_mode() {
 
 check_data_mode ./usr/bin/subconv-next 755
 check_data_mode ./etc/init.d/subconv-next 755
-check_data_mode ./etc/config/subconv-next 644
+check_data_mode ./etc/config/subconv-next 600
 check_data_mode ./etc/subconv-next/data 755
 check_data_mode ./usr/share/subconv-next/subconv-next.config 644
+check_data_mode ./usr/share/luci/menu.d/luci-app-subconv-next.json 644
+check_data_mode ./usr/share/rpcd/acl.d/luci-app-subconv-next.json 644
+check_data_mode ./usr/libexec/rpcd/luci.subconv 755
+check_data_mode ./www/luci-static/resources/view/subconv-next/overview.js 644
+check_data_mode ./www/luci-static/resources/view/subconv-next/settings.js 644
+check_data_mode ./www/luci-static/resources/view/subconv-next/backup.js 644
+check_data_mode ./www/luci-static/resources/view/subconv-next/logs.js 644
+check_data_mode ./www/luci-static/resources/subconv-next/api.js 644
+check_data_mode ./www/luci-static/resources/subconv-next/network-validation.js 644
+check_data_mode ./www/luci-static/resources/subconv-next/app.css 644
+check_data_mode ./www/luci-static/resources/subconv-next/logs.css 644
 
 echo "$IPK_PATH"

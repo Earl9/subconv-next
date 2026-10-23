@@ -299,6 +299,61 @@ func TestRenderGoldenRuleProvidersBalanced(t *testing.T) {
 	}
 }
 
+func TestAethersailorRulesRenderInFullMode(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.RuleMode = "full"
+	text := string(mustRender(t, nodes, opts))
+
+	for _, needle := range []string{
+		"custom-direct-domain: {type: http, behavior: domain",
+		"custom-direct-ip: {type: http, behavior: classical",
+		"custom-port-direct: {type: http, behavior: classical",
+		"category-games@cn:",
+		"category-communication:",
+		"googlefcm:",
+		"category-ai-cn:",
+		"RULE-SET,category-ai-!cn,🤖 AI 专项",
+		"- {name: \"🤖 AI 专项\", type: select",
+		"RULE-SET,custom-direct-domain,DIRECT",
+		"RULE-SET,custom-proxy-domain,🚀 节点选择",
+		"RULE-SET,category-ai-cn,DIRECT",
+		"RULE-SET,category-communication,💬 即时通讯",
+		"RULE-SET,category-emby,🎥 Emby",
+		"category-dev:",
+		"gfw:",
+		"RULE-SET,custom-port-direct,🔀 非标端口",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("full output missing upstream rule %q:\n%s", needle, text)
+		}
+	}
+	if strings.Contains(text, "- {name: DIRECT, type: select") {
+		t.Fatalf("direct-only categories must not generate a proxy group:\n%s", text)
+	}
+	gfwPos := strings.Index(text, "RULE-SET,gfw,🚀 节点选择")
+	nonCNPos := strings.Index(text, "RULE-SET,geolocation-!cn,🌍 非中国")
+	cnPos := strings.Index(text, "RULE-SET,cn,🔒 国内服务")
+	portPos := strings.Index(text, "RULE-SET,custom-port-direct,🔀 非标端口")
+	if gfwPos < 0 || nonCNPos < 0 || cnPos < 0 || portPos < 0 || gfwPos > nonCNPos || nonCNPos > cnPos || cnPos > portPos {
+		t.Fatalf("full rule order should be GFW, non-China, domestic catch-all, then nonstandard ports:\n%s", text)
+	}
+}
+
+func TestAethersailorDirectRulesPrecedeBroadFallbacksInCustomMode(t *testing.T) {
+	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
+	opts := standardRenderOptions()
+	opts.RuleMode = "custom"
+	opts.EnabledRules = []string{"non_cn", "aethersailor_direct"}
+	text := string(mustRender(t, nodes, opts))
+
+	directPos := strings.Index(text, "RULE-SET,custom-direct-domain,DIRECT")
+	nonCNPos := strings.Index(text, "RULE-SET,geolocation-!cn,🌍 非中国")
+	if directPos < 0 || nonCNPos < 0 || directPos > nonCNPos {
+		t.Fatalf("upstream direct rules should precede the non-China fallback:\n%s", text)
+	}
+}
+
 func TestMicrosoftCloudDriveHasSeparateRuleGroup(t *testing.T) {
 	nodes := mustParseFile(t, filepath.Join("..", "..", "testdata", "nodes", "ss.txt"))
 	opts := standardRenderOptions()

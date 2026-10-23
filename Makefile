@@ -1,6 +1,6 @@
 BINARY := subconv-next
 
-.PHONY: build test test-race vet fmt-check package docker-buildx
+.PHONY: build test test-race vet fmt-check package package-apk docker-buildx
 
 build:
 	go build -o $(BINARY) ./cmd/subconv-next
@@ -19,6 +19,9 @@ fmt-check:
 
 package:
 	./scripts/package-openwrt-ipk-portable.sh
+
+package-apk:
+	./scripts/package-openwrt-apk-sdk.sh
 
 docker-buildx:
 	docker buildx build --platform linux/amd64,linux/arm64 -t subconv-next:local .

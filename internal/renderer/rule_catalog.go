@@ -31,11 +31,13 @@ var ruleOutputOrder = []string{
 	"youtube",
 	"education",
 	"cloud",
+	"google_fcm",
 	"google",
 	"private",
 	"domestic",
 	"telegram",
 	"github",
+	"speedtest",
 	"onedrive",
 	"microsoft",
 	"apple",
@@ -43,26 +45,46 @@ var ruleOutputOrder = []string{
 	"meta",
 	"discord",
 	"social",
+	"communication",
+	"social_media",
 	"netflix",
 	"disney",
 	"western_streaming",
 	"asian_streaming",
+	"emby",
 	"steam",
 	"pc_gaming",
 	"console_gaming",
+	"game_platforms",
 	"dev",
+	"containers",
 	"storage",
 	"payment",
 	"crypto",
 	"news",
 	"shopping",
+	"ai_cn",
+	"ai_extended",
+	"aethersailor_direct",
+	"game_direct",
+	"entertainment",
+	"pt",
+	"gfw",
 	"non_cn",
+	"nonstandard_port",
 }
+
+var ruleFullOutputOrder = append([]string{
+	"adblock",
+	"private",
+	"aethersailor_direct",
+	"game_direct",
+}, ruleOutputOrder...)
 
 var ruleModePresets = map[string][]string{
 	"minimal":  {"private", "domestic", "non_cn"},
 	"balanced": {"private", "domestic", "onedrive", "microsoft", "apple", "google", "github", "ai", "telegram", "streaming", "non_cn"},
-	"full":     ruleOutputOrder,
+	"full":     ruleFullOutputOrder,
 }
 
 var legacyRuleExpansions = map[string][]string{
@@ -96,6 +118,54 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "category-ai-chat-!cn", TargetGroup: "🤖 AI 服务"},
 			{Provider: "openai", TargetGroup: "🤖 AI 服务"},
 			{Provider: "anthropic", TargetGroup: "🤖 AI 服务"},
+		},
+	},
+	"ai_extended": {
+		Key:       "ai_extended",
+		GroupName: "🤖 AI 专项",
+		Providers: []RuleProviderSpec{
+			geositeProvider("xai"),
+			geositeProvider("bing"),
+			geositeProvider("google-gemini"),
+			geositeProvider("category-ai-!cn"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "xai", TargetGroup: "🤖 AI 专项"},
+			{Provider: "bing", TargetGroup: "🤖 AI 专项"},
+			{Provider: "google-gemini", TargetGroup: "🤖 AI 专项"},
+			{Provider: "category-ai-!cn", TargetGroup: "🤖 AI 专项"},
+		},
+	},
+	"ai_cn": {
+		Key: "ai_cn",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-ai-cn"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-ai-cn", TargetGroup: "DIRECT"},
+		},
+	},
+	"aethersailor_direct": {
+		Key: "aethersailor_direct",
+		Providers: []RuleProviderSpec{
+			aethersailorProvider("custom-direct-domain", "Custom_Direct_Domain.mrs", "domain", "mrs"),
+			aethersailorProvider("custom-direct-ip", "Custom_Direct_Classical_IP.yaml", "classical", "yaml"),
+			aethersailorProvider("custom-proxy-domain", "Custom_Proxy_Domain.mrs", "domain", "mrs"),
+			aethersailorProvider("custom-proxy-ip", "Custom_Proxy_Classical_IP.yaml", "classical", "yaml"),
+			aethersailorProvider("steam-cdn-domain", "Steam_CDN_Domain.mrs", "domain", "mrs"),
+			aethersailorProvider("steam-cdn-ip", "Steam_CDN_Classical_IP.yaml", "classical", "yaml"),
+			aethersailorProvider("game-download-cdn-domain", "Game_Download_CDN_Domain.mrs", "domain", "mrs"),
+			aethersailorProvider("game-download-cdn-ip", "Game_Download_CDN_Classical_IP.yaml", "classical", "yaml"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "custom-direct-domain", TargetGroup: "DIRECT"},
+			{Provider: "custom-direct-ip", TargetGroup: "DIRECT"},
+			{Provider: "steam-cdn-domain", TargetGroup: "DIRECT"},
+			{Provider: "steam-cdn-ip", TargetGroup: "DIRECT"},
+			{Provider: "game-download-cdn-domain", TargetGroup: "DIRECT"},
+			{Provider: "game-download-cdn-ip", TargetGroup: "DIRECT"},
+			{Provider: "custom-proxy-domain", TargetGroup: groupNodeSelect},
+			{Provider: "custom-proxy-ip", TargetGroup: groupNodeSelect},
 		},
 	},
 	"youtube": {
@@ -150,6 +220,16 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "cloudflare-ip", TargetGroup: "☁️ 云服务", NoResolve: true},
 		},
 	},
+	"google_fcm": {
+		Key:       "google_fcm",
+		GroupName: "📢 谷歌 FCM",
+		Providers: []RuleProviderSpec{
+			geositeProvider("googlefcm"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "googlefcm", TargetGroup: "📢 谷歌 FCM"},
+		},
+	},
 	"google": {
 		Key:       "google",
 		GroupName: "🔍 谷歌服务",
@@ -172,6 +252,19 @@ var ruleCatalog = map[string]RuleCategory{
 		Rules: []RuleSpec{
 			{Provider: "private", TargetGroup: "🏠 私有网络"},
 			{Provider: "private-ip", TargetGroup: "🏠 私有网络", NoResolve: true},
+		},
+	},
+	"game_direct": {
+		Key: "game_direct",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-games@cn"),
+			geositeProvider("category-game-platforms-download"),
+			geositeProvider("category-public-tracker"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-games@cn", TargetGroup: "DIRECT"},
+			{Provider: "category-game-platforms-download", TargetGroup: "DIRECT"},
+			{Provider: "category-public-tracker", TargetGroup: "DIRECT"},
 		},
 	},
 	"domestic": {
@@ -211,6 +304,16 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "github", TargetGroup: "🐱 代码托管"},
 			{Provider: "gitlab", TargetGroup: "🐱 代码托管"},
 			{Provider: "atlassian", TargetGroup: "🐱 代码托管"},
+		},
+	},
+	"speedtest": {
+		Key:       "speedtest",
+		GroupName: "🚀 测速工具",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-speedtest"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-speedtest", TargetGroup: "🚀 测速工具"},
 		},
 	},
 	"onedrive": {
@@ -305,6 +408,30 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "tumblr", TargetGroup: "💬 其他社交"},
 		},
 	},
+	"communication": {
+		Key:       "communication",
+		GroupName: "💬 即时通讯",
+		Providers: []RuleProviderSpec{
+			geositeProvider("zoom"),
+			geositeProvider("talkatone"),
+			geositeProvider("category-communication"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "zoom", TargetGroup: "💬 即时通讯"},
+			{Provider: "talkatone", TargetGroup: "💬 即时通讯"},
+			{Provider: "category-communication", TargetGroup: "💬 即时通讯"},
+		},
+	},
+	"social_media": {
+		Key:       "social_media",
+		GroupName: "🌐 社交媒体",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-social-media-!cn"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-social-media-!cn", TargetGroup: "🌐 社交媒体"},
+		},
+	},
 	"netflix": {
 		Key:       "netflix",
 		GroupName: "🎬 奈飞",
@@ -369,6 +496,16 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "kktv", TargetGroup: "🎌 亚洲流媒体"},
 		},
 	},
+	"emby": {
+		Key:       "emby",
+		GroupName: "🎥 Emby",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-emby"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-emby", TargetGroup: "🎥 Emby"},
+		},
+	},
 	"steam": {
 		Key:       "steam",
 		GroupName: "🎮 Steam",
@@ -413,6 +550,16 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "nintendo", TargetGroup: "🎯 主机游戏"},
 		},
 	},
+	"game_platforms": {
+		Key:       "game_platforms",
+		GroupName: "🎮 游戏平台",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-games"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-games", TargetGroup: "🎮 游戏平台"},
+		},
+	},
 	"dev": {
 		Key:       "dev",
 		GroupName: "🛠️ 开发工具",
@@ -421,12 +568,24 @@ var ruleCatalog = map[string]RuleCategory{
 			geositeProvider("npmjs"),
 			geositeProvider("jetbrains"),
 			geositeProvider("stackexchange"),
+			geositeProvider("category-dev"),
 		},
 		Rules: []RuleSpec{
 			{Provider: "docker", TargetGroup: "🛠️ 开发工具"},
 			{Provider: "npmjs", TargetGroup: "🛠️ 开发工具"},
 			{Provider: "jetbrains", TargetGroup: "🛠️ 开发工具"},
 			{Provider: "stackexchange", TargetGroup: "🛠️ 开发工具"},
+			{Provider: "category-dev", TargetGroup: "🛠️ 开发工具"},
+		},
+	},
+	"containers": {
+		Key:       "containers",
+		GroupName: "📦 容器服务",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-container"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-container", TargetGroup: "📦 容器服务"},
 		},
 	},
 	"storage": {
@@ -460,9 +619,11 @@ var ruleCatalog = map[string]RuleCategory{
 		GroupName: "₿ 加密货币",
 		Providers: []RuleProviderSpec{
 			geositeProvider("binance"),
+			geositeProvider("category-cryptocurrency"),
 		},
 		Rules: []RuleSpec{
 			{Provider: "binance", TargetGroup: "₿ 加密货币"},
+			{Provider: "category-cryptocurrency", TargetGroup: "₿ 加密货币"},
 		},
 	},
 	"news": {
@@ -474,6 +635,7 @@ var ruleCatalog = map[string]RuleCategory{
 			geositeProvider("nytimes"),
 			geositeProvider("wsj"),
 			geositeProvider("bloomberg"),
+			geositeProvider("category-media"),
 		},
 		Rules: []RuleSpec{
 			{Provider: "bbc", TargetGroup: "📰 新闻资讯"},
@@ -481,6 +643,7 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "nytimes", TargetGroup: "📰 新闻资讯"},
 			{Provider: "wsj", TargetGroup: "📰 新闻资讯"},
 			{Provider: "bloomberg", TargetGroup: "📰 新闻资讯"},
+			{Provider: "category-media", TargetGroup: "📰 新闻资讯"},
 		},
 	},
 	"shopping": {
@@ -489,10 +652,51 @@ var ruleCatalog = map[string]RuleCategory{
 		Providers: []RuleProviderSpec{
 			geositeProvider("amazon"),
 			geositeProvider("ebay"),
+			geositeProvider("category-ecommerce"),
 		},
 		Rules: []RuleSpec{
 			{Provider: "amazon", TargetGroup: "🛒 海淘购物"},
 			{Provider: "ebay", TargetGroup: "🛒 海淘购物"},
+			{Provider: "category-ecommerce", TargetGroup: "🛒 海淘购物"},
+		},
+	},
+	"entertainment": {
+		Key:       "entertainment",
+		GroupName: "🌎 国外媒体",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-entertainment"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-entertainment", TargetGroup: "🌎 国外媒体"},
+		},
+	},
+	"pt": {
+		Key:       "pt",
+		GroupName: "⏬ PT 站点",
+		Providers: []RuleProviderSpec{
+			geositeProvider("category-pt"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "category-pt", TargetGroup: "⏬ PT 站点"},
+		},
+	},
+	"nonstandard_port": {
+		Key:       "nonstandard_port",
+		GroupName: "🔀 非标端口",
+		Providers: []RuleProviderSpec{
+			aethersailorProvider("custom-port-direct", "Custom_Port_Direct.yaml", "classical", "yaml"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "custom-port-direct", TargetGroup: "🔀 非标端口"},
+		},
+	},
+	"gfw": {
+		Key: "gfw",
+		Providers: []RuleProviderSpec{
+			geositeProvider("gfw"),
+		},
+		Rules: []RuleSpec{
+			{Provider: "gfw", TargetGroup: groupNodeSelect},
 		},
 	},
 	"non_cn": {
@@ -505,6 +709,18 @@ var ruleCatalog = map[string]RuleCategory{
 			{Provider: "geolocation-!cn", TargetGroup: "🌍 非中国"},
 		},
 	},
+}
+
+func aethersailorProvider(name, file, behavior, format string) RuleProviderSpec {
+	return RuleProviderSpec{
+		Name:     name,
+		Type:     "http",
+		Behavior: behavior,
+		URL:      "https://raw.githubusercontent.com/Aethersailor/Custom_OpenClash_Rules/main/rule/" + file,
+		Path:     "./ruleset/" + name + "." + format,
+		Interval: 28800,
+		Format:   format,
+	}
 }
 
 func geositeProvider(name string) RuleProviderSpec {
@@ -535,13 +751,35 @@ func geoipProvider(name, remoteName string) RuleProviderSpec {
 }
 
 func orderedRuleCategories(enabledRules []string) []RuleCategory {
+	return orderedRuleCategoriesByOrder(enabledRules, ruleOutputOrder)
+}
+
+func orderedRuleCategoriesForRules(enabledRules []string) []RuleCategory {
+	enabled := normalizeEnabledRuleKeys(enabledRules)
+	order := ruleOutputOrder
+	if len(enabled) == len(ruleCatalog) {
+		order = ruleFullOutputOrder
+	} else if containsString(enabled, "aethersailor_direct") || containsString(enabled, "game_direct") {
+		order = make([]string, 0, len(ruleOutputOrder))
+		order = append(order, "private", "aethersailor_direct", "game_direct")
+		for _, key := range ruleOutputOrder {
+			if key == "private" || key == "aethersailor_direct" || key == "game_direct" {
+				continue
+			}
+			order = append(order, key)
+		}
+	}
+	return orderedRuleCategoriesByOrder(enabled, order)
+}
+
+func orderedRuleCategoriesByOrder(enabledRules []string, order []string) []RuleCategory {
 	enabled := make(map[string]struct{}, len(enabledRules))
 	for _, key := range normalizeEnabledRuleKeys(enabledRules) {
 		enabled[key] = struct{}{}
 	}
 
 	out := make([]RuleCategory, 0, len(enabled))
-	for _, key := range ruleOutputOrder {
+	for _, key := range order {
 		if _, ok := enabled[key]; !ok {
 			continue
 		}
@@ -558,7 +796,7 @@ func resolveEnabledRules(ruleMode string, enabledRules []string) []string {
 		ruleMode = "custom"
 	}
 	if ruleMode == "full" {
-		return uniqueOrdered(ruleOutputOrder)
+		return uniqueOrdered(ruleFullOutputOrder)
 	}
 	if preset, ok := ruleModePresets[ruleMode]; ok {
 		return normalizeEnabledRuleKeys(preset)

@@ -15,7 +15,7 @@ Services / SubConv Next
 ```text
 /usr/share/luci/menu.d/luci-app-subconv-next.json
 /usr/share/rpcd/acl.d/luci-app-subconv-next.json
-/www/luci-static/resources/view/subconv-next/index.js
+/www/luci-static/resources/view/subconv-next/overview.js
 ```
 
 源码路径：
@@ -23,7 +23,7 @@ Services / SubConv Next
 ```text
 openwrt/luci-app-subconv-next/root/usr/share/luci/menu.d/luci-app-subconv-next.json
 openwrt/luci-app-subconv-next/root/usr/share/rpcd/acl.d/luci-app-subconv-next.json
-openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/index.js
+openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/overview.js
 ```
 
 ## 页面能力
@@ -38,15 +38,9 @@ openwrt/luci-app-subconv-next/htdocs/luci-static/resources/view/subconv-next/ind
 
 ACL 允许 LuCI 页面读取和写入 `subconv-next` UCI 配置，并通过 ubus 查询/控制 `subconv-next` 服务。页面不显示完整订阅 URL、发布 token 或节点密钥。
 
-## 可选拆分包
+## 单包发布
 
-`openwrt/luci-app-subconv-next/Makefile` 仍保留，用于高级打包场景单独构建 LuCI 包：
-
-```sh
-./scripts/package-openwrt-luci-ipk-sdk.sh
-```
-
-默认发布路径不使用该拆分包；LuCI 文件已经包含在 `subconv-next_1.0.0-3_aarch64_generic.ipk` 中。
+`openwrt/luci-app-subconv-next/` 保存 LuCI 源文件；默认 IPK 和 APK 构建会把这些文件直接合并到 `subconv-next` 主包中，不发布独立的 LuCI 包。
 
 ## 验收
 
