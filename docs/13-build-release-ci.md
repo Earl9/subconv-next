@@ -67,7 +67,7 @@ Codex 优先保证路线 B 可用。
 
 ### Manual Release
 
-`.github/workflows/auto-release.yml` 仅通过 GitHub Actions 的 `workflow_dispatch` 手动发布。运行时必须明确填写 `release_version`，格式为 `1.0.N`：
+`.github/workflows/auto-release.yml` 仅通过 GitHub Actions 的 `workflow_dispatch` 手动发布。运行时必须明确填写 `release_version`，格式为 `MAJOR.MINOR.PATCH`，例如 `1.1.1`：
 
 - 用该版本号构建 Linux 多架构二进制。
 - 使用仓库内 portable `ipkg-build` 打包 `aarch64_generic` all-in-one OpenWrt IPK，不需要配置 OpenWrt SDK URL。
