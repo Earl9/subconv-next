@@ -607,33 +607,33 @@ func appendDedupeSuffix(base string, index int, suffixStyle string) string {
 	return base + " " + suffix
 }
 
-func inferRegionTags(name string) []string {
-	matchers := []struct {
-		tag               string
-		substringPatterns []string
-		tokenPatterns     []string
-	}{
-		{tag: "HK", substringPatterns: []string{"香港", "HONG KONG", "港"}, tokenPatterns: []string{"HK"}},
-		{tag: "JP", substringPatterns: []string{"日本", "JAPAN", "日"}, tokenPatterns: []string{"JP"}},
-		{tag: "US", substringPatterns: []string{"美国", "UNITED STATES", "美"}, tokenPatterns: []string{"US"}},
-		{tag: "SG", substringPatterns: []string{"新加坡", "SINGAPORE", "狮城"}, tokenPatterns: []string{"SG"}},
-		{tag: "TW", substringPatterns: []string{"台湾", "TAIWAN", "台"}, tokenPatterns: []string{"TW"}},
-		{tag: "KR", substringPatterns: []string{"韩国", "KOREA", "韩"}, tokenPatterns: []string{"KR"}},
-		{tag: "DE", substringPatterns: []string{"德国", "GERMANY"}, tokenPatterns: []string{"DE"}},
-		{tag: "GB", substringPatterns: []string{"英国", "UNITED KINGDOM"}, tokenPatterns: []string{"GB", "UK"}},
-		{tag: "NL", substringPatterns: []string{"荷兰", "NETHERLANDS"}, tokenPatterns: []string{"NL"}},
-		{tag: "RU", substringPatterns: []string{"俄罗斯", "RUSSIA"}, tokenPatterns: []string{"RU"}},
-		{tag: "FR", substringPatterns: []string{"法国", "FRANCE"}, tokenPatterns: []string{"FR"}},
-		{tag: "CA", substringPatterns: []string{"加拿大", "CANADA"}, tokenPatterns: []string{"CA"}},
-		{tag: "AU", substringPatterns: []string{"澳大利亚", "AUSTRALIA"}, tokenPatterns: []string{"AU"}},
-	}
+var nodeRegionMatchers = []struct {
+	tag               string
+	substringPatterns []string
+	tokenPatterns     []string
+}{
+	{tag: "HK", substringPatterns: []string{"香港", "HONG KONG", "港"}, tokenPatterns: []string{"HK"}},
+	{tag: "JP", substringPatterns: []string{"日本", "JAPAN", "日"}, tokenPatterns: []string{"JP"}},
+	{tag: "US", substringPatterns: []string{"美国", "UNITED STATES", "美"}, tokenPatterns: []string{"US"}},
+	{tag: "SG", substringPatterns: []string{"新加坡", "SINGAPORE", "狮城"}, tokenPatterns: []string{"SG"}},
+	{tag: "TW", substringPatterns: []string{"台湾", "TAIWAN", "台"}, tokenPatterns: []string{"TW"}},
+	{tag: "KR", substringPatterns: []string{"韩国", "KOREA", "韩"}, tokenPatterns: []string{"KR"}},
+	{tag: "DE", substringPatterns: []string{"德国", "GERMANY"}, tokenPatterns: []string{"DE"}},
+	{tag: "GB", substringPatterns: []string{"英国", "UNITED KINGDOM"}, tokenPatterns: []string{"GB", "UK"}},
+	{tag: "NL", substringPatterns: []string{"荷兰", "NETHERLANDS"}, tokenPatterns: []string{"NL"}},
+	{tag: "RU", substringPatterns: []string{"俄罗斯", "RUSSIA"}, tokenPatterns: []string{"RU"}},
+	{tag: "FR", substringPatterns: []string{"法国", "FRANCE"}, tokenPatterns: []string{"FR"}},
+	{tag: "CA", substringPatterns: []string{"加拿大", "CANADA"}, tokenPatterns: []string{"CA"}},
+	{tag: "AU", substringPatterns: []string{"澳大利亚", "AUSTRALIA"}, tokenPatterns: []string{"AU"}},
+}
 
+func inferRegionTags(name string) []string {
 	upperName := strings.ToUpper(name)
 	tokens := tokenizeName(upperName)
 	var tags []string
-	for _, matcher := range matchers {
+	for _, matcher := range nodeRegionMatchers {
 		for _, pattern := range matcher.substringPatterns {
-			if strings.Contains(upperName, strings.ToUpper(pattern)) {
+			if strings.Contains(upperName, pattern) {
 				tags = append(tags, matcher.tag)
 				break
 			}
@@ -689,18 +689,26 @@ func tokenSetContains(tokens []string, target string) bool {
 }
 
 func mergeUniqueStrings(a, b []string) []string {
+	if len(a)+len(b) == 0 {
+		return nil
+	}
 	set := make(map[string]struct{}, len(a)+len(b))
-	var merged []string
-	for _, value := range append(append([]string{}, a...), b...) {
-		value = sanitizeText(value)
-		if value == "" {
-			continue
+	merged := make([]string, 0, len(a)+len(b))
+	for _, values := range [][]string{a, b} {
+		for _, value := range values {
+			value = sanitizeText(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := set[value]; ok {
+				continue
+			}
+			set[value] = struct{}{}
+			merged = append(merged, value)
 		}
-		if _, ok := set[value]; ok {
-			continue
-		}
-		set[value] = struct{}{}
-		merged = append(merged, value)
+	}
+	if len(merged) == 0 {
+		return nil
 	}
 	sort.Strings(merged)
 	return merged
@@ -714,6 +722,19 @@ func sanitizeText(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
+	}
+	// Most identifiers and source labels are already normalized. Avoid a
+	// builder, Fields slice and replacement string on every pipeline pass.
+	clean, previousSpace := true, false
+	for _, r := range value {
+		if r == '\uFFFD' || unicode.IsControl(r) || (unicode.IsSpace(r) && (r != ' ' || previousSpace)) {
+			clean = false
+			break
+		}
+		previousSpace = r == ' '
+	}
+	if clean {
+		return value
 	}
 
 	var b strings.Builder

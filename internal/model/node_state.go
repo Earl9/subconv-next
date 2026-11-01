@@ -172,10 +172,100 @@ func NormalizeNodeState(state NodeState) NodeState {
 }
 
 func CloneNode(node NodeIR) NodeIR {
-	raw, _ := json.Marshal(node)
-	var cloned NodeIR
-	_ = json.Unmarshal(raw, &cloned)
-	return cloned
+	node.Tags = cloneNodeSlice(node.Tags)
+	node.Sources = cloneNodeSlice(node.Sources)
+	node.Warnings = cloneNodeSlice(node.Warnings)
+	node.UDP = cloneNodePointer(node.UDP)
+	node.TLS.ALPN = cloneNodeSlice(node.TLS.ALPN)
+	node.TLS.Reality = cloneNodePointer(node.TLS.Reality)
+	node.TLS.ECH = cloneNodePointer(node.TLS.ECH)
+	node.Transport.NoGRPCHeader = cloneNodePointer(node.Transport.NoGRPCHeader)
+	node.Transport.H2Hosts = cloneNodeSlice(node.Transport.H2Hosts)
+	if node.Transport.Headers != nil {
+		headers := make(map[string]string, len(node.Transport.Headers))
+		for key, value := range node.Transport.Headers {
+			headers[key] = value
+		}
+		node.Transport.Headers = headers
+	}
+	node.Raw = cloneNodeMap(node.Raw)
+	if node.WireGuard != nil {
+		wg := *node.WireGuard
+		wg.AllowedIPs = cloneNodeSlice(wg.AllowedIPs)
+		wg.Reserved = cloneNodeSlice(wg.Reserved)
+		wg.DNS = cloneNodeSlice(wg.DNS)
+		wg.AmneziaWG = cloneNodeMap(wg.AmneziaWG)
+		wg.Peers = cloneNodeSlice(wg.Peers)
+		for i := range wg.Peers {
+			wg.Peers[i].AllowedIPs = cloneNodeSlice(wg.Peers[i].AllowedIPs)
+			wg.Peers[i].Reserved = cloneNodeSlice(wg.Peers[i].Reserved)
+		}
+		node.WireGuard = &wg
+	}
+	return node
+}
+
+func cloneNodePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneNodeSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(values)), values...)
+}
+
+func cloneNodeMap(values map[string]interface{}) map[string]interface{} {
+	if values == nil {
+		return nil
+	}
+	copy := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		copy[key] = cloneNodeValue(value)
+	}
+	return copy
+}
+
+func cloneNodeValue(value interface{}) interface{} {
+	switch value := value.(type) {
+	case nil, string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		return value
+	case map[string]interface{}:
+		return cloneNodeMap(value)
+	case []interface{}:
+		copy := cloneNodeSlice(value)
+		for i := range copy {
+			copy[i] = cloneNodeValue(copy[i])
+		}
+		return copy
+	case []string:
+		return cloneNodeSlice(value)
+	case []int:
+		return cloneNodeSlice(value)
+	case []byte:
+		return cloneNodeSlice(value)
+	case map[string]string:
+		if value == nil {
+			return value
+		}
+		copy := make(map[string]string, len(value))
+		for key, item := range value {
+			copy[key] = item
+		}
+		return copy
+	default:
+		// Raw extension fields normally come from JSON/YAML maps. Retain the
+		// previous JSON-copy behavior for unusual typed extension values.
+		data, _ := json.Marshal(value)
+		var copy interface{}
+		_ = json.Unmarshal(data, &copy)
+		return copy
+	}
 }
 
 func CloneNodes(nodes []NodeIR) []NodeIR {

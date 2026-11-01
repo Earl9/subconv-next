@@ -6101,6 +6101,9 @@ async function loadNodePage(request) {
       ? response.errors.map((item) => item?.message || String(item))
       : []),
   ].filter(Boolean);
+  state.nodeValidationWarnings = Array.isArray(response.validation_warnings)
+    ? response.validation_warnings
+    : [];
   buildNodeIndexes();
   state.nodeCacheStale = false;
   state.nodeSourceOptions = Array.isArray(response.source_options)
@@ -6109,6 +6112,7 @@ async function loadNodePage(request) {
   syncSourceFilterOptions();
   renderNodeEditor();
   renderConfigNodeSummary();
+  renderDiagnostics();
 }
 
 function buildNodeQueryParams(options = {}) {
@@ -7760,7 +7764,6 @@ function clearLogsDisplay() {
 async function refreshNodesAfterGenerate() {
   markNodeCacheStale();
   await loadNodes();
-  await validateNodes();
 }
 
 function updateGeneratedUrlPlaceholder() {

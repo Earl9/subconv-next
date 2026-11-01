@@ -64,7 +64,7 @@ func collectNodes(cfg model.Config, applyFilters, preferCache bool) CollectResul
 				continue
 			}
 
-			parsed := parser.ParseContent([]byte(inline.Content), model.SourceInfo{
+			parsed := sourceParseCache.parse([]byte(inline.Content), model.SourceInfo{
 				ID:   inline.ID,
 				Name: inline.Name,
 				Kind: "inline",
@@ -123,7 +123,7 @@ func collectNodes(cfg model.Config, applyFilters, preferCache bool) CollectResul
 				}
 
 				sourceID := firstNonEmptyString(sub.ID, sourceURLHash(sub.URL), sub.Name)
-				parsed := parser.ParseContent(fetched.Content, model.SourceInfo{
+				parsed := sourceParseCache.parse(fetched.Content, model.SourceInfo{
 					ID:      sourceID,
 					Name:    sub.Name,
 					Emoji:   sub.Emoji,

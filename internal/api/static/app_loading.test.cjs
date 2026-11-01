@@ -30,6 +30,7 @@ function setup() {
     renderResult = () => {};
     renderNodeEditor = () => {};
     renderConfigNodeSummary = () => {};
+    renderDiagnostics = () => {};
     syncSourceFilterOptions = () => {};
     showToast = () => {};
     state.workspaceId = "workspace-a";
@@ -136,4 +137,19 @@ test("node cache invalidation discards pending responses", async () => {
   app.requests[0].resolve(nodesResponse("old-node"));
   await first;
   assert.equal(app.state.nodes[0].id, "saved-node");
+});
+
+test("editor refresh receives validation without a second collection request", async () => {
+  const app = setup();
+  const pending = app.run("refreshNodesAfterGenerate()");
+  assert.equal(app.requests.length, 1);
+  assert.match(app.requests[0].url, /^\/api\/nodes\?/);
+  const warning = { node_id: "off-page", level: "warning", message: "missing field" };
+  app.requests[0].resolve({
+    status: 200, headers: new Headers(),
+    json: async () => ({ ok: true, nodes: [], summary: { total: 0 }, validation_warnings: [warning] }),
+  });
+  await pending;
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.state.nodeValidationWarnings[0].node_id, "off-page");
 });

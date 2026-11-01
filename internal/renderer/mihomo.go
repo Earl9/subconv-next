@@ -2076,22 +2076,71 @@ func renderConfig(cfg mihomoConfig) ([]byte, error) {
 		if index > 0 {
 			out.WriteString("\n\n")
 		}
-		doc := mappingNode()
-		appendMap(doc, section.key, section.value)
+		if err := encodeYAMLSection(&out, section.key, section.value); err != nil {
+			return nil, err
+		}
+	}
+	return []byte(unescapeYAMLUnicodeEscapes(out.String())), nil
+}
 
+// yaml.v3 retains its event queue for the lifetime of an encoder. Encode long
+// block sequences in bounded batches so thousands of proxy/group entries do
+// not grow one large temporary queue. Each batch uses the same YAML encoding and
+// indentation; only its repeated top-level key is omitted when joining output.
+func encodeYAMLSection(out *bytes.Buffer, key string, value *yaml.Node) error {
+	const batchNodeBudget = 1024
+	encode := func(value *yaml.Node, continuation bool) error {
+		doc := mappingNode()
+		appendMap(doc, key, value)
 		var buf bytes.Buffer
 		enc := yaml.NewEncoder(&buf)
 		enc.SetIndent(2)
 		if err := enc.Encode(doc); err != nil {
 			_ = enc.Close()
-			return nil, fmt.Errorf("encode mihomo section %s: %w", section.key, err)
+			return fmt.Errorf("encode mihomo section %s: %w", key, err)
 		}
 		if err := enc.Close(); err != nil {
-			return nil, fmt.Errorf("close mihomo section %s: %w", section.key, err)
+			return fmt.Errorf("close mihomo section %s: %w", key, err)
 		}
-		out.Write(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+		encoded := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+		if continuation {
+			headerEnd := bytes.IndexByte(encoded, '\n')
+			if headerEnd < 0 {
+				return fmt.Errorf("encode mihomo section %s: missing sequence header", key)
+			}
+			encoded = encoded[headerEnd+1:]
+			out.WriteByte('\n')
+		}
+		out.Write(encoded)
+		return nil
 	}
-	return []byte(unescapeYAMLUnicodeEscapes(out.String())), nil
+	if value.Kind != yaml.SequenceNode || value.Style&yaml.FlowStyle != 0 || len(value.Content) == 0 {
+		return encode(value, false)
+	}
+	start, weight := 0, 0
+	for index, child := range value.Content {
+		childWeight := yamlNodeCount(child)
+		if index > start && weight+childWeight > batchNodeBudget {
+			batch := *value
+			batch.Content = value.Content[start:index]
+			if err := encode(&batch, start > 0); err != nil {
+				return err
+			}
+			start, weight = index, 0
+		}
+		weight += childWeight
+	}
+	batch := *value
+	batch.Content = value.Content[start:]
+	return encode(&batch, start > 0)
+}
+
+func yamlNodeCount(node *yaml.Node) int {
+	count := 1
+	for _, child := range node.Content {
+		count += yamlNodeCount(child)
+	}
+	return count
 }
 
 func sanitizeConfigBeforeSerialize(cfg mihomoConfig) mihomoConfig {

@@ -61,12 +61,13 @@ type nodeListItem struct {
 }
 
 type nodeListResponse struct {
-	OK            bool                `json:"ok"`
-	Summary       nodeListSummary     `json:"summary"`
-	Nodes         []nodeListItem      `json:"nodes"`
-	SourceOptions []string            `json:"source_options,omitempty"`
-	Warnings      []string            `json:"warnings,omitempty"`
-	Errors        []parser.ParseError `json:"errors,omitempty"`
+	OK                 bool                             `json:"ok"`
+	Summary            nodeListSummary                  `json:"summary"`
+	Nodes              []nodeListItem                   `json:"nodes"`
+	SourceOptions      []string                         `json:"source_options,omitempty"`
+	Warnings           []string                         `json:"warnings,omitempty"`
+	Errors             []parser.ParseError              `json:"errors,omitempty"`
+	ValidationWarnings []pipeline.NodeValidationWarning `json:"validation_warnings"`
 }
 
 type deleteNodesResponse struct {
@@ -278,12 +279,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, nodeListResponse{
-		OK:            true,
-		Summary:       summarizeNodes(filtered, state, disabled),
-		Nodes:         buildNodeListItems(paged, state, disabled),
-		SourceOptions: nodeSourceOptions(collected.Nodes, deleted),
-		Warnings:      collected.Warnings,
-		Errors:        collected.Errors,
+		OK:                 true,
+		Summary:            summarizeNodes(filtered, state, disabled),
+		Nodes:              buildNodeListItems(paged, state, disabled),
+		SourceOptions:      nodeSourceOptions(collected.Nodes, deleted),
+		Warnings:           collected.Warnings,
+		Errors:             collected.Errors,
+		ValidationWarnings: collected.ValidationWarnings,
 	})
 	_ = ref
 }

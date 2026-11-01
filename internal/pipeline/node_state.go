@@ -38,7 +38,8 @@ func CollectNodesWithState(cfg model.Config, state model.NodeState, applyFilters
 	collected := collectNodes(cfg, applyFilters, true)
 	state = model.NormalizeNodeState(state)
 
-	nodes := model.CloneNodes(collected.Nodes)
+	// Collection owns its parsed nodes, including cache-hit copies.
+	nodes := collected.Nodes
 	if len(state.CustomNodes) > 0 {
 		// Custom nodes are independently editable records. Keep their stored IDs
 		// and do not merge them into subscription nodes in the editor.

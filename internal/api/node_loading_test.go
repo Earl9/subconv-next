@@ -11,6 +11,26 @@ import (
 	"subconv-next/internal/model"
 )
 
+func TestNodeListIncludesValidationForOffPageNodes(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Inline = []model.InlineConfig{{ID: "inline", Enabled: true, Content: "trojan://test@keep.example:443#keep\nvless://test@warning.example:443?type=xhttp&security=tls#warning"}}
+	server, cfg := newTestServer(t, cfg)
+	w := createWorkspaceForTest(t, server, cfg)
+	var list nodeListResponse
+	data := nodeDeletionRequest(t, server, w, http.MethodGet, "/api/nodes?page_size=1&q=keep", nil, http.StatusOK)
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	var validation validateNodesResponse
+	data = nodeDeletionRequest(t, server, w, http.MethodPost, "/api/nodes/validate", nil, http.StatusOK)
+	if err := json.Unmarshal(data, &validation); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Nodes) != 1 || len(list.ValidationWarnings) != 1 || len(validation.Warnings) != 1 || list.ValidationWarnings[0] != validation.Warnings[0] {
+		t.Fatal("paginated node response lost global validation warnings")
+	}
+}
+
 func TestNodeEditingReusesSubscriptionsUntilRefresh(t *testing.T) {
 	var requests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
