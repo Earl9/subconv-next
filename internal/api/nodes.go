@@ -266,6 +266,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
 	deleted := model.DisabledNodeSet(state.DeletedNodes)
+	for id := range collected.DeletedNodes {
+		deleted[id] = struct{}{}
+	}
 
 	filtered := filterNodeList(collected.Nodes, state, disabled, deleted, r)
 	paged := filtered
@@ -443,6 +446,14 @@ func (s *Server) handleToggleNodes(w http.ResponseWriter, r *http.Request, enabl
 	}
 
 	if enabled {
+		// The restored row may now have a different connection ID after a
+		// subscription refresh. Remove its original deletion records too.
+		if len(state.DeletedNodeSignatures) > 0 {
+			collected := pipeline.CollectNodesWithState(cfg, state, true, false)
+			for _, id := range append([]string(nil), req.IDs...) {
+				req.IDs = addIDs(req.IDs, collected.DeletedNodes[id])
+			}
+		}
 		state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
 		state.DeletedNodes = removeIDs(state.DeletedNodes, req.IDs)
 	} else {
@@ -520,6 +531,7 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 	state.DeletedNodes = addIDs(removeIDs(state.DeletedNodes, removedCustomIDs), subscriptionIDs)
 	state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
 	_ = rememberDeletedNodeSources(&state, collected.Nodes)
+	model.RememberDeletedNodeSignatures(&state, collected.OriginalNodes)
 
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
@@ -559,15 +571,17 @@ func (s *Server) handleDeletedNodes(w http.ResponseWriter, r *http.Request) {
 		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("stale deleted-node records pruned: %d", pruned))
 	}
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
-	deleted := model.DisabledNodeSet(state.DeletedNodes)
-	deletedNodes := make([]model.NodeIR, 0, len(deleted))
-	found := make(map[string]struct{}, len(deleted))
+	deletedNodes := make([]model.NodeIR, 0, len(collected.DeletedNodes))
+	found := make(map[string]struct{}, len(state.DeletedNodes))
 	for _, node := range collected.Nodes {
-		if _, ok := deleted[node.ID]; !ok {
+		records := collected.DeletedNodes[node.ID]
+		if len(records) == 0 {
 			continue
 		}
 		deletedNodes = append(deletedNodes, node)
-		found[node.ID] = struct{}{}
+		for _, id := range records {
+			found[id] = struct{}{}
+		}
 	}
 
 	var missingIDs []string
@@ -610,7 +624,7 @@ func (s *Server) handleBulkRename(w http.ResponseWriter, r *http.Request) {
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
 	disabled := model.DisabledNodeSet(state.DisabledNodes)
-	targets := resolveBulkRenameTargets(collected.Nodes, state, disabled, req)
+	targets := resolveBulkRenameTargets(collected.Nodes, state, disabled, collected.DeletedNodes, req)
 
 	var changed int
 	var preview []bulkRenamePreviewItem
@@ -1211,8 +1225,11 @@ func removeIDs(existing, ids []string) []string {
 	return out
 }
 
-func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}, req bulkRenameRequest) []model.NodeIR {
+func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disabled map[string]struct{}, resolvedDeleted map[string][]string, req bulkRenameRequest) []model.NodeIR {
 	deleted := model.DisabledNodeSet(state.DeletedNodes)
+	for id := range resolvedDeleted {
+		deleted[id] = struct{}{}
+	}
 	switch strings.ToLower(strings.TrimSpace(req.Scope)) {
 	case "selected":
 		set := model.DisabledNodeSet(req.IDs)
@@ -1249,7 +1266,8 @@ func resolveBulkRenameTargets(nodes []model.NodeIR, state model.NodeState, disab
 		fakeReq, _ := http.NewRequest(http.MethodGet, "/api/nodes?"+urlValues.encode(), nil)
 		return filterNodeList(nodes, state, disabled, deleted, fakeReq)
 	default:
-		return nodes
+		fakeReq, _ := http.NewRequest(http.MethodGet, "/api/nodes", nil)
+		return filterNodeList(nodes, state, disabled, deleted, fakeReq)
 	}
 }
 

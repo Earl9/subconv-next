@@ -97,3 +97,20 @@ test("repeated confirmation does not submit the same deletion twice", async () =
   assert.equal(app.elements.get("danger-dialog-confirm-btn").disabled, false);
   assert.equal(app.run("state.confirmDialog"), null);
 });
+
+test("drafts preserve persistent deletion identities and prune removed sources", () => {
+  const app = setup();
+  app.run(`
+    const draftState = {
+      deleted_nodes: ["old-connection", "removed-connection"],
+      deleted_node_sources: { "old-connection": ["active"], "removed-connection": ["removed"] },
+      deleted_node_signatures: { "old-connection": ["stable-identity"], "removed-connection": ["other-identity"] },
+    };
+    const saved = sanitizeLocalDraftNodeState(draftState);
+    const restored = pruneLocalDraftDeletedNodes(saved, { subscriptions: [{ id: "active" }] });
+  `);
+  assert.equal(app.run('saved.deleted_node_signatures["old-connection"][0]'), "stable-identity");
+  assert.equal(app.run('restored.deleted_node_signatures["old-connection"][0]'), "stable-identity");
+  assert.equal(app.run('restored.deleted_node_signatures["removed-connection"]'), undefined);
+  assert.equal(app.run('draftState.deleted_node_signatures["removed-connection"][0]'), "other-identity");
+});

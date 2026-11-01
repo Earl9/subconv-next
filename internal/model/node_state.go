@@ -7,13 +7,14 @@ import (
 )
 
 type NodeState struct {
-	NodeOverrides      map[string]NodeOverride     `json:"node_overrides,omitempty"`
-	DisabledNodes      []string                    `json:"disabled_nodes,omitempty"`
-	DeletedNodes       []string                    `json:"deleted_nodes,omitempty"`
-	DeletedNodeSources map[string][]string         `json:"deleted_node_sources,omitempty"`
-	CustomNodes        []NodeIR                    `json:"custom_nodes,omitempty"`
-	SubscriptionMeta   map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
-	LastAudit          AuditReport                 `json:"last_audit,omitempty"`
+	NodeOverrides         map[string]NodeOverride     `json:"node_overrides,omitempty"`
+	DisabledNodes         []string                    `json:"disabled_nodes,omitempty"`
+	DeletedNodes          []string                    `json:"deleted_nodes,omitempty"`
+	DeletedNodeSources    map[string][]string         `json:"deleted_node_sources,omitempty"`
+	DeletedNodeSignatures map[string][]string         `json:"deleted_node_signatures,omitempty"`
+	CustomNodes           []NodeIR                    `json:"custom_nodes,omitempty"`
+	SubscriptionMeta      map[string]SubscriptionMeta `json:"subscription_meta,omitempty"`
+	LastAudit             AuditReport                 `json:"last_audit,omitempty"`
 }
 
 type NodeOverride struct {
@@ -86,6 +87,16 @@ func NormalizeNodeState(state NodeState) NodeState {
 		normalizedDeletedSources[cleanID] = mergeUniqueStrings(normalizedDeletedSources[cleanID], cleanSources)
 	}
 	state.DeletedNodeSources = normalizedDeletedSources
+	normalizedSignatures := make(map[string][]string, len(state.DeletedNodeSignatures))
+	for id, signatures := range state.DeletedNodeSignatures {
+		id = sanitizeText(id)
+		if _, deleted := deletedNodeSet[id]; deleted {
+			if signatures = cleanStringSlice(signatures); len(signatures) > 0 {
+				normalizedSignatures[id] = signatures
+			}
+		}
+	}
+	state.DeletedNodeSignatures = normalizedSignatures
 
 	for id, override := range state.NodeOverrides {
 		cleanID := sanitizeText(id)

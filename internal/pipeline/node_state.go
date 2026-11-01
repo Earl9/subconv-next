@@ -17,6 +17,8 @@ type NodeValidationWarning struct {
 
 type StatefulCollectResult struct {
 	Nodes              []model.NodeIR
+	OriginalNodes      []model.NodeIR
+	DeletedNodes       map[string][]string
 	Warnings           []string
 	Errors             []parser.ParseError
 	ValidationWarnings []NodeValidationWarning
@@ -43,6 +45,8 @@ func CollectNodesWithState(cfg model.Config, state model.NodeState, applyFilters
 		nodes = append(nodes, model.CloneNodes(state.CustomNodes)...)
 	}
 
+	originalNodes := nodes
+	deletedNodes := model.ResolveDeletedNodes(state, originalNodes)
 	nodes = applyNodeOverrides(nodes, state.NodeOverrides)
 	nodes, validationWarnings := validateNodes(nodes)
 	if excludeDisabled {
@@ -51,6 +55,8 @@ func CollectNodesWithState(cfg model.Config, state model.NodeState, applyFilters
 
 	return StatefulCollectResult{
 		Nodes:              nodes,
+		OriginalNodes:      originalNodes,
+		DeletedNodes:       deletedNodes,
 		Warnings:           collected.Warnings,
 		Errors:             collected.Errors,
 		ValidationWarnings: validationWarnings,

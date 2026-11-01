@@ -3,13 +3,116 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 
 	"subconv-next/internal/model"
 	"subconv-next/internal/pipeline"
 )
+
+func TestDeletedSubscriptionNodesStayDeletedAfterEndpointRotation(t *testing.T) {
+	for _, scope := range []string{"global", "per_source", "none"} {
+		t.Run(scope, func(t *testing.T) {
+			var revision atomic.Int32
+			names := []string{"剩余流量：100 GB", "获取使用教程", "移动推荐使用优化节点"}
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for i, name := range names {
+					fmt.Fprintf(w, "trojan://secret-%d@node-%d-%d.example:443#%s\n", revision.Load(), i, revision.Load(), url.PathEscape(name))
+				}
+				fmt.Fprintln(w, "trojan://keep@keep.example:443#keep")
+			}))
+			defer upstream.Close()
+			cfg := model.DefaultConfig()
+			cfg.Render.DedupeScope = scope
+			cfg.Render.ShowInfoNodes, cfg.Render.IncludeInfoNode = true, true
+			cfg.Subscriptions = []model.SubscriptionConfig{{ID: "rotating", Name: "rotating", URL: upstream.URL, Enabled: true, AllowLAN: true}}
+			server, cfg := newTestServer(t, cfg)
+			workspace := createWorkspaceForTest(t, server, cfg)
+			request := func(method, path string, body interface{}) []byte {
+				return nodeDeletionRequest(t, server, workspace, method, path, body, http.StatusOK)
+			}
+			list := func(path string) nodeListResponse {
+				var result nodeListResponse
+				if err := json.Unmarshal(request(http.MethodGet, path, nil), &result); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			request(http.MethodPost, "/api/refresh", nil)
+			initial := list("/api/nodes?all=1")
+			if len(initial.Nodes) != 4 {
+				t.Fatalf("initial nodes = %d", len(initial.Nodes))
+			}
+			var ids []string
+			for _, node := range initial.Nodes {
+				if node.Name != "keep" {
+					ids = append(ids, node.ID)
+				}
+			}
+			// A user rename must not replace the original subscription identity.
+			request(http.MethodPut, "/api/nodes/"+ids[1]+"/override", nodeOverrideRequest{Enabled: true, Name: "my renamed entry"})
+			request(http.MethodPost, "/api/nodes/delete", toggleNodesRequest{IDs: ids})
+			var saved nodeStateResponse
+			if err := json.Unmarshal(request(http.MethodGet, "/api/nodes/state", nil), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if len(saved.State.DeletedNodeSignatures) != 3 {
+				t.Fatalf("persisted identities = %d, want 3", len(saved.State.DeletedNodeSignatures))
+			}
+			// Exercise JSON draft export/restore, then real upstream fetching.
+			request(http.MethodPut, "/api/nodes/state", nodeStateRequest{State: saved.State})
+			for version := int32(1); version <= 2; version++ {
+				revision.Store(version)
+				var refreshed refreshResponse
+				if err := json.Unmarshal(request(http.MethodPost, "/api/refresh", nil), &refreshed); err != nil {
+					t.Fatal(err)
+				}
+				if refreshed.NodeCount != 1 {
+					t.Fatalf("refresh %d resurrected deleted nodes: count=%d", version, refreshed.NodeCount)
+				}
+				if nodes := list("/api/nodes?all=1"); len(nodes.Nodes) != 1 || nodes.Nodes[0].Name != "keep" {
+					t.Fatalf("refresh %d editor nodes = %#v", version, nodes.Nodes)
+				}
+			}
+			var renamed bulkRenameResponse
+			if err := json.Unmarshal(request(http.MethodPost, "/api/nodes/bulk-rename", bulkRenameRequest{Scope: "current_filtered", Mode: "add_prefix", Prefix: "kept-"}), &renamed); err != nil {
+				t.Fatal(err)
+			}
+			if renamed.Changed != 1 {
+				t.Fatalf("bulk rename included hidden deleted nodes: %d changes", renamed.Changed)
+			}
+			var deleted deletedNodeListResponse
+			if err := json.Unmarshal(request(http.MethodGet, "/api/nodes/deleted", nil), &deleted); err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted.Nodes) != 3 || len(deleted.MissingIDs) != 0 {
+				t.Fatalf("deleted entries not restorable: %#v", deleted)
+			}
+			var currentIDs []string
+			for _, node := range deleted.Nodes {
+				if containsString(ids, node.ID) {
+					t.Fatal("test did not rotate connection IDs")
+				}
+				currentIDs = append(currentIDs, node.ID)
+			}
+			request(http.MethodPost, "/api/nodes/enable", toggleNodesRequest{IDs: currentIDs})
+			if nodes := list("/api/nodes?all=1"); len(nodes.Nodes) != 4 {
+				t.Fatalf("restore returned %d nodes, want 4", len(nodes.Nodes))
+			}
+			saved = nodeStateResponse{}
+			if err := json.Unmarshal(request(http.MethodGet, "/api/nodes/state", nil), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if len(saved.State.DeletedNodes) != 0 || len(saved.State.DeletedNodeSignatures) != 0 {
+				t.Fatalf("restore retained old deletion records: %#v", saved.State)
+			}
+		})
+	}
+}
 
 func nodeDeletionRequest(t *testing.T, server *Server, workspace, method, path string, body interface{}, status int) []byte {
 	t.Helper()

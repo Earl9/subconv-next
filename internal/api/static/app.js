@@ -2910,6 +2910,11 @@ function sanitizeLocalDraftNodeState(nodeState) {
       typeof nodeState.deleted_node_sources === "object"
         ? deepClone(nodeState.deleted_node_sources)
         : {},
+    deleted_node_signatures:
+      nodeState.deleted_node_signatures &&
+      typeof nodeState.deleted_node_signatures === "object"
+        ? deepClone(nodeState.deleted_node_signatures)
+        : {},
     custom_nodes: Array.isArray(nodeState.custom_nodes)
       ? deepClone(nodeState.custom_nodes)
       : [],
@@ -2939,6 +2944,7 @@ function pruneLocalDraftDeletedNodes(nodeState, config) {
       ) {
         removedNodeIDs.add(nodeID);
         delete sanitized.deleted_node_sources[nodeID];
+        delete sanitized.deleted_node_signatures[nodeID];
       }
     },
   );

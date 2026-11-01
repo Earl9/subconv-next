@@ -26,6 +26,7 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 			candidates[index].ID = model.StableNodeIDWithScope(candidates[index], cfg.Render.DedupeScope, index)
 		}
 	}
+	deletedNodes := model.ResolveDeletedNodes(state, candidates)
 
 	audit := model.AuditReport{
 		RawCount:      len(candidates),
@@ -75,7 +76,6 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 	}
 
 	disabledSet := model.DisabledNodeSet(state.DisabledNodes)
-	deletedSet := model.DisabledNodeSet(state.DeletedNodes)
 
 	finalNodes := make([]model.NodeIR, 0, len(filtered))
 	for _, node := range filtered {
@@ -83,7 +83,7 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 			auditExclude(&audit, node, "disabled_node")
 			continue
 		}
-		if _, ok := deletedSet[node.ID]; ok {
+		if _, ok := deletedNodes[node.ID]; ok {
 			auditExclude(&audit, node, "deleted_node")
 			continue
 		}
