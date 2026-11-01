@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,47 @@ import (
 
 	"subconv-next/internal/model"
 )
+
+func TestEmptySuccessResponsePreservesValidCache(t *testing.T) {
+	for _, empty := range []string{"", " \n\t"} {
+		t.Run(fmt.Sprintf("bytes_%d", len(empty)), func(t *testing.T) {
+			cacheRoot := t.TempDir()
+			f := New(Options{
+				CacheDir: filepath.Join(cacheRoot, "workspace"), SharedCacheDir: filepath.Join(cacheRoot, "shared"),
+				Resolver: staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+				RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(empty))}, nil
+				},
+			})
+			source := Source{Name: "subscription", URL: "https://example.com/sub", Enabled: true}
+			if _, _, err := f.Fetch(context.Background(), source); err == nil {
+				t.Fatal("empty response without a cache was accepted")
+			}
+			good := FetchedSubscription{Content: []byte("trojan://test@keep.example:443#keep"), FetchedAt: time.Now()}
+			if err := f.writeCache(source.URL, good); err != nil {
+				t.Fatal(err)
+			}
+			f.writeSharedCache(source.URL, good)
+			result, warnings, err := f.Fetch(context.Background(), source)
+			if err != nil || !result.FromCache || string(result.Content) != string(good.Content) || len(warnings) == 0 {
+				t.Fatal("empty response did not fall back to valid cached nodes")
+			}
+			cached, err := f.readCache(source.URL)
+			if err != nil || string(cached.Content) != string(good.Content) {
+				t.Fatal("empty response overwrote the valid cache")
+			}
+			// Ignore empty caches written by older versions and use shared content.
+			if err := f.writeCache(source.URL, FetchedSubscription{Content: []byte(empty), FetchedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			source.PreferCache = true
+			result, _, err = f.Fetch(context.Background(), source)
+			if err != nil || string(result.Content) != string(good.Content) {
+				t.Fatal("legacy empty cache prevented shared-cache recovery")
+			}
+		})
+	}
+}
 
 func TestFetchSuccessAndCacheFallback(t *testing.T) {
 	callCount := 0

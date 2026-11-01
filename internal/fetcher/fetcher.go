@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -302,6 +303,9 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 			return FetchedSubscription{}, err
 		}
 		_ = resp.Body.Close()
+		if len(bytes.TrimSpace(body)) == 0 {
+			return FetchedSubscription{}, fmt.Errorf("upstream returned empty content")
+		}
 
 		return FetchedSubscription{
 			Name:                 source.Name,
@@ -436,6 +440,9 @@ func (f *Fetcher) readCacheFrom(dir, rawURL string) (FetchedSubscription, error)
 	}
 	if meta.Size < 0 || meta.Size != len(body) || int64(len(body)) > f.opts.MaxBodyBytes {
 		return FetchedSubscription{}, fmt.Errorf("cache body size does not match metadata")
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return FetchedSubscription{}, fmt.Errorf("cached content is empty")
 	}
 	if meta.FetchedAt.IsZero() {
 		return FetchedSubscription{}, fmt.Errorf("cache metadata is missing fetch time")

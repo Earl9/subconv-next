@@ -521,6 +521,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req = config.Normalize(req)
+		if err := restoreRedactedSubscriptionURLs(&req, oldCfg); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "INVALID_SUBSCRIPTION_URL", err.Error())
+			return
+		}
 		if err := s.validatePublicConverterConfig(req); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "PUBLIC_CONFIG_REJECTED", err.Error())
 			return

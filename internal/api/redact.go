@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -31,6 +32,38 @@ func RedactSecret(s string) string {
 		return ""
 	}
 	return "***"
+}
+
+// GET /api/config intentionally masks subscription query credentials. Saving
+// that response must retain the original URL for the same subscription, rather
+// than replacing a real token with the UI's placeholder. Never transfer a token
+// to a different URL or source identity.
+func restoreRedactedSubscriptionURLs(next *model.Config, previous model.Config) error {
+	previousByID := make(map[string]model.SubscriptionConfig, len(previous.Subscriptions))
+	for _, source := range previous.Subscriptions {
+		previousByID[source.ID] = source
+	}
+	for i := range next.Subscriptions {
+		source := &next.Subscriptions[i]
+		old, exists := previousByID[source.ID]
+		if exists && source.URL == RedactURL(old.URL) {
+			source.URL = old.URL
+		}
+		parsed, err := url.Parse(source.URL)
+		if err == nil {
+			for _, values := range parsed.Query() {
+				for _, value := range values {
+					if value == "***" || value == maskedSecretValue {
+						return fmt.Errorf("订阅地址含脱敏凭据，无法恢复原地址，请重新填写完整订阅地址")
+					}
+				}
+			}
+		}
+		if exists && source.SourceLogo == RedactURL(old.SourceLogo) {
+			source.SourceLogo = old.SourceLogo
+		}
+	}
+	return nil
 }
 
 func RedactConfig(cfg model.Config) model.Config {
