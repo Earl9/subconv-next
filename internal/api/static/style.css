@@ -2438,6 +2438,27 @@ button:disabled {
   accent-color: var(--primary);
 }
 
+.node-selection-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.node-selection-control input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.node-selection-control input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
 .node-table thead th {
   position: sticky;
   top: 0;
@@ -6054,6 +6075,7 @@ input[type="checkbox"],
 input[type="radio"] {
   width: 16px;
   height: 16px;
+  min-height: 16px;
   min-width: 16px;
   padding: 0;
   flex: none;
@@ -6296,10 +6318,10 @@ body {
   box-shadow: none;
 }
 
-.field input,
+.field input:not([type="checkbox"]):not([type="radio"]),
 .field textarea,
 .field select,
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 textarea,
 select {
   min-height: 38px;

@@ -16,17 +16,23 @@ func pruneDeletedNodeStateForConfigChange(oldCfg, newCfg model.Config, state mod
 
 	changed := rememberDeletedNodeSourcesFromAudit(&state)
 	pruneUnknownMissing := false
+	var currentNodeIDs map[string]struct{}
 	if hasDeletedNodeWithoutSources(state) {
 		oldCollected := pipeline.CollectNodesWithState(oldCfg, state, true, false)
 		if rememberDeletedNodeSources(&state, oldCollected.Nodes) {
 			changed = true
 		}
 		pruneUnknownMissing = len(oldCollected.Errors) == 0
+		// Inline and custom nodes have no subscription source evidence. Keep
+		// their deletion records when an unrelated subscription is removed.
+		current := pipeline.CollectNodesWithState(newCfg, state, true, false)
+		currentNodeIDs = nodeIDSet(current.Nodes)
+		pruneUnknownMissing = pruneUnknownMissing && len(current.Errors) == 0
 	}
 	state, pruned := pruneDeletedNodeState(
 		state,
 		activeSubscriptionSourceIDs(newCfg),
-		nil,
+		currentNodeIDs,
 		pruneUnknownMissing,
 	)
 	if pruned > 0 {

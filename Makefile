@@ -1,12 +1,16 @@
 BINARY := subconv-next
 
-.PHONY: build test test-race vet fmt-check package package-apk docker-buildx
+.PHONY: build test test-ui test-race vet fmt-check package package-apk docker-buildx
 
 build:
 	go build -o $(BINARY) ./cmd/subconv-next
 
 test:
 	go test ./...
+
+test-ui:
+	node --check internal/api/static/app.js
+	node --test internal/api/static/*.test.cjs
 
 test-race:
 	go test -race ./...

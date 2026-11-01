@@ -75,6 +75,7 @@ testdata/
 
 ```sh
 go test ./...
+make test-ui
 go test ./internal/parser -run TestParse
 go test ./internal/renderer -run Golden
 go run ./cmd/subconv-next version

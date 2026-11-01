@@ -19,6 +19,13 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 		candidates = append(candidates, model.CloneNodes(state.CustomNodes)...)
 	}
 	candidates = model.NormalizeNodesNoDedupe(candidates)
+	// Assign IDs before filtering: the editor uses the original collection
+	// indexes for scope=none. Custom nodes already have persistent state IDs.
+	for index := range candidates {
+		if !strings.EqualFold(strings.TrimSpace(candidates[index].Source.Kind), "custom") {
+			candidates[index].ID = model.StableNodeIDWithScope(candidates[index], cfg.Render.DedupeScope, index)
+		}
+	}
 
 	audit := model.AuditReport{
 		RawCount:      len(candidates),
@@ -51,35 +58,27 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 		filtered = append(filtered, node)
 	}
 
-	deduped := dedupeFinalNodes(filtered, cfg.Render.DedupeScope, &audit)
-	for index := range deduped {
-		deduped[index].ID = model.StableNodeIDWithScope(deduped[index], cfg.Render.DedupeScope, index)
-		if strings.EqualFold(strings.TrimSpace(deduped[index].Source.Kind), "custom") && !strings.HasPrefix(deduped[index].ID, "custom-") {
-			deduped[index].ID = "custom-" + deduped[index].ID
-		}
-	}
-
-	deduped = applyNodeOverrides(deduped, state.NodeOverrides)
+	filtered = applyNodeOverrides(filtered, state.NodeOverrides)
 
 	// Overrides can change protocol parameters after the initial illegal-node filter.
 	// Recheck the effective configuration before it reaches the renderer.
 	if cfg.Render.FilterIllegal {
-		valid := make([]model.NodeIR, 0, len(deduped))
-		for _, node := range deduped {
+		valid := make([]model.NodeIR, 0, len(filtered))
+		for _, node := range filtered {
 			if !isRenderableNode(node) {
 				auditExclude(&audit, node, "invalid_node")
 				continue
 			}
 			valid = append(valid, node)
 		}
-		deduped = valid
+		filtered = valid
 	}
 
 	disabledSet := model.DisabledNodeSet(state.DisabledNodes)
 	deletedSet := model.DisabledNodeSet(state.DeletedNodes)
 
-	finalNodes := make([]model.NodeIR, 0, len(deduped))
-	for _, node := range deduped {
+	finalNodes := make([]model.NodeIR, 0, len(filtered))
+	for _, node := range filtered {
 		if _, ok := disabledSet[node.ID]; ok {
 			auditExclude(&audit, node, "disabled_node")
 			continue
@@ -90,6 +89,9 @@ func BuildFinalNodes(cfg model.Config, state model.NodeState, rawNodes []model.N
 		}
 		finalNodes = append(finalNodes, node)
 	}
+	// Apply per-record state before merging custom and subscription copies.
+	// Deleting one record must not suppress another independently kept copy.
+	finalNodes = dedupeFinalNodes(finalNodes, cfg.Render.DedupeScope, &audit)
 
 	finalNodes = applyNodeDecorations(finalNodes, cfg.Render)
 	finalNodes = ensureUniqueFinalNodeNames(finalNodes, cfg.Render)

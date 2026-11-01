@@ -69,6 +69,12 @@ type nodeListResponse struct {
 	Errors        []parser.ParseError `json:"errors,omitempty"`
 }
 
+type deleteNodesResponse struct {
+	OK           bool     `json:"ok"`
+	DeletedCount int      `json:"deleted_count"`
+	DeletedIDs   []string `json:"deleted_ids"`
+}
+
 type deletedNodeListResponse struct {
 	OK         bool            `json:"ok"`
 	Summary    nodeListSummary `json:"summary"`
@@ -467,6 +473,11 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
+	req.IDs = uniqueStrings(req.IDs)
+	if len(req.IDs) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "请选择要删除的节点")
+		return
+	}
 
 	cfg, state, ref, err := s.workspaceConfigAndState(r)
 	if err != nil {
@@ -474,7 +485,39 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	collected := pipeline.CollectNodesWithState(cfg, state, true, false)
-	state.DeletedNodes = addIDs(state.DeletedNodes, req.IDs)
+	knownIDs := nodeIDSet(collected.Nodes)
+	for _, id := range state.DeletedNodes {
+		knownIDs[id] = struct{}{}
+	}
+	for _, id := range req.IDs {
+		if _, exists := knownIDs[id]; !exists {
+			writeAPIError(w, http.StatusNotFound, "NODE_NOT_FOUND", "部分节点已不存在，请刷新节点列表后重试")
+			return
+		}
+	}
+
+	// Save a mixed batch once, so a failed custom-node deletion cannot leave
+	// a partially applied batch while the UI still shows the old selection.
+	requested := model.DisabledNodeSet(req.IDs)
+	customIDs := nodeIDSet(state.CustomNodes)
+	customNodes := make([]model.NodeIR, 0, len(state.CustomNodes))
+	for _, node := range state.CustomNodes {
+		if _, remove := requested[node.ID]; !remove {
+			customNodes = append(customNodes, node)
+		}
+	}
+	state.CustomNodes = customNodes
+	var subscriptionIDs, removedCustomIDs []string
+	for _, id := range req.IDs {
+		if _, custom := customIDs[id]; custom {
+			delete(state.NodeOverrides, id)
+			delete(state.DeletedNodeSources, id)
+			removedCustomIDs = append(removedCustomIDs, id)
+		} else {
+			subscriptionIDs = append(subscriptionIDs, id)
+		}
+	}
+	state.DeletedNodes = addIDs(removeIDs(state.DeletedNodes, removedCustomIDs), subscriptionIDs)
 	state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
 	_ = rememberDeletedNodeSources(&state, collected.Nodes)
 
@@ -484,7 +527,7 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes deleted: %d", len(req.IDs)))
-	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: len(req.IDs), DeletedIDs: req.IDs})
 }
 
 func (s *Server) handleDeletedNodes(w http.ResponseWriter, r *http.Request) {
@@ -700,17 +743,24 @@ func (s *Server) handleDeleteCustomNode(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	filtered := state.CustomNodes[:0]
+	filtered := make([]model.NodeIR, 0, len(state.CustomNodes))
+	found := false
 	for _, node := range state.CustomNodes {
 		if node.ID == nodeID {
+			found = true
 			continue
 		}
 		filtered = append(filtered, node)
+	}
+	if !found {
+		writeAPIError(w, http.StatusNotFound, "NODE_NOT_FOUND", "手动节点已不存在，请刷新节点列表后重试")
+		return
 	}
 	state.CustomNodes = filtered
 	delete(state.NodeOverrides, nodeID)
 	state.DisabledNodes = removeIDs(state.DisabledNodes, []string{nodeID})
 	state.DeletedNodes = removeIDs(state.DeletedNodes, []string{nodeID})
+	delete(state.DeletedNodeSources, nodeID)
 
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
@@ -718,7 +768,7 @@ func (s *Server) handleDeleteCustomNode(w http.ResponseWriter, r *http.Request, 
 	}
 
 	s.appendWorkspaceLog(ref.Hash, "custom node deleted: "+shortNodeID(nodeID))
-	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
+	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: 1, DeletedIDs: []string{nodeID}})
 }
 
 func (s *Server) handleValidateNodes(w http.ResponseWriter, r *http.Request) {

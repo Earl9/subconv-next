@@ -631,7 +631,9 @@ time.*</textarea>
               <thead>
                 <tr>
                   <th class="node-select-col">
-                    <input id="node-select-page-checkbox" type="checkbox" aria-label="选择当前页节点" />
+                    <label class="node-selection-control">
+                      <input id="node-select-page-checkbox" type="checkbox" aria-label="选择当前页节点" />
+                    </label>
                   </th>
                   <th>节点</th>
                   <th>协议 / 地区</th>
@@ -784,6 +786,7 @@ time.*</textarea>
           <div class="modal-actions split-actions">
             <div class="modal-actions-danger">
               <button id="delete-node-btn" class="danger-ghost-button" type="button">删除节点</button>
+              <button id="restore-node-btn" class="secondary-button hidden" type="button">恢复节点</button>
             </div>
             <div class="modal-actions-primary">
               <button class="ghost-button" type="button" data-close-dialog="node-dialog">取消</button>

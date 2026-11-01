@@ -1118,6 +1118,11 @@ function bindEvents() {
     .getElementById("delete-node-btn")
     .addEventListener("click", handleDeleteCurrentNode);
   document
+    .getElementById("restore-node-btn")
+    .addEventListener("click", async () => {
+      if (await performRestoreNode(getValue("edit-node-id"))) closeNodeDialog();
+    });
+  document
     .getElementById("close-danger-dialog-btn")
     .addEventListener("click", closeDangerDialog);
   document
@@ -6330,7 +6335,9 @@ function renderNodeTable() {
       return `
         <tr data-node-row-id="${escapeHtml(node.id)}" class="${state.selectedNodeIds.has(node.id) ? "selected-row" : ""}">
           <td class="node-select-col">
-            <input class="node-select-checkbox" type="checkbox" aria-label="选择 ${escapeHtml(node.name)}" data-node-select-id="${escapeHtml(node.id)}" ${state.selectedNodeIds.has(node.id) ? "checked" : ""} />
+            <label class="node-selection-control">
+              <input class="node-select-checkbox" type="checkbox" aria-label="选择 ${escapeHtml(node.name)}" data-node-select-id="${escapeHtml(node.id)}" ${state.selectedNodeIds.has(node.id) ? "checked" : ""} />
+            </label>
           </td>
           <td>
             <div class="node-cell">
@@ -6363,8 +6370,9 @@ function renderNodeTable() {
           <td>
             <div class="node-actions">
               <button class="tiny-button primary-text" type="button" data-node-action="edit" data-node-id="${escapeHtml(node.id)}">编辑</button>
+              ${node.enabled === false ? `<button class="tiny-button primary-text" type="button" data-node-action="restore" data-node-id="${escapeHtml(node.id)}">恢复</button>` : ""}
               <div class="node-delete-wrap">
-                <button class="tiny-button ${node.enabled === false && node.source?.kind !== "custom" ? "primary-text" : "danger-ghost"}" type="button" data-node-action="delete" data-node-delete-trigger data-node-id="${escapeHtml(node.id)}">${node.enabled === false && node.source?.kind !== "custom" ? "恢复" : "删除"}</button>
+                <button class="tiny-button danger-ghost" type="button" data-node-action="delete" data-node-delete-trigger data-node-id="${escapeHtml(node.id)}">删除</button>
                 ${state.activeNodeDeletePopoverId === node.id ? renderNodeDeletePopconfirm(node) : ""}
               </div>
             </div>
@@ -6408,12 +6416,7 @@ function bindNodeTableDelegates(body) {
     if (confirmButton) {
       event.stopPropagation();
       const nodeId = confirmButton.dataset.nodeDeleteConfirm;
-      const node = state.nodeById.get(nodeId) || state.editingNode;
-      if (node?.enabled === false && node.source?.kind !== "custom") {
-        await performRestoreNode(nodeId);
-      } else {
-        await performDeleteNode(nodeId);
-      }
+      await performDeleteNode(nodeId);
       return;
     }
 
@@ -6423,6 +6426,10 @@ function bindNodeTableDelegates(body) {
     const action = actionButton.dataset.nodeAction;
     if (action === "edit") {
       await openNodeDialog(nodeId);
+      return;
+    }
+    if (action === "restore") {
+      await performRestoreNode(nodeId);
       return;
     }
     if (action === "delete") {
@@ -6529,22 +6536,15 @@ function nodeDeleteSemantics(node) {
     isDisabled,
     sourceName: node?.source?.name || "-",
     sourceType: isManual ? "手动节点" : "订阅节点",
-    inlineTitle: isDisabled && !isManual ? "恢复这个节点？" : "删除这个节点？",
-    inlineDescription:
-      isDisabled && !isManual
-        ? "将取消本地隐藏，节点会重新参与生成。"
-        : isManual
-          ? "将从当前配置中移除，无法恢复。"
-          : "将标记为本地删除，后续订阅更新时不再显示。",
-    inlineConfirmText: isDisabled && !isManual ? "恢复" : "删除",
-    inlineConfirmClass:
-      isDisabled && !isManual ? "secondary-button" : "danger-solid-button",
-    modalDescription:
-      isDisabled && !isManual
-        ? "恢复后将重新显示，并继续参与后续生成。"
-        : isManual
-          ? "删除后将从当前配置中移除，此操作不可撤销。"
-          : "删除后将标记为本地隐藏，订阅刷新后不会恢复显示。",
+    inlineTitle: "删除这个节点？",
+    inlineDescription: isManual
+      ? "将从当前配置中移除，无法恢复。"
+      : "将标记为本地删除，后续订阅更新时不再显示。",
+    inlineConfirmText: "删除",
+    inlineConfirmClass: "danger-solid-button",
+    modalDescription: isManual
+      ? "删除后将从当前配置中移除，此操作不可撤销。"
+      : "删除后将标记为本地隐藏，订阅刷新后不会恢复显示。",
   };
 }
 
@@ -6651,21 +6651,17 @@ function fillNodeDialog(node) {
     `${node.name || "-"} · ${node.type || "-"} · ${node.source?.name || "-"}`;
   const semantics = nodeDeleteSemantics(node);
   const actionButton = document.getElementById("delete-node-btn");
+  document.getElementById("restore-node-btn").classList.toggle("hidden", !semantics.isDisabled);
   const help = document.getElementById("node-dialog-help");
   if (actionButton) {
-    actionButton.textContent =
-      semantics.isDisabled && !semantics.isManual ? "恢复节点" : "删除节点";
+    actionButton.textContent = "删除节点";
     actionButton.classList.remove("danger-ghost-button", "secondary-button");
-    actionButton.classList.add(
-      semantics.isDisabled && !semantics.isManual
-        ? "secondary-button"
-        : "danger-ghost-button",
-    );
+    actionButton.classList.add("danger-ghost-button");
   }
   if (help) {
     help.textContent =
-      semantics.isDisabled && !semantics.isManual
-        ? "该节点当前处于本地隐藏状态，可恢复显示。"
+      semantics.isDisabled
+        ? "该节点已禁用，可以恢复使用或删除。"
         : "删除操作会进入应用内确认流程，不会直接执行。";
   }
 }
@@ -6700,30 +6696,38 @@ function closeDangerDialog() {
 
 async function handleDangerDialogConfirm() {
   const config = state.confirmDialog;
-  if (!config) return;
-  if (config.action === "delete-node") {
-    const ok = await performDeleteNode(config.nodeId);
-    if (ok) {
-      closeDangerDialog();
-      if (config.closeNodeDialog) closeNodeDialog();
+  if (!config || config.pending) return;
+  config.pending = true;
+  const confirmButton = document.getElementById("danger-dialog-confirm-btn");
+  confirmButton.disabled = true;
+  try {
+    if (config.action === "delete-node") {
+      const ok = await performDeleteNode(config.nodeId);
+      if (ok) {
+        closeDangerDialog();
+        if (config.closeNodeDialog) closeNodeDialog();
+      }
+      return;
     }
-    return;
-  }
-  if (config.action === "bulk-delete-nodes") {
-    const ok = await performBulkDeleteNodes(config.nodes || config.nodeIds || []);
-    if (ok) closeDangerDialog();
-    return;
-  }
-  if (config.action === "clear-overrides") {
-    const ok = await performClearNodeOverrides();
-    if (ok) {
+    if (config.action === "bulk-delete-nodes") {
+      const ok = await performBulkDeleteNodes(config.nodes || config.nodeIds || []);
+      if (ok) closeDangerDialog();
+      return;
+    }
+    if (config.action === "clear-overrides") {
+      const ok = await performClearNodeOverrides();
+      if (ok) {
+        closeDangerDialog();
+      }
+      return;
+    }
+    if (config.action === "delete-manual-node") {
+      deleteInlineEntry(config.manualIndex);
       closeDangerDialog();
     }
-    return;
-  }
-  if (config.action === "delete-manual-node") {
-    deleteInlineEntry(config.manualIndex);
-    closeDangerDialog();
+  } finally {
+    config.pending = false;
+    confirmButton.disabled = false;
   }
 }
 
@@ -6782,11 +6786,6 @@ async function handleDeleteCurrentNode() {
   const nodeId = getValue("edit-node-id");
   if (!nodeId || !node) return;
   const semantics = nodeDeleteSemantics(node);
-  if (semantics.isDisabled && !semantics.isManual) {
-    const ok = await performRestoreNode(nodeId);
-    if (ok) closeNodeDialog();
-    return;
-  }
   openDangerDialog({
     action: "delete-node",
     nodeId,
@@ -6968,6 +6967,8 @@ async function performDeleteNode(nodeId) {
     showToast(readAPIError(response) || "删除节点失败。", true);
     return false;
   }
+  state.selectedNodeIds.delete(nodeId);
+  state.selectedNodeCache.delete(nodeId);
   await refreshNodesAfterGenerate();
   showToast("节点已删除。");
   return true;
@@ -7050,37 +7051,14 @@ async function performBulkDeleteNodes(targets) {
     return false;
   }
   state.activeNodeDeletePopoverId = "";
-  const customIDs = [];
-  const subscriptionIDs = [];
-  nodes.forEach((node) => {
-    const id = node.id;
-    if (node?.source?.kind === "custom") customIDs.push(id);
-    else subscriptionIDs.push(id);
+  const response = await fetchJSON("/api/nodes/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
   });
-
-  if (subscriptionIDs.length) {
-    const response = await fetchJSON("/api/nodes/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: subscriptionIDs }),
-    });
-    if (!response?.ok) {
-      showToast(readAPIError(response) || "批量删除订阅节点失败。", true);
-      return false;
-    }
-  }
-
-  for (const nodeId of customIDs) {
-    const response = await fetchJSON(
-      `/api/nodes/custom/${encodeURIComponent(nodeId)}`,
-      {
-        method: "DELETE",
-      },
-    );
-    if (!response?.ok) {
-      showToast(readAPIError(response) || "批量删除手动节点失败。", true);
-      return false;
-    }
+  if (!response?.ok) {
+    showToast(readAPIError(response) || "批量删除节点失败。", true);
+    return false;
   }
 
   ids.forEach((id) => {
@@ -7088,7 +7066,7 @@ async function performBulkDeleteNodes(targets) {
     state.selectedNodeCache.delete(id);
   });
   await refreshNodesAfterGenerate();
-  showToast(`批量删除已完成，共处理 ${ids.length} 个节点。`);
+  showToast(`已删除 ${response.deleted_count} 个节点。`);
   return true;
 }
 
@@ -7129,6 +7107,7 @@ async function performDeleteCustomNode(nodeId) {
     return false;
   }
   state.selectedNodeIds.delete(nodeId);
+  state.selectedNodeCache.delete(nodeId);
   await refreshNodesAfterGenerate();
   showToast("手动节点已删除。");
   return true;

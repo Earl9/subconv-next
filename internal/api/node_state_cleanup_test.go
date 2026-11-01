@@ -65,6 +65,23 @@ func TestRestoredDraftPrunesLegacyUnknownDeletedNodes(t *testing.T) {
 	}
 }
 
+func TestConfigCleanupKeepsDeletedInlineNodes(t *testing.T) {
+	oldCfg := model.DefaultConfig()
+	oldCfg.Inline = []model.InlineConfig{{ID: "manual", Enabled: true, Content: "trojan://test@inline.example:443#inline"}}
+	oldCfg.Subscriptions = []model.SubscriptionConfig{{ID: "removed", Enabled: false}}
+	newCfg := oldCfg
+	newCfg.Subscriptions = nil
+	collected := pipeline.CollectNodesWithState(oldCfg, model.DefaultNodeState(), true, false)
+	if len(collected.Nodes) != 1 {
+		t.Fatalf("collected nodes = %d, want 1", len(collected.Nodes))
+	}
+	id := collected.Nodes[0].ID
+	state, _, pruned := pruneDeletedNodeStateForConfigChange(oldCfg, newCfg, model.NodeState{DeletedNodes: []string{id}})
+	if pruned != 0 || !containsString(state.DeletedNodes, id) {
+		t.Fatalf("removing unrelated subscription restored inline node: %#v", state.DeletedNodes)
+	}
+}
+
 func TestConfigCleanupUsesStoredSourcesWithoutRefetchingSubscriptions(t *testing.T) {
 	var requests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
