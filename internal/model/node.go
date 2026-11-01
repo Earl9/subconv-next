@@ -165,6 +165,28 @@ func NormalizeNode(node NodeIR) NodeIR {
 	node.TLS.ALPN = cleanStringSlice(node.TLS.ALPN)
 	node.Tags = mergeUniqueStrings(node.Tags, inferRegionTags(node.Name))
 	node.Warnings = cleanStringSlice(node.Warnings)
+	if node.Type == ProtocolHysteria2 {
+		if obfs, ok := node.Raw["obfs"].(string); ok {
+			normalized := strings.ToLower(strings.TrimSpace(obfs))
+			if normalized == "none" {
+				normalized = ""
+			}
+			if normalized != obfs {
+				// NodeIR is passed by value, but Raw may be shared with callers.
+				raw := make(map[string]interface{}, len(node.Raw))
+				for key, value := range node.Raw {
+					raw[key] = value
+				}
+				if normalized == "" {
+					delete(raw, "obfs")
+					delete(raw, "obfsPassword")
+				} else {
+					raw["obfs"] = normalized
+				}
+				node.Raw = raw
+			}
+		}
+	}
 
 	if node.ID == "" {
 		node.ID = StableNodeID(node)

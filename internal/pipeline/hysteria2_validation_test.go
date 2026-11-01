@@ -1,10 +1,57 @@
 package pipeline
 
 import (
+	"fmt"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"subconv-next/internal/model"
+	"subconv-next/internal/parser"
+	"subconv-next/internal/renderer"
 )
+
+func TestHysteria2ObfsNormalizationThroughRendering(t *testing.T) {
+	for _, format := range []string{"uri", "yaml"} {
+		for _, obfs := range []string{"none", "NoNe", "SALAMANDER", "GeCkO"} {
+			t.Run(format+"/"+obfs, func(t *testing.T) {
+				content := fmt.Sprintf("hy2://test@hy2.example:443?obfs=%s&obfs-password=secret#test", obfs)
+				if format == "yaml" {
+					content = fmt.Sprintf("proxies:\n  - {name: test, type: hysteria2, server: hy2.example, port: 443, password: test, obfs: %s, obfs-password: secret}\n", obfs)
+				}
+				parsed := parser.ParseContent([]byte(content), model.SourceInfo{})
+				cfg := model.DefaultConfig()
+				final, _, err := BuildFinalNodes(cfg, model.DefaultNodeState(), parsed.Nodes)
+				if err != nil || len(final.Nodes) != 1 {
+					t.Fatalf("valid obfs alias was filtered: nodes=%d, err=%v", len(final.Nodes), err)
+				}
+				output, err := renderer.RenderMihomo(final.Nodes, renderer.OptionsFromConfig(cfg))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var rendered struct{ Proxies []map[string]interface{} }
+				if err := yaml.Unmarshal(output, &rendered); err != nil || len(rendered.Proxies) != 1 {
+					t.Fatalf("invalid rendered proxies: %v", err)
+				}
+				proxy := rendered.Proxies[0]
+				switch obfs {
+				case "none", "NoNe":
+					if proxy["obfs"] != nil || proxy["obfs-password"] != nil {
+						t.Fatalf("disabled obfs returned through YAML passthrough: %#v", proxy)
+					}
+				case "SALAMANDER":
+					if proxy["obfs"] != "salamander" || proxy["obfs-password"] != "secret" {
+						t.Fatalf("incorrect normalized obfs: %#v", proxy)
+					}
+				case "GeCkO":
+					if proxy["obfs"] != "gecko" || proxy["obfs-password"] != "secret" {
+						t.Fatalf("incorrect normalized obfs: %#v", proxy)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestHysteria2ObfsValidation(t *testing.T) {
 	cases := []struct {

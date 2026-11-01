@@ -43,28 +43,27 @@ const (
 )
 
 type mihomoConfig struct {
-	MixedPort               int                           `yaml:"mixed-port"`
-	AllowLAN                bool                          `yaml:"allow-lan"`
-	Mode                    string                        `yaml:"mode"`
-	LogLevel                string                        `yaml:"log-level"`
-	IPv6                    bool                          `yaml:"ipv6"`
-	UnifiedDelay            bool                          `yaml:"unified-delay,omitempty"`
-	TCPConcurrent           bool                          `yaml:"tcp-concurrent,omitempty"`
-	FindProcessMode         string                        `yaml:"find-process-mode,omitempty"`
-	GlobalClientFingerprint string                        `yaml:"global-client-fingerprint,omitempty"`
-	GeodataMode             bool                          `yaml:"geodata-mode,omitempty"`
-	GeoAutoUpdate           bool                          `yaml:"geo-auto-update,omitempty"`
-	GeodataLoader           string                        `yaml:"geodata-loader,omitempty"`
-	GeoUpdateInterval       int                           `yaml:"geo-update-interval,omitempty"`
-	GeoxURL                 *mihomoGeoxURL                `yaml:"geox-url,omitempty"`
-	DNS                     *mihomoDNS                    `yaml:"dns,omitempty"`
-	Profile                 *mihomoProfile                `yaml:"profile,omitempty"`
-	Sniffer                 *mihomoSniffer                `yaml:"sniffer,omitempty"`
-	Proxies                 []mihomoProxy                 `yaml:"proxies"`
-	ProxyGroups             []mihomoProxyGroup            `yaml:"proxy-groups"`
-	RuleProviders           map[string]mihomoRuleProvider `yaml:"rule-providers,omitempty"`
-	RuleProviderOrder       []string                      `yaml:"-"`
-	Rules                   []string                      `yaml:"rules"`
+	MixedPort         int                           `yaml:"mixed-port"`
+	AllowLAN          bool                          `yaml:"allow-lan"`
+	Mode              string                        `yaml:"mode"`
+	LogLevel          string                        `yaml:"log-level"`
+	IPv6              bool                          `yaml:"ipv6"`
+	UnifiedDelay      bool                          `yaml:"unified-delay,omitempty"`
+	TCPConcurrent     bool                          `yaml:"tcp-concurrent,omitempty"`
+	FindProcessMode   string                        `yaml:"find-process-mode,omitempty"`
+	GeodataMode       bool                          `yaml:"geodata-mode,omitempty"`
+	GeoAutoUpdate     bool                          `yaml:"geo-auto-update,omitempty"`
+	GeodataLoader     string                        `yaml:"geodata-loader,omitempty"`
+	GeoUpdateInterval int                           `yaml:"geo-update-interval,omitempty"`
+	GeoxURL           *mihomoGeoxURL                `yaml:"geox-url,omitempty"`
+	DNS               *mihomoDNS                    `yaml:"dns,omitempty"`
+	Profile           *mihomoProfile                `yaml:"profile,omitempty"`
+	Sniffer           *mihomoSniffer                `yaml:"sniffer,omitempty"`
+	Proxies           []mihomoProxy                 `yaml:"proxies"`
+	ProxyGroups       []mihomoProxyGroup            `yaml:"proxy-groups"`
+	RuleProviders     map[string]mihomoRuleProvider `yaml:"rule-providers,omitempty"`
+	RuleProviderOrder []string                      `yaml:"-"`
+	Rules             []string                      `yaml:"rules"`
 }
 
 type mihomoDNS struct {
@@ -414,23 +413,22 @@ func RenderMihomo(nodes []model.NodeIR, opts model.RenderOptions) ([]byte, error
 	resolvedEnabledRules := resolveEnabledRules(opts.RuleMode, opts.EnabledRules)
 
 	cfg := mihomoConfig{
-		MixedPort:               opts.MixedPort,
-		AllowLAN:                opts.AllowLAN,
-		Mode:                    opts.Mode,
-		LogLevel:                opts.LogLevel,
-		IPv6:                    opts.IPv6,
-		UnifiedDelay:            opts.UnifiedDelay,
-		TCPConcurrent:           opts.TCPConcurrent,
-		FindProcessMode:         opts.FindProcessMode,
-		GlobalClientFingerprint: opts.GlobalClientFingerprint,
-		GeodataMode:             opts.GeodataMode,
-		GeoAutoUpdate:           opts.GeoAutoUpdate,
-		GeodataLoader:           strings.TrimSpace(opts.GeodataLoader),
-		GeoUpdateInterval:       opts.GeoUpdateInterval,
-		Proxies:                 proxies,
-		RuleProviders:           buildRuleProviders(opts.RuleProviders, resolvedEnabledRules, opts.CustomRules, opts.CustomProxyGroups),
-		RuleProviderOrder:       orderedProviderNames(resolvedEnabledRules),
-		Rules:                   buildRules(opts.Template, opts.FinalPolicy, resolvedEnabledRules, opts.AdditionalRules, opts.RuleProviders, opts.CustomRules, opts.CustomProxyGroups),
+		MixedPort:         opts.MixedPort,
+		AllowLAN:          opts.AllowLAN,
+		Mode:              opts.Mode,
+		LogLevel:          opts.LogLevel,
+		IPv6:              opts.IPv6,
+		UnifiedDelay:      opts.UnifiedDelay,
+		TCPConcurrent:     opts.TCPConcurrent,
+		FindProcessMode:   opts.FindProcessMode,
+		GeodataMode:       opts.GeodataMode,
+		GeoAutoUpdate:     opts.GeoAutoUpdate,
+		GeodataLoader:     strings.TrimSpace(opts.GeodataLoader),
+		GeoUpdateInterval: opts.GeoUpdateInterval,
+		Proxies:           proxies,
+		RuleProviders:     buildRuleProviders(opts.RuleProviders, resolvedEnabledRules, opts.CustomRules, opts.CustomProxyGroups),
+		RuleProviderOrder: orderedProviderNames(resolvedEnabledRules),
+		Rules:             buildRules(opts.Template, opts.FinalPolicy, resolvedEnabledRules, opts.AdditionalRules, opts.RuleProviders, opts.CustomRules, opts.CustomProxyGroups),
 	}
 	proxyGroups, err := buildProxyGroups(nodes, opts.Template, opts.CustomProxyGroups, resolvedEnabledRules, opts.CustomRules, opts.GroupProxyMode, opts.GroupOptions)
 	if err != nil {
@@ -667,6 +665,10 @@ func buildProxy(node model.NodeIR) (mihomoProxy, error) {
 		proxy.Obfs = rawString(node.Raw, "obfs")
 		proxy.ObfsParam = rawString(node.Raw, "obfsParam")
 	case model.ProtocolHysteria2:
+		// These fields are normalized in NodeIR; do not restore the original
+		// YAML values (for example obfs: none) through passthrough fields.
+		delete(proxy.Extra, "obfs")
+		delete(proxy.Extra, "obfs-password")
 		proxy.Password = node.Auth.Password
 		proxy.SNI = node.TLS.SNI
 		proxy.ALPN = node.TLS.ALPN
