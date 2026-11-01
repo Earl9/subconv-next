@@ -65,14 +65,15 @@ trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 timestamp="@${SOURCE_DATE_EPOCH:-0}"
 
 echo CONTROL > "$tmp_dir/tarX"
+# Package ownership must not depend on the unprivileged build user's UID/GID.
 (
 	cd "$pkg_dir"
-	tar --exclude=./CONTROL --exclude=./CONTROL/\* --format=gnu --numeric-owner --sort=name --mtime="$timestamp" -cpf - . | gzip -n - > "$tmp_dir/data.tar.gz"
+	tar --exclude=./CONTROL --exclude=./CONTROL/\* --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime="$timestamp" -cpf - . | gzip -n - > "$tmp_dir/data.tar.gz"
 )
 
 (
 	cd "$control_dir"
-	tar --format=gnu --numeric-owner --sort=name --mtime="$timestamp" -cf - . | gzip -n - > "$tmp_dir/control.tar.gz"
+	tar --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime="$timestamp" -cf - . | gzip -n - > "$tmp_dir/control.tar.gz"
 )
 
 printf '2.0\n' > "$tmp_dir/debian-binary"
@@ -81,7 +82,7 @@ pkg_file="$dest_dir/${pkg}_${version}_${arch}.ipk"
 rm -f "$pkg_file"
 (
 	cd "$tmp_dir"
-	tar --format=gnu --numeric-owner --sort=name --mtime="$timestamp" -cf - ./debian-binary ./data.tar.gz ./control.tar.gz | gzip -n - > "$pkg_file"
+	tar --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime="$timestamp" -cf - ./debian-binary ./data.tar.gz ./control.tar.gz | gzip -n - > "$pkg_file"
 )
 
 echo "Packaged contents of $pkg_dir into $pkg_file"
