@@ -11,6 +11,7 @@ import (
 
 	"subconv-next/internal/fetcher"
 	"subconv-next/internal/model"
+	"subconv-next/internal/rulevalidation"
 )
 
 const maxRemoteCustomRuleBytes = 2 * 1024 * 1024
@@ -20,15 +21,23 @@ type customRuleFetcher interface {
 }
 
 func snapshotRemoteCustomRules(cfg model.Config) (model.Config, []string, error) {
+	return snapshotRemoteCustomRulesForRender(cfg, false)
+}
+
+func snapshotRemoteCustomRulesForRender(cfg model.Config, preferCache bool) (model.Config, []string, error) {
 	opts := fetcher.OptionsFromConfig(cfg)
 	opts.CacheDir = filepath.Join(cfg.Service.CacheDir, "custom-rules")
 	if opts.MaxBodyBytes <= 0 || opts.MaxBodyBytes > maxRemoteCustomRuleBytes {
 		opts.MaxBodyBytes = maxRemoteCustomRuleBytes
 	}
-	return snapshotRemoteCustomRulesWithFetcher(cfg, fetcher.New(opts))
+	return snapshotRemoteCustomRulesUsingCache(cfg, fetcher.New(opts), preferCache)
 }
 
 func snapshotRemoteCustomRulesWithFetcher(cfg model.Config, remote customRuleFetcher) (model.Config, []string, error) {
+	return snapshotRemoteCustomRulesUsingCache(cfg, remote, false)
+}
+
+func snapshotRemoteCustomRulesUsingCache(cfg model.Config, remote customRuleFetcher, preferCache bool) (model.Config, []string, error) {
 	resolved := cfg
 	resolved.Render.CustomRules = append([]model.CustomRule(nil), cfg.Render.CustomRules...)
 
@@ -46,11 +55,19 @@ func snapshotRemoteCustomRulesWithFetcher(cfg model.Config, remote customRuleFet
 		}
 
 		fetched, fetchWarnings, err := remote.Fetch(context.Background(), fetcher.Source{
-			Name:      "custom rule " + strings.TrimSpace(rule.Key),
-			URL:       strings.TrimSpace(rule.URL),
-			UserAgent: model.DefaultUserAgent,
-			Enabled:   true,
-			CacheTTL:  time.Duration(rule.Interval) * time.Second,
+			Name:        "custom rule " + strings.TrimSpace(rule.Key),
+			URL:         strings.TrimSpace(rule.URL),
+			UserAgent:   model.DefaultUserAgent,
+			Enabled:     true,
+			CacheTTL:    time.Duration(rule.Interval) * time.Second,
+			PreferCache: preferCache,
+			ValidateContent: func(content []byte) error {
+				payload, err := parseRemoteCustomRulePayload(content, format)
+				if err != nil {
+					return err
+				}
+				return rulevalidation.ValidatePayload(rulevalidation.EffectiveBehavior(rule.Behavior, payload), payload)
+			},
 		})
 		warnings = append(warnings, fetchWarnings...)
 		if err != nil {
@@ -61,8 +78,13 @@ func snapshotRemoteCustomRulesWithFetcher(cfg model.Config, remote customRuleFet
 		if err != nil {
 			return cfg, warnings, fmt.Errorf("parse remote custom rule %s: %w", rule.Key, err)
 		}
+		behavior := rulevalidation.EffectiveBehavior(rule.Behavior, payload)
+		if err := rulevalidation.ValidatePayload(behavior, payload); err != nil {
+			return cfg, warnings, fmt.Errorf("validate remote custom rule %s: %w", rule.Key, err)
+		}
 
 		rule.SourceType = "inline"
+		rule.Behavior = behavior
 		rule.Format = "text"
 		rule.Payload = payload
 		rule.URL = ""
@@ -126,14 +148,5 @@ func parseRemoteCustomRulePayload(content []byte, format string) ([]string, erro
 }
 
 func normalizeRemoteCustomRuleLine(value string) string {
-	line := strings.TrimSpace(value)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return ""
-	}
-	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
-	line = strings.Trim(line, `"'`)
-	if index := strings.Index(line, " #"); index >= 0 {
-		line = strings.TrimSpace(line[:index])
-	}
-	return line
+	return rulevalidation.NormalizeLine(value)
 }

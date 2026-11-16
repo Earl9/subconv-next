@@ -113,8 +113,12 @@ meta：
 默认：
 
 ```text
-SubConvNext/0.1 OpenWrt
+clash.meta
 ```
+
+如果 Clash/Mihomo 客户端标识收到的 YAML 中顶层 `proxies` 为空，或没有顶层 `proxies`、只有非空的 `proxy-providers`，会使用通用标识 `SubConvNext/0.1 OpenWrt` 重试一次。部分上游按客户端标识生成不同格式的订阅，通用标识可能返回 Base64 或节点 URI；这些格式同样可以解析。重试响应没有 `Subscription-Userinfo` 时，保留首次响应的流量和到期信息。
+
+如果重试失败或仍返回空模板，优先使用此前成功的本地或共享缓存，避免空模板覆盖已有节点。Base64 解码成功属于正常处理，不作为警告显示。
 
 ## 不记录敏感 URL
 

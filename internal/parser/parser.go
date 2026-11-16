@@ -45,9 +45,7 @@ func parseByKind(kind InputKind, content []byte, source model.SourceInfo, depth 
 				Errors: []ParseError{{Kind: "INVALID_BASE64", Message: err.Error()}},
 			}
 		}
-		result := parseByKind(Detect(decoded), decoded, source, depth+1)
-		result.Warnings = append([]string{"base64 decoded input"}, result.Warnings...)
-		return result
+		return parseByKind(Detect(decoded), decoded, source, depth+1)
 	case InputKindYAML:
 		return parseMihomoYAML(content, source)
 	default:

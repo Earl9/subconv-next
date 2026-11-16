@@ -109,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/published", s.handlePublished)
 	mux.HandleFunc("/api/published/", s.handlePublishedSubroutes)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/custom-rules/validate", s.handleValidateCustomRule)
 	mux.HandleFunc("/api/site-logo", s.handleSiteLogo)
 	mux.HandleFunc("/api/subscription-meta", s.handleSubscriptionMeta)
 	mux.HandleFunc("/api/audit", s.handleAudit)

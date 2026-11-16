@@ -31,6 +31,7 @@ function setup() {
     renderNodeEditor = () => {};
     renderConfigNodeSummary = () => {};
     renderDiagnostics = () => {};
+    updateSummary = () => {};
     syncSourceFilterOptions = () => {};
     showToast = () => {};
     state.workspaceId = "workspace-a";
@@ -152,4 +153,30 @@ test("editor refresh receives validation without a second collection request", a
   await pending;
   assert.equal(app.requests.length, 1);
   assert.equal(app.state.nodeValidationWarnings[0].node_id, "off-page");
+});
+
+test("publication metadata ignores older responses and obsolete workspace requests", async (t) => {
+  const cases = [
+    { load: "loadStatus()", body: { ok: true, node_count: 7 }, field: "statusPayload", expected: 7, value: (state) => state.statusPayload.node_count },
+    { load: "loadPublishedStatus()", body: { ok: true, publish_id: "new", url: "https://example.com/current.yaml" }, field: "published", expected: "new", value: (state) => state.published.publish_id },
+    { load: "loadAudit()", body: { ok: true, excluded_nodes: [{ id: "new" }] }, field: "auditPayload", expected: "new", value: (state) => state.auditPayload.excluded_nodes[0].id },
+  ];
+  for (const entry of cases) await t.test(entry.load, async () => {
+    const app = setup();
+    const old = app.run(entry.load);
+    const latest = app.run(entry.load);
+    const reply = (request, body) => request.resolve({ status: 200, headers: new Headers(), json: async () => body });
+    reply(app.requests[1], entry.body);
+    await latest;
+    reply(app.requests[0], { ok: false });
+    await old;
+    assert.equal(entry.value(app.state), entry.expected);
+
+    const oldWorkspace = app.run(entry.load);
+    app.state.workspaceId = "workspace-b";
+    app.state[entry.field] = null;
+    reply(app.requests[2], entry.body);
+    await oldWorkspace;
+    assert.equal(app.state[entry.field], null);
+  });
 });

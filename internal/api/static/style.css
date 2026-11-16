@@ -1761,6 +1761,33 @@ textarea {
   line-height: 1.4;
 }
 
+.custom-rule-validation {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.custom-rule-validation a {
+  display: block;
+  color: inherit;
+  margin-top: 4px;
+}
+
+.custom-rule-field-error {
+  margin: 5px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.custom-rule-form-panel [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 .custom-rule-preview {
   box-sizing: border-box;
   width: 100%;

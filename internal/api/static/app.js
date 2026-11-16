@@ -696,8 +696,11 @@ const state = {
   lastGeneratedAt: "",
   backendOnline: true,
   statusPayload: null,
+  statusRequest: null,
   auditPayload: null,
+  auditRequest: null,
   published: null,
+  publishedRequest: null,
   logsText: "",
   logsDisplay: "",
   subscriptionMeta: {
@@ -716,6 +719,7 @@ const state = {
   selectedNodeCache: new Map(),
   nodeCacheStale: false,
   nodeRequest: null,
+  nodeChangeRefresh: null,
   nodeSummary: { total: 0, enabled: 0, disabled: 0, modified: 0, warnings: 0 },
   nodeFetchNotices: [],
   nodeSourceOptions: [],
@@ -962,6 +966,9 @@ function bindEvents() {
   document
     .getElementById("additional-rules-input")
     .addEventListener("input", updateAdditionalRulesFromInput);
+  document
+    .getElementById("validate-additional-rules-btn")
+    .addEventListener("click", () => validateAdditionalRulesInput());
   document
     .getElementById("save-custom-rule-btn")
     .addEventListener("click", saveCustomRuleFromDialog);
@@ -3251,12 +3258,62 @@ function renderAdditionalRules() {
 }
 
 function updateAdditionalRulesFromInput() {
+  const validation = document.getElementById("additional-rules-validation");
+  validation.textContent = "";
+  validation.classList.add("hidden");
+  document.getElementById("additional-rules-input").removeAttribute("aria-invalid");
   state.additionalRules = normalizeAdditionalRuleLines(
     getValue("additional-rules-input"),
   );
   state.ruleMode = "custom";
   renderRulePresetControl();
   updateSummary();
+}
+
+async function validateAdditionalRulesInput(focusError = false) {
+  const input = document.getElementById("additional-rules-input");
+  const button = document.getElementById("validate-additional-rules-btn");
+  const validation = document.getElementById("additional-rules-validation");
+  if (button.disabled) return false;
+  const raw = input.value;
+  const workspaceID = state.workspaceId;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "校验中…";
+  try {
+    const response = await fetchJSON("/api/custom-rules/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ additional_rules_text: raw }),
+    });
+    if (workspaceID !== state.workspaceId || input.value !== raw) return false;
+    validation.textContent = response?.ok ? "直写规则语法校验通过。" : (readAPIError(response) || "校验失败，请重试。");
+    validation.classList.remove("hidden");
+    validation.classList.toggle("custom-rule-field-error", !response?.ok);
+    if (!response?.ok) {
+      input.setAttribute("aria-invalid", "true");
+      if (focusError) {
+        switchWorkspace("config");
+        switchRuleSubtab("custom");
+        // Opening the tab renders the normalized draft; keep the original
+        // text so the returned line number still selects the user's input.
+        input.value = raw;
+      }
+      input.focus();
+      const line = Number(response?.error?.line) || 0;
+      if (line) {
+        const lines = raw.split("\n");
+        const start = lines.slice(0, line - 1).reduce((offset, text) => offset + text.length + 1, 0);
+        input.setSelectionRange(start, start + (lines[line - 1]?.length || 0));
+      }
+      return false;
+    }
+    input.removeAttribute("aria-invalid");
+    return true;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function normalizeAdditionalRuleLines(value) {
@@ -3273,13 +3330,7 @@ function normalizeAdditionalRuleLines(value) {
 }
 
 function normalizeAdditionalRuleLine(value) {
-  let line = String(value || "").trim();
-  if (!line || line.startsWith("#")) return "";
-  line = line.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
-  if (!line || line.startsWith("#")) return "";
-  const commentIndex = line.indexOf(" #");
-  if (commentIndex >= 0) line = line.slice(0, commentIndex).trim();
-  return line;
+  return prepareCustomRulePayloadLine(value);
 }
 
 function createRuleChip(rule) {
@@ -3613,19 +3664,10 @@ function clearCustomRulePayloadInput() {
 }
 
 function renderCustomRulePreview() {
+  clearCustomRuleValidationErrors();
   const draft = buildCustomRuleDraft();
   const preview = document.getElementById("custom-rule-preview");
-  const missing = [];
-  if (!draft.key) missing.push("缺少规则 Key");
-  if (!draft.label) missing.push("缺少显示名称");
-  if (draft.source_type === "http" && !draft.url)
-    missing.push("缺少远程规则 URL");
-  if (draft.source_type === "file" && !draft.path)
-    missing.push("缺少本地文件路径");
-  if (draft.source_type === "inline" && !draft.payload.length)
-    missing.push("缺少内联规则内容");
-  if (draft.format === "mrs" && draft.behavior === "classical")
-    missing.push("mrs 不能搭配 classical");
+  const missing = customRuleDraftErrors(draft).map((error) => error.message);
 
   renderCustomRuleEditorSummary(draft, missing);
   renderCustomRulePayloadMeta(draft);
@@ -3721,7 +3763,7 @@ function renderCustomRulePayloadMeta(draft) {
   const analysis = analyzeCustomRulePayloadInput(
     getValue("custom-rule-payload"),
   );
-  const parts = [`${analysis.lines.length} 条有效规则`];
+  const parts = [`${analysis.lines.length} 条待校验规则`];
   if (analysis.entered) parts.push(`${analysis.entered} 行输入`);
   if (analysis.repaired) parts.push(`${analysis.repaired} 处粘连已拆分`);
   if (analysis.ignored) parts.push(`${analysis.ignored} 行无效或注释`);
@@ -3753,63 +3795,159 @@ function customRuleInsertPositionLabel(value) {
   );
 }
 
-function saveCustomRuleFromDialog() {
-  const indexValue = getValue("custom-rule-edit-index");
-  const draft = buildCustomRuleDraft();
-
-  if (!draft.key) {
-    showToast("规则 key 不能为空。", true);
-    return;
+function customRuleDraftErrors(draft) {
+  const errors = [];
+  const add = (field, message) => errors.push({ field, message });
+  if (!/^[a-z0-9_-]+$/.test(draft.key)) add("key", "规则 Key 只能使用小写英文、数字、下划线和连字符，且不能为空。");
+  if (!draft.label) add("label", "请填写显示名称。");
+  if (draft.target_mode === "existing_group" && !draft.target_group) add("target_group", "请填写目标组名称。");
+  if (draft.source_type === "http") {
+    try {
+      const url = new URL(draft.url);
+      if (!["http:", "https:"].includes(url.protocol) || !url.hostname || /\s/.test(draft.url)) throw new Error();
+    } catch {
+      add("url", "请填写完整的 HTTP 或 HTTPS 规则 URL，例如 https://example.com/rules.yaml。");
+    }
+    const interval = getValue("custom-rule-interval").trim();
+    if (interval && (!/^\d+$/.test(interval) || !Number.isSafeInteger(Number(interval)) || Number(interval) < 1)) add("interval", "更新间隔必须是大于 0 的整数（秒）。");
   }
-  if (!draft.label) {
-    showToast("显示名称不能为空。", true);
-    return;
+  if (draft.source_type === "file" && !draft.path) add("path", "请填写本地规则文件路径。");
+  if (draft.source_type === "inline") {
+    if (!draft.payload.length) add("payload", "内联规则内容至少要有一条。");
+    if (draft.format === "mrs") add("format", "内联规则不支持 mrs，请选择 text 或 yaml。");
   }
-  if (draft.source_type === "http" && !draft.url) {
-    showToast("远程规则 URL 不能为空。", true);
-    return;
-  }
-  if (draft.source_type === "file" && !draft.path) {
-    showToast("本地文件路径不能为空。", true);
-    return;
-  }
-  if (draft.source_type === "inline" && !draft.payload.length) {
-    showToast("内联规则内容至少要有一条。", true);
-    return;
-  }
-  if (draft.format === "mrs" && draft.behavior === "classical") {
-    showToast("mrs 不能搭配 classical。", true);
-    return;
-  }
-
+  if (draft.format === "mrs" && draft.behavior === "classical") add("format", "mrs 不能搭配 classical，请选择 text 或 yaml。");
   const editIndex =
-    indexValue === "" ? -1 : Number.parseInt(indexValue, 10);
+    getValue("custom-rule-edit-index") === "" ? -1 : Number.parseInt(getValue("custom-rule-edit-index"), 10);
   const duplicateBuiltin = BUILTIN_RULES.some((item) => item.key === draft.key);
   const duplicateCustom = state.customRules.some((item, index) => {
     if (index === editIndex) return false;
     return item.key === draft.key;
   });
-  const duplicate = duplicateBuiltin || duplicateCustom;
-  if (duplicate) {
-    showToast("规则 key 已存在。", true);
-    return;
-  }
+  if (duplicateBuiltin || duplicateCustom) add("key", "规则 Key 已存在，请使用其他 Key。");
+  return errors;
+}
 
-  const rule = draft;
-  if (indexValue === "") {
-    state.customRules.push(rule);
-  } else {
-    state.customRules[Number.parseInt(indexValue, 10)] = rule;
+function clearCustomRuleValidationErrors() {
+  const summary = document.getElementById("custom-rule-validation");
+  if (summary) {
+    summary.textContent = "";
+    summary.classList.add("hidden");
   }
+  document.querySelectorAll(".custom-rule-form-panel [aria-invalid]").forEach((field) => {
+    field.removeAttribute("aria-invalid");
+    const errorID = `${field.id}-error`;
+    const descriptions = (field.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== errorID);
+    if (descriptions.length) field.setAttribute("aria-describedby", descriptions.join(" "));
+    else field.removeAttribute("aria-describedby");
+    document.getElementById(errorID)?.remove();
+  });
+}
 
-  state.enabledRules.add(draft.key);
-  state.ruleMode = "custom";
-  renderRulePresetControl();
-  renderRuleChips();
-  renderCustomRuleList();
-  resetCustomRuleForm();
-  updateSummary();
-  showToast("自定义规则已保存。");
+function showCustomRuleValidationErrors(errors) {
+  clearCustomRuleValidationErrors();
+  const summary = document.getElementById("custom-rule-validation");
+  if (!summary) return;
+  summary.textContent = "规则未保存，请修正以下问题：";
+  errors.forEach((error) => {
+    const fieldID = `custom-rule-${String(error.field || "").replaceAll("_", "-")}`;
+    const field = document.getElementById(fieldID);
+    const line = Number(error.line) || 0;
+    const message = line && !error.message.includes(`第 ${line} 行`)
+      ? `第 ${line} 行：${error.message}` : error.message;
+    const link = document.createElement(field ? "a" : "p");
+    link.textContent = message;
+    if (field) {
+      link.href = `#${fieldID}`;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        field.focus();
+        if (line && fieldID === "custom-rule-payload") {
+          const lines = field.value.split("\n");
+          const start = lines.slice(0, line - 1).reduce((offset, text) => offset + text.length + 1, 0);
+          field.setSelectionRange(start, start + (lines[line - 1]?.length || 0));
+        }
+      });
+      field.setAttribute("aria-invalid", "true");
+      const errorID = `${fieldID}-error`;
+      const inline = document.getElementById(errorID) || document.createElement("p");
+      inline.id = errorID;
+      inline.className = "custom-rule-field-error";
+      inline.textContent = message;
+      if (!inline.parentNode) field.insertAdjacentElement("afterend", inline);
+      const descriptions = new Set((field.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+      descriptions.add(errorID);
+      field.setAttribute("aria-describedby", Array.from(descriptions).join(" "));
+    }
+    summary.appendChild(link);
+  });
+  summary.classList.remove("hidden");
+  summary.focus();
+}
+
+async function saveCustomRuleFromDialog() {
+  const button = document.getElementById("save-custom-rule-btn");
+  if (button?.disabled) return false;
+  const indexValue = getValue("custom-rule-edit-index");
+  const draft = buildCustomRuleDraft();
+  const errors = customRuleDraftErrors(draft);
+  if (errors.length) {
+    showCustomRuleValidationErrors(errors);
+    return false;
+  }
+  const workspaceID = state.workspaceId;
+  const payloadText = getValue("custom-rule-payload");
+  const editedRule = indexValue === "" ? null : state.customRules[Number.parseInt(indexValue, 10)];
+  const editedRuleSnapshot = JSON.stringify(editedRule);
+  const fingerprint = JSON.stringify({ draft, indexValue, payloadText });
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "校验中…";
+  clearCustomRuleValidationErrors();
+  try {
+    const response = await fetchJSON("/api/custom-rules/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rule: draft, payload_text: payloadText }),
+    });
+    if (state.workspaceId !== workspaceID) return false;
+    const current = JSON.stringify({ draft: buildCustomRuleDraft(), indexValue: getValue("custom-rule-edit-index"), payloadText: getValue("custom-rule-payload") });
+    if (current !== fingerprint) {
+      showToast("内容已修改，请重新保存以校验最新内容。", true);
+      return false;
+    }
+    if (indexValue !== "" && (
+      state.customRules[Number.parseInt(indexValue, 10)] !== editedRule ||
+      JSON.stringify(editedRule) !== editedRuleSnapshot
+    )) {
+      showToast("规则列表已修改，请重新选择要编辑的规则。", true);
+      return false;
+    }
+    if (!response?.ok) {
+      showCustomRuleValidationErrors([{ ...(response?.error || {}), message: readAPIError(response) || "校验失败，请重试。" }]);
+      return false;
+    }
+    const conflicts = customRuleDraftErrors(draft);
+    if (conflicts.length) {
+      showCustomRuleValidationErrors(conflicts);
+      return false;
+    }
+    if (indexValue === "") state.customRules.push(draft);
+    else state.customRules[Number.parseInt(indexValue, 10)] = draft;
+
+    state.enabledRules.add(draft.key);
+    state.ruleMode = "custom";
+    renderRulePresetControl();
+    renderRuleChips();
+    renderCustomRuleList();
+    resetCustomRuleForm();
+    updateSummary();
+    showToast("自定义规则已通过校验并保存。");
+    return true;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function deleteCustomRule(index) {
@@ -3946,33 +4084,50 @@ function normalizeCustomRulePayloadLines(value) {
 }
 
 function normalizeCustomRulePayloadLine(value) {
-  let line = prepareCustomRulePayloadLine(value);
+  const line = prepareCustomRulePayloadLine(value);
   if (!line) return "";
   const parts = line.split(",");
-  if (parts.length >= 3) {
-    let targetIndex = parts.length - 1;
-    if (parts[targetIndex].trim().toLowerCase() === "no-resolve" && parts.length >= 4) {
-      targetIndex -= 1;
-    }
-    if (isPolicyTargetAlias(parts[targetIndex])) {
-      parts.splice(targetIndex, 1);
-      line = parts.join(",");
+  const type = parts[0].trim().toUpperCase();
+  if (["DOMAIN-REGEX", "PROCESS-NAME-REGEX", "PROCESS-PATH-REGEX"].includes(type)) return line;
+  const targetIndex = ["AND", "OR", "NOT"].includes(type) ? parts.length - 1 : 2;
+  if (targetIndex < parts.length && isPolicyTargetAlias(parts[targetIndex])) {
+    parts.splice(targetIndex, 1);
+  }
+  if (targetIndex === 2) {
+    for (let i = 2; i < parts.length; i++) {
+      const flag = parts[i].trim().toLowerCase();
+      if (flag === "no-resolve" || flag === "src") parts[i] = flag;
     }
   }
-  return line;
+  return parts.join(",").trim();
 }
 
 function prepareCustomRulePayloadLine(value) {
   let line = String(value || "").trim();
   if (!line || line.startsWith("#")) return "";
-  line = line.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
-  if (!line || line.startsWith("#")) return "";
-  const commentIndex = line.indexOf(" #");
+  if (/^-[ \t]/.test(line)) line = line.slice(1).trim();
+  // Match rulevalidation.NormalizeLine: only paired scalar quotes wrap a rule;
+  // quotes inside a regex are literal, and comments may contain more quotes.
+  if (line.length >= 2 && (line[0] === "'" || line[0] === '"')) {
+    for (let end = 1; end < line.length; end++) {
+      if (line[0] === '"' && line[end] === "\\") { end++; continue; }
+      if (line[end] !== line[0]) continue;
+      if (line[0] === "'" && line[end + 1] === "'") { end++; continue; }
+      const tail = line.slice(end + 1).trim();
+      if (!tail || tail.startsWith("#")) return line.slice(1, end).trim();
+    }
+  }
+  const commentIndex = line.search(/[ \t]#/);
   if (commentIndex >= 0) line = line.slice(0, commentIndex).trim();
+  if (line.length >= 2 && (line[0] === "'" || line[0] === '"') && line.at(-1) === line[0]) {
+    line = line.slice(1, -1);
+  }
+  if (line.startsWith("#")) return "";
   return line;
 }
 
 const CUSTOM_RULE_PAYLOAD_PREFIXES = [
+  "PROCESS-PATH-WILDCARD,", "PROCESS-NAME-WILDCARD,", "REMATCH-NAME,", "IN-PORT,", "DSCP,",
   "PROCESS-PATH-REGEX,", "PROCESS-NAME-REGEX,", "DOMAIN-SUFFIX,",
   "DOMAIN-KEYWORD,", "DOMAIN-WILDCARD,", "DOMAIN-REGEX,", "SRC-IP-CIDR,",
   "SRC-IP-SUFFIX,", "SRC-IP-ASN,", "PROCESS-NAME,", "PROCESS-PATH,",
@@ -4063,6 +4218,7 @@ function isClassicalCustomRulePayloadLine(line) {
     "SRC-IP-ASN", "SRC-IP-CIDR", "SRC-IP-SUFFIX", "DST-PORT", "SRC-PORT",
     "PROCESS-NAME", "PROCESS-PATH", "PROCESS-PATH-REGEX", "PROCESS-NAME-REGEX",
     "IN-TYPE", "IN-USER", "IN-NAME", "NETWORK", "UID", "SUB-RULE", "RULE-SET", "AND", "OR", "NOT",
+    "IN-PORT", "DSCP", "PROCESS-NAME-WILDCARD", "PROCESS-PATH-WILDCARD", "REMATCH-NAME",
   ]).has(parts[0].trim().toUpperCase());
 }
 
@@ -4080,7 +4236,7 @@ function normalizePolicyTargetAlias(value) {
 }
 
 function isPolicyTargetAlias(value) {
-  const target = String(value || "").trim();
+  const target = String(value || "").trim().toUpperCase();
   return ["PROXY", "DIRECT", "REJECT", "🚀 节点选择", "⚡ 自动选择", "🐟 漏网之鱼"].includes(target);
 }
 
@@ -5421,6 +5577,9 @@ async function generateSubscription() {
     if (!(await validateManualNodesBeforeGenerate())) {
       return;
     }
+    if (state.activeSourceMode === "rules" && getValue("additional-rules-input").trim() && !(await validateAdditionalRulesInput(true))) {
+      return;
+    }
 
     state.generateStatus = "generating";
     state.lastError = "";
@@ -5867,7 +6026,11 @@ async function importClash() {
 }
 
 async function loadPublishedStatus() {
+  const request = { workspaceID: state.workspaceId };
+  state.publishedRequest = request;
   const response = await fetchJSON("/api/published");
+  if (state.publishedRequest !== request || state.workspaceId !== request.workspaceID) return;
+  state.publishedRequest = null;
   if (!normalizePublishedStatus(response)) {
     state.published = null;
     if (!state.statusPayload?.yaml_exists) {
@@ -6034,6 +6197,8 @@ function cancelWorkspaceViewRequests() {
   state.yamlRequest?.controller.abort();
   state.nodeRequest = null;
   state.yamlRequest = null;
+  state.nodeChangeRefresh = null;
+  state.statusRequest = state.publishedRequest = state.auditRequest = null;
   setNodeLoading(false);
 }
 
@@ -6829,6 +6994,7 @@ async function resetNodeOverride(nodeId) {
 }
 
 async function toggleNodeEnabled(nodeId, enabled) {
+  const workspaceID = state.workspaceId;
   const response = await fetchJSON(
     enabled ? "/api/nodes/enable" : "/api/nodes/disable",
     {
@@ -6837,26 +7003,29 @@ async function toggleNodeEnabled(nodeId, enabled) {
       body: JSON.stringify({ ids: [nodeId] }),
     },
   );
+  if (state.workspaceId !== workspaceID) return;
   if (!response?.ok) {
     showToast(readAPIError(response) || "切换节点状态失败。", true);
     return;
   }
-  await refreshNodesAfterGenerate();
+  await refreshAfterNodeChange(response, workspaceID);
 }
 
 async function performRestoreNode(nodeId) {
+  const workspaceID = state.workspaceId;
   const response = await fetchJSON("/api/nodes/enable", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [nodeId] }),
   });
+  if (state.workspaceId !== workspaceID) return false;
   if (!response?.ok) {
     showToast(readAPIError(response) || "恢复节点失败。", true);
     return false;
   }
   state.activeNodeDeletePopoverId = "";
-  await refreshNodesAfterGenerate();
-  showToast("节点已恢复显示。");
+  if (!(await refreshAfterNodeChange(response, workspaceID))) return false;
+  showToast(nodeChangeSuccessMessage(response, "节点已恢复显示。"));
   return true;
 }
 
@@ -6909,7 +7078,7 @@ function renderDeletedNodesDialog(nodes, missingIDs) {
     ? `<div class="restore-deleted-note">另有 ${missingIDs.length} 条删除记录当前订阅里找不到对应节点，订阅恢复后可再次尝试。</div>`
     : "";
   body.innerHTML = `
-    <div class="restore-deleted-note">恢复会取消本地删除标记，节点会重新显示并参与生成。</div>
+    <div class="restore-deleted-note">恢复会取消本地删除标记，已发布的订阅会立即同步。</div>
     ${nodes.length ? `<ul class="deleted-node-list">${nodeItems}</ul>` : ""}
     ${missingNote}
   `;
@@ -6934,6 +7103,7 @@ async function restoreAllDeletedNodesFromDialog() {
 }
 
 async function restoreDeletedNodes(nodeIds) {
+  const workspaceID = state.workspaceId;
   const ids = Array.from(new Set((nodeIds || []).filter(Boolean)));
   if (!ids.length) {
     showToast("没有可恢复的节点。", true);
@@ -6945,6 +7115,7 @@ async function restoreDeletedNodes(nodeIds) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids }),
   });
+  if (state.workspaceId !== workspaceID) return false;
   if (!response?.ok) {
     showToast(readAPIError(response) || "恢复已删除节点失败。", true);
     return false;
@@ -6954,12 +7125,13 @@ async function restoreDeletedNodes(nodeIds) {
     state.selectedNodeIds.delete(id);
     state.selectedNodeCache.delete(id);
   });
-  await refreshNodesAfterGenerate();
-  showToast(ids.length === 1 ? "节点已恢复。" : `已恢复 ${ids.length} 个节点。`);
+  if (!(await refreshAfterNodeChange(response, workspaceID))) return false;
+  showToast(nodeChangeSuccessMessage(response, ids.length === 1 ? "节点已恢复。" : `已恢复 ${ids.length} 个节点。`));
   return true;
 }
 
 async function performDeleteNode(nodeId) {
+  const workspaceID = state.workspaceId;
   const node =
     state.nodeById.get(nodeId) || state.editingNode;
   if (!node) return false;
@@ -6973,14 +7145,15 @@ async function performDeleteNode(nodeId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [nodeId] }),
   });
+  if (state.workspaceId !== workspaceID) return false;
   if (!response?.ok) {
     showToast(readAPIError(response) || "删除节点失败。", true);
     return false;
   }
   state.selectedNodeIds.delete(nodeId);
   state.selectedNodeCache.delete(nodeId);
-  await refreshNodesAfterGenerate();
-  showToast("节点已删除。");
+  if (!(await refreshAfterNodeChange(response, workspaceID))) return false;
+  showToast(nodeChangeSuccessMessage(response, "节点已删除。"));
   return true;
 }
 
@@ -7054,6 +7227,7 @@ async function openBulkDeleteDialog(scope) {
 }
 
 async function performBulkDeleteNodes(targets) {
+  const workspaceID = state.workspaceId;
   const nodes = normalizeBulkDeleteTargets(targets);
   const ids = nodes.map((node) => node.id);
   if (!ids.length) {
@@ -7066,6 +7240,7 @@ async function performBulkDeleteNodes(targets) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids }),
   });
+  if (state.workspaceId !== workspaceID) return false;
   if (!response?.ok) {
     showToast(readAPIError(response) || "批量删除节点失败。", true);
     return false;
@@ -7075,8 +7250,8 @@ async function performBulkDeleteNodes(targets) {
     state.selectedNodeIds.delete(id);
     state.selectedNodeCache.delete(id);
   });
-  await refreshNodesAfterGenerate();
-  showToast(`已删除 ${response.deleted_count} 个节点。`);
+  if (!(await refreshAfterNodeChange(response, workspaceID))) return false;
+  showToast(nodeChangeSuccessMessage(response, `已删除 ${response.deleted_count} 个节点。`));
   return true;
 }
 
@@ -7106,20 +7281,62 @@ async function copyNodeDetail(nodeId) {
 }
 
 async function performDeleteCustomNode(nodeId) {
+  const workspaceID = state.workspaceId;
   const response = await fetchJSON(
     `/api/nodes/custom/${encodeURIComponent(nodeId)}`,
     {
       method: "DELETE",
     },
   );
+  if (state.workspaceId !== workspaceID) return false;
   if (!response?.ok) {
     showToast(readAPIError(response) || "删除手动节点失败。", true);
     return false;
   }
   state.selectedNodeIds.delete(nodeId);
   state.selectedNodeCache.delete(nodeId);
+  if (!(await refreshAfterNodeChange(response, workspaceID))) return false;
+  showToast(nodeChangeSuccessMessage(response, "手动节点已删除。"));
+  return true;
+}
+
+function nodeChangeSuccessMessage(response, message) {
+  if (!response.published_updated) return message;
+  return message + (response.node_count === 0
+    ? "当前订阅已无可用节点。"
+    : "订阅已同步。");
+}
+
+async function refreshAfterNodeChange(response, workspaceID = state.workspaceId) {
+  if (workspaceID !== state.workspaceId) return false;
+  const refresh = response.published_updated ? {} : state.nodeChangeRefresh;
+  state.nodeChangeRefresh = refresh;
+  const isCurrent = () => state.nodeChangeRefresh === refresh && state.workspaceId === workspaceID;
+  if (response.published_updated) {
+    state.statusRequest = state.publishedRequest = state.auditRequest = null;
+    state.yamlRequest?.controller.abort();
+    state.yamlRequest = null;
+    state.yamlPreview = "";
+    state.yamlError = "";
+    state.resultNodeCount = response.node_count;
+    state.resultRuleCount = 0;
+    state.publishNotice = response.node_count === 0
+      ? "当前没有可用节点，订阅暂不可下载。"
+      : "";
+    renderYamlViewer();
+    renderResult();
+  }
   await refreshNodesAfterGenerate();
-  showToast("手动节点已删除。");
+  if (!isCurrent()) return false;
+  if (!response.published_updated) return true;
+  const updates = [loadStatus(), loadPublishedStatus(), loadAudit()];
+  if (response.node_count > 0) updates.push(loadYamlPreview());
+  await Promise.allSettled(updates);
+  if (!isCurrent()) return false;
+  if (response.node_count === 0) {
+    state.publishNotice = "当前没有可用节点，订阅暂不可下载。";
+    renderResult();
+  }
   return true;
 }
 
@@ -7571,7 +7788,11 @@ function formatVersionLabel(value) {
 }
 
 async function loadStatus() {
+  const request = { workspaceID: state.workspaceId };
+  state.statusRequest = request;
   const response = await fetchJSON("/api/status");
+  if (state.statusRequest !== request || state.workspaceId !== request.workspaceID) return;
+  state.statusRequest = null;
   state.backendOnline = Boolean(response && !response.error);
   state.statusPayload = response || {};
   state.refreshStage = state.statusPayload?.refresh_stage || "";
@@ -7609,7 +7830,11 @@ async function loadLogs() {
 }
 
 async function loadAudit() {
+  const request = { workspaceID: state.workspaceId };
+  state.auditRequest = request;
   const response = await fetchJSON("/api/audit");
+  if (state.auditRequest !== request || state.workspaceId !== request.workspaceID) return;
+  state.auditRequest = null;
   state.auditPayload = response?.ok ? response : null;
   renderDiagnostics();
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"subconv-next/internal/config"
 	"subconv-next/internal/fetcher"
 	"subconv-next/internal/model"
 	"subconv-next/internal/parser"
@@ -54,6 +55,10 @@ func CollectPreviewNodes(cfg model.Config) CollectResult {
 }
 
 func collectNodes(cfg model.Config, applyFilters, preferCache bool) CollectResult {
+	return collectNodesWithCachePolicy(cfg, applyFilters, preferCache, false)
+}
+
+func collectNodesWithCachePolicy(cfg model.Config, applyFilters, preferCache, requireCache bool) CollectResult {
 	result := CollectResult{
 		SubscriptionMeta: map[string]model.SubscriptionMeta{},
 	}
@@ -111,7 +116,7 @@ func collectNodes(cfg model.Config, applyFilters, preferCache bool) CollectResul
 				})
 				collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, warnings...)
 				if err != nil {
-					if preferCache && errors.Is(err, fetcher.ErrCacheMiss) {
+					if preferCache && !requireCache && errors.Is(err, fetcher.ErrCacheMiss) {
 						collectedByIndex[index].warnings = append(collectedByIndex[index].warnings, fmt.Sprintf("%s: 尚无本地缓存，编辑视图不联网抓取，请先执行一次刷新", sub.Name))
 						return
 					}
@@ -178,11 +183,44 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 	if err != nil {
 		return RenderResult{}, err
 	}
+	return renderConfigWithState(cfg, state, onStage, false)
+}
 
+// RenderCachedConfig applies an uncommitted node state to the last downloaded
+// subscriptions and rules. It never fetches upstream content or writes state.
+func RenderCachedConfig(cfg model.Config, state model.NodeState) (RenderResult, error) {
+	return renderConfigWithState(cfg, state, nil, true)
+}
+
+func renderConfigWithState(cfg model.Config, state model.NodeState, onStage func(string), preferCache bool) (RenderResult, error) {
+	if len(cfg.Render.CustomRules) > 0 || len(cfg.Render.AdditionalRules) > 0 {
+		// Stored drafts remain readable so older invalid rules can be corrected.
+		// Validate before any fetch or write, including offline node changes.
+		rulesConfig := model.DefaultConfig()
+		rulesConfig.Render.CustomRules = append([]model.CustomRule(nil), cfg.Render.CustomRules...)
+		rulesConfig.Render.AdditionalRules = append([]string(nil), cfg.Render.AdditionalRules...)
+		rulesConfig = config.Normalize(rulesConfig)
+		if err := config.Validate(rulesConfig); err != nil {
+			return RenderResult{}, fmt.Errorf("validate custom rules: %w", err)
+		}
+		cfg.Render.CustomRules = rulesConfig.Render.CustomRules
+	}
 	if onStage != nil {
 		onStage("fetching")
 	}
-	collected := collectNodes(cfg, true, false)
+	collected := collectNodesWithCachePolicy(cfg, true, preferCache, preferCache)
+	if preferCache {
+		for _, parseErr := range collected.Errors {
+			if parseErr.Kind == "FETCH_FAILED" {
+				return RenderResult{
+					Warnings:   collected.Warnings,
+					Errors:     collected.Errors,
+					State:      state,
+					OutputPath: cfg.Service.OutputPath,
+				}, fmt.Errorf("cannot render cached subscriptions: %s", parseErr.Message)
+			}
+		}
+	}
 	if onStage != nil {
 		onStage("rendering")
 	}
@@ -226,7 +264,7 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 		}, ErrNoNodes
 	}
 
-	resolvedCfg, customRuleWarnings, err := snapshotRemoteCustomRules(cfg)
+	resolvedCfg, customRuleWarnings, err := snapshotRemoteCustomRulesForRender(cfg, preferCache)
 	collected.Warnings = append(collected.Warnings, customRuleWarnings...)
 	if err != nil {
 		return RenderResult{

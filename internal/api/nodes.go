@@ -71,9 +71,11 @@ type nodeListResponse struct {
 }
 
 type deleteNodesResponse struct {
-	OK           bool     `json:"ok"`
-	DeletedCount int      `json:"deleted_count"`
-	DeletedIDs   []string `json:"deleted_ids"`
+	OK               bool     `json:"ok"`
+	DeletedCount     int      `json:"deleted_count"`
+	DeletedIDs       []string `json:"deleted_ids"`
+	PublishedUpdated bool     `json:"published_updated,omitempty"`
+	NodeCount        int      `json:"node_count"`
 }
 
 type deletedNodeListResponse struct {
@@ -179,6 +181,12 @@ type validateNodesResponse struct {
 
 type genericOKResponse struct {
 	OK bool `json:"ok"`
+}
+
+type nodePublicationResponse struct {
+	OK               bool `json:"ok"`
+	PublishedUpdated bool `json:"published_updated,omitempty"`
+	NodeCount        int  `json:"node_count"`
 }
 
 func (s *Server) handleNodeSubroutes(w http.ResponseWriter, r *http.Request) {
@@ -458,20 +466,22 @@ func (s *Server) handleToggleNodes(w http.ResponseWriter, r *http.Request, enabl
 		}
 		state.DisabledNodes = removeIDs(state.DisabledNodes, req.IDs)
 		state.DeletedNodes = removeIDs(state.DeletedNodes, req.IDs)
-	} else {
-		state.DisabledNodes = addIDs(state.DisabledNodes, req.IDs)
+		updated, nodeCount, err := s.saveNodeStateAndPublication(cfg, state, ref)
+		if err != nil {
+			writeNodePublicationError(w, err, "NODE_ENABLE_FAILED", "恢复")
+			return
+		}
+		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes enabled: %d", len(req.IDs)))
+		writeJSON(w, http.StatusOK, nodePublicationResponse{OK: true, PublishedUpdated: updated, NodeCount: nodeCount})
+		return
 	}
 
+	state.DisabledNodes = addIDs(state.DisabledNodes, req.IDs)
 	if err := pipeline.SaveNodeState(cfg, state); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
 		return
 	}
-
-	if enabled {
-		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes enabled: %d", len(req.IDs)))
-	} else {
-		s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes disabled: %d", len(req.IDs)))
-	}
+	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes disabled: %d", len(req.IDs)))
 	writeJSON(w, http.StatusOK, genericOKResponse{OK: true})
 }
 
@@ -535,13 +545,14 @@ func (s *Server) handleDeleteNodes(w http.ResponseWriter, r *http.Request) {
 	_ = rememberDeletedNodeSources(&state, collected.Nodes)
 	model.RememberDeletedNodeSignatures(&state, collected.OriginalNodes)
 
-	if err := pipeline.SaveNodeState(cfg, state); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+	updated, nodeCount, err := s.saveNodeStateAndPublication(cfg, state, ref)
+	if err != nil {
+		writeNodeDeletionError(w, err)
 		return
 	}
 
 	s.appendWorkspaceLog(ref.Hash, fmt.Sprintf("nodes deleted: %d", len(req.IDs)))
-	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: len(req.IDs), DeletedIDs: req.IDs})
+	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: len(req.IDs), DeletedIDs: req.IDs, PublishedUpdated: updated, NodeCount: nodeCount})
 }
 
 func (s *Server) handleDeletedNodes(w http.ResponseWriter, r *http.Request) {
@@ -778,13 +789,14 @@ func (s *Server) handleDeleteCustomNode(w http.ResponseWriter, r *http.Request, 
 	state.DeletedNodes = removeIDs(state.DeletedNodes, []string{nodeID})
 	delete(state.DeletedNodeSources, nodeID)
 
-	if err := pipeline.SaveNodeState(cfg, state); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STATE_SAVE_FAILED", err.Error())
+	updated, nodeCount, err := s.saveNodeStateAndPublication(cfg, state, ref)
+	if err != nil {
+		writeNodeDeletionError(w, err)
 		return
 	}
 
 	s.appendWorkspaceLog(ref.Hash, "custom node deleted: "+shortNodeID(nodeID))
-	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: 1, DeletedIDs: []string{nodeID}})
+	writeJSON(w, http.StatusOK, deleteNodesResponse{OK: true, DeletedCount: 1, DeletedIDs: []string{nodeID}, PublishedUpdated: updated, NodeCount: nodeCount})
 }
 
 func (s *Server) handleValidateNodes(w http.ResponseWriter, r *http.Request) {

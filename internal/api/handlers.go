@@ -233,17 +233,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.snapshotWorkspaceStatus(ref.Hash)
 	if status.StartedAt.IsZero() {
-		status = model.RuntimeStatus{
-			StartedAt:                ref.Meta.CreatedAt,
-			Running:                  true,
-			RefreshInterval:          effectiveRefreshInterval(cfg),
-			NextRefreshAt:            nextRefreshTime(time.Now().UTC(), cfg),
-			YAMLExists:               yamlFileExists(cfg.Service.OutputPath),
-			YAMLUpdatedAt:            yamlFileUpdatedAt(cfg.Service.OutputPath),
-			UpstreamSourceCount:      enabledSubscriptionCount(cfg.Subscriptions),
-			EnabledSubscriptionCount: enabledSubscriptionCount(cfg.Subscriptions),
-			OutputPath:               cfg.Service.OutputPath,
-		}
+		status = workspaceStatusFromOutput(cfg, ref.Meta.CreatedAt, time.Now().UTC())
 	}
 	outputPath := status.OutputPath
 	if s.snapshotConfig().Service.PublicConverter {
@@ -1086,7 +1076,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Service.OutputPath = published.CurrentPath
-	outcome, err := s.startRefreshForConfig(cfg, ref.Hash, "manual refresh")
+	finish, err := s.beginConfigRefresh(cfg, ref.Hash)
 	if errors.Is(err, ErrRefreshInProgress) {
 		s.releaseWorkspacePublishedRef(&ref, published, created)
 		writeAPIError(w, http.StatusConflict, "REFRESH_IN_PROGRESS", "refresh is already running")
@@ -1102,6 +1092,13 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		s.releaseWorkspacePublishedRef(&ref, published, created)
 		message := err.Error()
 		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", message)
+		return
+	}
+	defer finish()
+	outcome, err := s.executeRefresh(cfg, ref.Hash, "manual refresh")
+	if err != nil {
+		s.releaseWorkspacePublishedRef(&ref, published, created)
+		writeAPIError(w, http.StatusBadRequest, "REFRESH_FAILED", err.Error())
 		return
 	}
 	if err := s.finalizePublishedRefresh(&ref, &published, cfg, outcome.Result); err != nil {

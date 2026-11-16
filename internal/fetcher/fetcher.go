@@ -15,10 +15,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"subconv-next/internal/model"
 	"subconv-next/internal/storage"
 )
@@ -32,6 +32,9 @@ type Source struct {
 	AllowPrivateHosts  bool
 	CacheTTL           time.Duration
 	PreferCache        bool
+	// ValidateContent rejects unusable responses before they replace a valid
+	// cache, and skips cached entries invalid for this source's expected format.
+	ValidateContent func([]byte) error
 }
 
 // ErrCacheMiss is returned when PreferCache is set but no cached content
@@ -201,18 +204,18 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 		return FetchedSubscription{}, nil, err
 	}
 	if source.PreferCache {
-		if cached, cacheErr := f.readCache(source.URL); cacheErr == nil {
+		if cached, cacheErr := f.readSourceCache(source); cacheErr == nil {
 			cached.FromCache = true
 			return cached, nil, nil
 		}
-		if cached, ok := f.readSharedCache(source.URL); ok {
+		if cached, ok := f.readSourceSharedCache(source); ok {
 			cached.FromCache = true
 			return cached, nil, nil
 		}
 		return FetchedSubscription{}, nil, fmt.Errorf("%w for %s (offline view; run a refresh to fetch it)", ErrCacheMiss, source.Name)
 	}
 	if source.CacheTTL > 0 {
-		if cached, cacheErr := f.readCache(source.URL); cacheErr == nil {
+		if cached, cacheErr := f.readSourceCache(source); cacheErr == nil {
 			age := time.Since(cached.FetchedAt)
 			if age >= 0 && age < source.CacheTTL {
 				cached.FromCache = true
@@ -226,13 +229,25 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 		var warnings []string
 		if shouldRetryWithGenericUserAgent(source, fetched.Content) {
 			fallback := source
-			fallback.UserAgent = model.DefaultUserAgent
+			fallback.UserAgent = genericFallbackUserAgent
 			refetched, retryErr := f.fetchNetwork(ctx, currentURL, fallback)
+			if retryErr == nil && isEmptyClashSubscription(refetched.Content) {
+				retryErr = errors.New("upstream returned empty Clash/Mihomo YAML")
+			}
 			if retryErr == nil {
+				// Some providers only include traffic metadata for Clash clients.
+				if strings.TrimSpace(refetched.SubscriptionUserinfo) == "" {
+					refetched.SubscriptionUserinfo = fetched.SubscriptionUserinfo
+				}
 				fetched = refetched
 				warnings = append(warnings, fmt.Sprintf("retried %s with generic user-agent after receiving empty Clash/Mihomo YAML", source.Name))
 			} else {
 				warnings = append(warnings, fmt.Sprintf("generic user-agent retry failed for %s: %v", source.Name, retryErr))
+				if cached, ok := f.readSubscriptionFallbackCache(source); ok {
+					cached.FromCache = true
+					warnings = append(warnings, fmt.Sprintf("using cached subscription for %s after empty Clash/Mihomo YAML and generic user-agent retry failure", source.Name))
+					return cached, warnings, nil
+				}
 			}
 		}
 		if cacheErr := f.writeCache(source.URL, fetched); cacheErr != nil {
@@ -243,17 +258,34 @@ func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription
 		return fetched, warnings, nil
 	}
 
-	cached, cacheErr := f.readCache(source.URL)
+	if cached, ok := f.readSubscriptionFallbackCache(source); ok {
+		cached.FromCache = true
+		return cached, []string{fmt.Sprintf("using cached subscription for %s after fetch failure", source.Name)}, nil
+	}
+	cached, cacheErr := f.readSourceCache(source)
 	if cacheErr == nil {
 		cached.FromCache = true
 		return cached, []string{fmt.Sprintf("using cached subscription for %s after fetch failure", source.Name)}, nil
 	}
-	if shared, ok := f.readSharedCache(source.URL); ok {
+	if shared, ok := f.readSourceSharedCache(source); ok {
 		shared.FromCache = true
 		return shared, []string{fmt.Sprintf("using shared cached subscription for %s after fetch failure", source.Name)}, nil
 	}
 
 	return FetchedSubscription{}, nil, err
+}
+
+// Do not let an empty template from an older fetch hide usable shared nodes.
+// Repair the workspace copy so subsequent offline previews also recover.
+func (f *Fetcher) readSubscriptionFallbackCache(source Source) (FetchedSubscription, bool) {
+	if cached, err := f.readSourceCache(source); err == nil && !isEmptyClashSubscription(cached.Content) {
+		return cached, true
+	}
+	if shared, ok := f.readSourceSharedCache(source); ok && !isEmptyClashSubscription(shared.Content) {
+		_ = f.writeCache(source.URL, shared)
+		return shared, true
+	}
+	return FetchedSubscription{}, false
 }
 
 func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source Source) (FetchedSubscription, error) {
@@ -305,6 +337,11 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 		_ = resp.Body.Close()
 		if len(bytes.TrimSpace(body)) == 0 {
 			return FetchedSubscription{}, fmt.Errorf("upstream returned empty content")
+		}
+		if source.ValidateContent != nil {
+			if err := source.ValidateContent(body); err != nil {
+				return FetchedSubscription{}, fmt.Errorf("upstream content validation failed: %w", err)
+			}
 		}
 
 		return FetchedSubscription{
@@ -401,6 +438,22 @@ func (f *Fetcher) resolveHost(ctx context.Context, host string, allowPrivateHost
 
 func (f *Fetcher) readCache(rawURL string) (FetchedSubscription, error) {
 	return f.readCacheFrom(f.opts.CacheDir, rawURL)
+}
+
+func (f *Fetcher) readSourceCache(source Source) (FetchedSubscription, error) {
+	cached, err := f.readCache(source.URL)
+	if err == nil && source.ValidateContent != nil {
+		err = source.ValidateContent(cached.Content)
+	}
+	return cached, err
+}
+
+func (f *Fetcher) readSourceSharedCache(source Source) (FetchedSubscription, bool) {
+	cached, ok := f.readSharedCache(source.URL)
+	if ok && source.ValidateContent != nil {
+		ok = source.ValidateContent(cached.Content) == nil
+	}
+	return cached, ok
 }
 
 // readSharedCache falls back to the cross-workspace shared copy of a
@@ -596,21 +649,36 @@ func userAgentOrDefault(value string) string {
 	return value
 }
 
-var emptyClashYAMLPattern = regexp.MustCompile(`(?mi)^proxies:\s*\[\s*\]\s*$`)
+const genericFallbackUserAgent = "SubConvNext/0.1 OpenWrt"
 
 func shouldRetryWithGenericUserAgent(source Source, content []byte) bool {
-	ua := strings.ToLower(strings.TrimSpace(source.UserAgent))
-	if ua == "" || ua == strings.ToLower(model.DefaultUserAgent) {
-		return false
-	}
+	ua := strings.ToLower(strings.TrimSpace(userAgentOrDefault(source.UserAgent)))
 	if !strings.Contains(ua, "clash") && !strings.Contains(ua, "mihomo") && !strings.Contains(ua, "meta") && !strings.Contains(ua, "stash") && !strings.Contains(ua, "sing-box") {
 		return false
 	}
+	return isEmptyClashSubscription(content)
+}
 
-	body := string(content)
-	lower := strings.ToLower(body)
-	if !strings.Contains(lower, "proxy-groups:") && !strings.Contains(lower, "rules:") {
+func isEmptyClashSubscription(content []byte) bool {
+	if !bytes.Contains(content, []byte("proxies")) && !bytes.Contains(content, []byte("proxy-providers")) {
 		return false
 	}
-	return emptyClashYAMLPattern.MatchString(body)
+
+	var document map[string]yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return false
+	}
+	proxies, exists := document["proxies"]
+	if !exists {
+		// Some providers return a client template with remote proxy providers
+		// instead of inline nodes. Their generic subscription can still contain
+		// the actual nodes, so try it before reporting an empty subscription.
+		providers, exists := document["proxy-providers"]
+		return exists && providers.Kind == yaml.MappingNode && len(providers.Content) > 0
+	}
+	if proxies.Kind == yaml.AliasNode && proxies.Alias != nil {
+		proxies = *proxies.Alias
+	}
+	return (proxies.Kind == yaml.SequenceNode && len(proxies.Content) == 0) ||
+		(proxies.Kind == yaml.ScalarNode && proxies.Tag == "!!null")
 }

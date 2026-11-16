@@ -520,60 +520,256 @@ func TestOptionsFromConfigUsesServiceAllowLAN(t *testing.T) {
 }
 
 func TestFetchFallsBackFromEmptyClashYAML(t *testing.T) {
-	callUserAgents := []string{}
-
-	f := New(Options{
-		CacheDir:          t.TempDir(),
-		Timeout:           5 * time.Second,
-		MaxBodyBytes:      4096,
-		MaxRedirects:      3,
-		AllowPrivateHosts: true,
-		Resolver: staticResolver{
-			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
-		},
-		RequestDoer: func(ctx context.Context, target *url.URL, resolvedIP net.IP, source Source) (*http.Response, error) {
-			callUserAgents = append(callUserAgents, source.UserAgent)
-			if strings.EqualFold(strings.TrimSpace(source.UserAgent), "clash") {
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header: http.Header{
-						"Content-Type": []string{"text/plain"},
-					},
-					Body: io.NopCloser(strings.NewReader("proxies: []\nproxy-groups:\n  - { name: demo, type: select, proxies: [DIRECT] }\nrules:\n  - MATCH,DIRECT\n")),
-				}, nil
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Content-Type": []string{"text/plain"},
+	const fallbackContent = "ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#fallback"
+	const originalUserinfo = "upload=100; download=200; total=1000"
+	const fallbackUserinfo = "upload=100; download=300; total=1000"
+	for _, tt := range []struct {
+		name, userAgent, content string
+		fallbackHasUserinfo      bool
+	}{
+		{"clash", "clash", "proxies: []\nproxy-groups: []\nrules: []\n", true},
+		{"default", model.DefaultUserAgent, "proxies: [] # no compatible nodes\nrules: []\n", true},
+		{"implicit_default", "", "proxies: []\n", true},
+		{"blank_default", " \t", "proxies: null\nrules: []\n", true},
+		{"mihomo", "Mihomo/1.19.0", "proxies:\nproxy-groups: []\n", true},
+		{"stash", "Stash", "proxies: [\n]\nrules: []\n", true},
+		{"sing_box", "sing-box", "proxies: []\n", true},
+		{"empty_yaml_alias", model.DefaultUserAgent, "empty: &empty []\nproxies: *empty\n", true},
+		{"retain_original_metadata", model.DefaultUserAgent, "proxies: []\n", false},
+		{"provider_only_without_proxies_keyword", model.DefaultUserAgent, "proxy-providers:\n  remote: {type: http, url: https://example.com/provider.yaml, path: ./providers/remote.yaml, interval: 3600}\n", false},
+		{"provider_only_with_group_use", model.DefaultUserAgent, "proxy-providers:\n  remote: {type: http, url: https://example.com/provider.yaml, path: ./providers/remote.yaml, interval: 3600}\nproxy-groups:\n  - {name: demo, type: select, use: [remote]}\nrules: [MATCH,demo]\n", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cacheRoot := t.TempDir()
+			var callUserAgents []string
+			f := New(Options{
+				CacheDir:       filepath.Join(cacheRoot, "workspace"),
+				SharedCacheDir: filepath.Join(cacheRoot, "shared"),
+				Resolver:       staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+				RequestDoer: func(_ context.Context, _ *url.URL, _ net.IP, source Source) (*http.Response, error) {
+					callUserAgents = append(callUserAgents, userAgentOrDefault(source.UserAgent))
+					if len(callUserAgents) == 1 {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type":          []string{"application/yaml"},
+								"Subscription-Userinfo": []string{originalUserinfo},
+							},
+							Body: io.NopCloser(strings.NewReader(tt.content)),
+						}, nil
+					}
+					header := http.Header{"Content-Type": []string{"text/plain"}}
+					if tt.fallbackHasUserinfo {
+						header.Set("Subscription-Userinfo", fallbackUserinfo)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(fallbackContent))}, nil
 				},
-				Body: io.NopCloser(strings.NewReader("ss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#fallback")),
-			}, nil
-		},
-	})
+			})
+			source := Source{Name: "demo", URL: "https://example.com/subscription", UserAgent: tt.userAgent, Enabled: true}
+			fetched, warnings, err := f.Fetch(context.Background(), source)
+			if err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if len(callUserAgents) != 2 || callUserAgents[0] != userAgentOrDefault(tt.userAgent) || callUserAgents[1] != "SubConvNext/0.1 OpenWrt" {
+				t.Fatalf("request user-agents = %#v, want configured/default followed by generic user-agent", callUserAgents)
+			}
+			if len(warnings) != 1 || !strings.Contains(warnings[0], "generic user-agent") {
+				t.Fatalf("warnings = %#v, want generic user-agent retry warning", warnings)
+			}
+			wantUserinfo := originalUserinfo
+			if tt.fallbackHasUserinfo {
+				wantUserinfo = fallbackUserinfo
+			}
+			if string(fetched.Content) != fallbackContent || fetched.ContentType != "text/plain" || fetched.SubscriptionUserinfo != wantUserinfo || fetched.FetchedAt.IsZero() || fetched.FromCache {
+				t.Fatalf("unexpected fallback result: %+v", fetched)
+			}
+			for _, cacheDir := range []string{f.opts.CacheDir, f.opts.SharedCacheDir} {
+				cached, err := f.readCacheFrom(cacheDir, source.URL)
+				if err != nil || string(cached.Content) != fallbackContent || cached.ContentType != fetched.ContentType || cached.SubscriptionUserinfo != wantUserinfo || !cached.FetchedAt.Equal(fetched.FetchedAt) {
+					t.Fatalf("cache %s did not retain fallback content and metadata: %+v, err = %v", cacheDir, cached, err)
+				}
+			}
+			source.PreferCache = true
+			cached, _, err := f.Fetch(context.Background(), source)
+			if err != nil || !cached.FromCache || string(cached.Content) != fallbackContent || len(callUserAgents) != 2 {
+				t.Fatalf("offline fetch did not reuse fallback cache: %+v, err = %v, requests = %d", cached, err, len(callUserAgents))
+			}
+		})
+	}
+}
 
-	source := Source{
-		Name:      "demo",
-		URL:       "https://example.com/subscription",
-		UserAgent: "clash",
-		Enabled:   true,
+func TestFetchDoesNotRetryOtherSubscriptionContent(t *testing.T) {
+	for _, tt := range []struct {
+		name, userAgent, content string
+	}{
+		{"populated_yaml", model.DefaultUserAgent, "proxies:\n  - {name: demo, type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: pass}\nrules: []\n"},
+		{"uri", model.DefaultUserAgent, "trojan://test@example.com:443#demo"},
+		{"base64", model.DefaultUserAgent, "dHJvamFuOi8vdGVzdEBleGFtcGxlLmNvbTo0NDMjZGVtbw=="},
+		{"populated_yaml_alias", model.DefaultUserAgent, "nodes: &nodes\n  - {name: demo, type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: pass}\nproxies: *nodes\n"},
+		{"generic_user_agent", "SubConvNext/0.1 OpenWrt", "proxies: []\nrules: []\n"},
+		{"custom_user_agent", "CustomClient", "proxies: []\nrules: []\n"},
+		{"no_top_level_proxies", model.DefaultUserAgent, "proxy-groups:\n  - name: demo\n    proxies: []\nrules: []\n"},
+		{"group_use_without_providers", model.DefaultUserAgent, "proxy-groups:\n  - {name: demo, type: select, use: [remote]}\nrules: [MATCH,demo]\n"},
+		{"empty_proxy_providers", model.DefaultUserAgent, "proxy-providers: {}\nproxy-groups: []\nrules: []\n"},
+		{"null_proxy_providers", model.DefaultUserAgent, "proxy-providers: null\nproxy-groups: []\nrules: []\n"},
+		{"populated_yaml_with_providers", model.DefaultUserAgent, "proxies:\n  - {name: demo, type: ss, server: example.com, port: 443, cipher: aes-256-gcm, password: pass}\nproxy-providers:\n  remote: {type: http, url: https://example.com/provider.yaml}\nrules: []\n"},
+		{"malformed_yaml", model.DefaultUserAgent, "proxies: []\nproxies: []\nrules: []\n"},
+		{"invalid_proxies_type", model.DefaultUserAgent, "proxies: {}\nrules: []\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			f := New(Options{
+				CacheDir: t.TempDir(),
+				Resolver: staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+				RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+					calls++
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tt.content))}, nil
+				},
+			})
+			fetched, warnings, err := f.Fetch(context.Background(), Source{Name: "demo", URL: "https://example.com/subscription", UserAgent: tt.userAgent, Enabled: true})
+			if err != nil || calls != 1 || len(warnings) != 0 || string(fetched.Content) != tt.content {
+				t.Fatalf("Fetch() made an unexpected retry: requests = %d, warnings = %#v, err = %v", calls, warnings, err)
+			}
+		})
 	}
+}
 
-	fetched, warnings, err := f.Fetch(context.Background(), source)
-	if err != nil {
-		t.Fatalf("Fetch() error = %v", err)
+func TestFetchGenericUserAgentFailureRetainsOriginalResponse(t *testing.T) {
+	const originalContent = "proxies: []\nrules: []\n"
+	const originalUserinfo = "upload=100; download=200; total=1000"
+	for _, failure := range []string{"network", "http_status", "empty_body", "empty_yaml", "provider_only"} {
+		t.Run(failure, func(t *testing.T) {
+			calls := 0
+			f := New(Options{
+				CacheDir: t.TempDir(),
+				Resolver: staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+				RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+					calls++
+					if calls == 1 {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type":          []string{"application/yaml"},
+								"Subscription-Userinfo": []string{originalUserinfo},
+							},
+							Body: io.NopCloser(strings.NewReader(originalContent)),
+						}, nil
+					}
+					switch failure {
+					case "network":
+						return nil, errors.New("network down")
+					case "http_status":
+						return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("unavailable"))}, nil
+					case "empty_yaml":
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("proxies: []\n"))}, nil
+					case "provider_only":
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("proxy-providers:\n  remote: {type: http, url: https://example.com/nodes}\n"))}, nil
+					default:
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(" \n"))}, nil
+					}
+				},
+			})
+			source := Source{Name: "demo", URL: "https://example.com/subscription", Enabled: true}
+			fetched, warnings, err := f.Fetch(context.Background(), source)
+			if err != nil || calls != 2 || len(warnings) != 1 || !strings.Contains(warnings[0], "generic user-agent retry failed") {
+				t.Fatalf("Fetch() requests = %d, warnings = %#v, err = %v", calls, warnings, err)
+			}
+			if string(fetched.Content) != originalContent || fetched.ContentType != "application/yaml" || fetched.SubscriptionUserinfo != originalUserinfo {
+				t.Fatalf("failed fallback replaced original response: %+v", fetched)
+			}
+			cached, err := f.readCache(source.URL)
+			if err != nil || string(cached.Content) != originalContent || cached.SubscriptionUserinfo != originalUserinfo {
+				t.Fatalf("failed fallback did not retain original cached response: %+v, err = %v", cached, err)
+			}
+		})
 	}
-	if len(callUserAgents) != 2 {
-		t.Fatalf("len(callUserAgents) = %d, want 2", len(callUserAgents))
-	}
-	if callUserAgents[1] != model.DefaultUserAgent {
-		t.Fatalf("fallback user-agent = %q, want %q", callUserAgents[1], model.DefaultUserAgent)
-	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "generic user-agent") {
-		t.Fatalf("warnings = %#v, want generic user-agent retry warning", warnings)
-	}
-	if got := string(fetched.Content); !strings.Contains(got, "ss://") {
-		t.Fatalf("fetched.Content = %q, want fallback URI content", got)
+}
+
+func TestEmptyClashResponsePreservesUsableSubscriptionCache(t *testing.T) {
+	const goodContent = "dHJvamFuOi8vdGVzdEBleGFtcGxlLmNvbTo0NDMjZGVtbw=="
+	const emptyTemplate = "proxy-providers:\n  remote: {type: http, url: https://example.com/nodes}\n"
+	const cachedUserinfo = "upload=10; download=20; total=1000"
+	for _, failure := range []string{"network", "http_status", "empty_body", "empty_yaml", "provider_only", "initial_network"} {
+		for _, workspaceHasNodes := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/workspace_nodes_%t", failure, workspaceHasNodes), func(t *testing.T) {
+				cacheRoot := t.TempDir()
+				calls := 0
+				f := New(Options{
+					CacheDir:       filepath.Join(cacheRoot, "workspace"),
+					SharedCacheDir: filepath.Join(cacheRoot, "shared"),
+					Resolver:       staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
+					RequestDoer: func(context.Context, *url.URL, net.IP, Source) (*http.Response, error) {
+						calls++
+						if failure == "initial_network" {
+							return nil, context.DeadlineExceeded
+						}
+						if calls == 1 {
+							return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(emptyTemplate))}, nil
+						}
+						switch failure {
+						case "network":
+							return nil, context.DeadlineExceeded
+						case "http_status":
+							return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("unavailable"))}, nil
+						case "empty_body":
+							return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(" \n"))}, nil
+						case "empty_yaml":
+							return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("proxies: []\n"))}, nil
+						default:
+							return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(emptyTemplate))}, nil
+						}
+					},
+				})
+				source := Source{Name: "demo", URL: "https://example.com/subscription", Enabled: true}
+				good := FetchedSubscription{Content: []byte(goodContent), ContentType: "text/plain", SubscriptionUserinfo: cachedUserinfo, FetchedAt: time.Now().UTC().Add(-time.Hour)}
+				workspace := good
+				if !workspaceHasNodes {
+					workspace.Content = []byte(emptyTemplate)
+				}
+				if err := f.writeCache(source.URL, workspace); err != nil {
+					t.Fatal(err)
+				}
+				if err := writeCacheDir(f.opts.SharedCacheDir, source.URL, good); err != nil {
+					t.Fatal(err)
+				}
+				snapshots := map[string][]byte{}
+				for _, dir := range []string{f.opts.CacheDir, f.opts.SharedCacheDir} {
+					body, meta := cachePaths(dir, source.URL)
+					for _, path := range []string{body, meta} {
+						data, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						snapshots[path] = data
+					}
+				}
+				fetched, warnings, err := f.Fetch(context.Background(), source)
+				wantCalls := 2
+				if failure == "initial_network" {
+					wantCalls = 1
+				}
+				if err != nil || calls != wantCalls || !fetched.FromCache || string(fetched.Content) != goodContent || fetched.ContentType != good.ContentType || fetched.SubscriptionUserinfo != cachedUserinfo || !fetched.FetchedAt.Equal(good.FetchedAt) {
+					t.Fatalf("Fetch() lost usable cached nodes or metadata: %+v, err = %v, requests = %d", fetched, err, calls)
+				}
+				if !strings.Contains(strings.Join(warnings, "\n"), "using cached subscription") {
+					t.Fatalf("warnings = %#v, want cache fallback warning", warnings)
+				}
+				for path, before := range snapshots {
+					if !workspaceHasNodes && filepath.Dir(path) == f.opts.CacheDir {
+						continue // The old empty workspace copy is repaired from shared nodes.
+					}
+					after, err := os.ReadFile(path)
+					if err != nil || string(after) != string(before) {
+						t.Fatalf("usable cache changed at %s: err = %v", path, err)
+					}
+				}
+				source.PreferCache = true
+				offline, _, err := f.Fetch(context.Background(), source)
+				if err != nil || !offline.FromCache || string(offline.Content) != goodContent || calls != wantCalls {
+					t.Fatalf("offline node view lost restored nodes: %+v, err = %v, requests = %d", offline, err, calls)
+				}
+			})
+		}
 	}
 }
 

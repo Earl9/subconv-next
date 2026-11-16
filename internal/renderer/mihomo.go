@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"subconv-next/internal/model"
+	"subconv-next/internal/rulevalidation"
 	"subconv-next/internal/templatecatalog"
 )
 
@@ -1312,59 +1313,24 @@ func hasClassicalRuleProviderPayload(payload []string) bool {
 }
 
 func isClassicalRuleProviderPayloadLine(line string) bool {
-	parts := strings.Split(strings.TrimSpace(line), ",")
-	if len(parts) < 2 {
-		return false
-	}
-	switch strings.ToUpper(strings.TrimSpace(parts[0])) {
-	case "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "DOMAIN-REGEX",
-		"GEOSITE", "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN", "GEOIP", "SRC-GEOIP",
-		"SRC-IP-ASN", "SRC-IP-CIDR", "SRC-IP-SUFFIX", "DST-PORT", "SRC-PORT",
-		"PROCESS-NAME", "PROCESS-PATH", "PROCESS-PATH-REGEX", "PROCESS-NAME-REGEX",
-		"IN-TYPE", "IN-USER", "IN-NAME", "NETWORK", "UID", "SUB-RULE", "RULE-SET", "AND", "OR", "NOT":
-		return true
-	default:
-		return false
-	}
+	return rulevalidation.IsClassicalLine(line)
 }
 
 func normalizeRuleProviderPayload(payload []string) []string {
 	var out []string
 	for _, item := range payload {
-		item = normalizeRuleProviderPayloadLine(item)
-		if item == "" {
-			continue
+		for _, line := range strings.Split(strings.ReplaceAll(item, "\r\n", "\n"), "\n") {
+			line = normalizeRuleProviderPayloadLine(line)
+			if line != "" {
+				out = append(out, line)
+			}
 		}
-		out = append(out, item)
 	}
 	return uniqueOrdered(out)
 }
 
 func normalizeRuleProviderPayloadLine(line string) string {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return ""
-	}
-	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
-	line = strings.Trim(line, `"'`)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return ""
-	}
-	if idx := strings.Index(line, " #"); idx >= 0 {
-		line = strings.TrimSpace(line[:idx])
-	}
-	parts := strings.Split(line, ",")
-	if len(parts) < 3 {
-		return line
-	}
-	targetIndex := len(parts) - 1
-	if strings.EqualFold(strings.TrimSpace(parts[targetIndex]), "no-resolve") && len(parts) >= 4 {
-		targetIndex--
-	}
-	if isRulePolicyTarget(parts[targetIndex]) {
-		parts = append(parts[:targetIndex], parts[targetIndex+1:]...)
-	}
-	return strings.Join(parts, ",")
+	return rulevalidation.NormalizePayloadLine(line)
 }
 
 func customRuleProviderPathForFormat(key string, format string) string {
@@ -1482,29 +1448,18 @@ func mergeRules(baseRules, customRules, additionalRules, providerRules []string)
 func normalizeRules(rules []string) []string {
 	var normalized []string
 	for _, rule := range rules {
-		rule = normalizeRuleLine(rule)
-		if rule == "" {
-			continue
+		for _, line := range strings.Split(strings.ReplaceAll(rule, "\r\n", "\n"), "\n") {
+			line = normalizeRuleLine(line)
+			if line != "" {
+				normalized = append(normalized, line)
+			}
 		}
-		normalized = append(normalized, rule)
 	}
 	return uniqueOrdered(normalized)
 }
 
 func normalizeRuleLine(rule string) string {
-	rule = strings.TrimSpace(rule)
-	if rule == "" || strings.HasPrefix(rule, "#") {
-		return ""
-	}
-	rule = strings.TrimSpace(strings.TrimPrefix(rule, "-"))
-	rule = strings.Trim(rule, `"'`)
-	if rule == "" || strings.HasPrefix(rule, "#") {
-		return ""
-	}
-	if idx := strings.Index(rule, " #"); idx >= 0 {
-		rule = strings.TrimSpace(rule[:idx])
-	}
-	return normalizeRulePolicyAlias(strings.TrimSpace(rule))
+	return normalizeRulePolicyAlias(rulevalidation.NormalizeLine(rule))
 }
 
 func normalizeRulePolicyAlias(rule string) string {
@@ -1512,9 +1467,16 @@ func normalizeRulePolicyAlias(rule string) string {
 	if len(parts) < 3 {
 		return rule
 	}
-	targetIndex := len(parts) - 1
-	if strings.EqualFold(strings.TrimSpace(parts[targetIndex]), "no-resolve") && len(parts) >= 4 {
-		targetIndex--
+	targetIndex := 2
+	switch strings.ToUpper(strings.TrimSpace(parts[0])) {
+	case "DOMAIN-REGEX", "PROCESS-NAME-REGEX", "PROCESS-PATH-REGEX", "AND", "OR", "NOT", "SUB-RULE":
+		targetIndex = len(parts) - 1
+	default:
+		for i := 3; i < len(parts); i++ {
+			if flag := strings.ToLower(strings.TrimSpace(parts[i])); flag == "no-resolve" || flag == "src" {
+				parts[i] = flag
+			}
+		}
 	}
 	parts[targetIndex] = normalizeRulePolicyTarget(parts[targetIndex])
 	return strings.Join(parts, ",")

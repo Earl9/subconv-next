@@ -374,7 +374,7 @@ func (s *Server) ensureWorkspacePublishedRef(ref *workspaceRef) (publishedRef, b
 	}
 	if strings.TrimSpace(ref.Meta.PublishID) != "" {
 		published, err := s.loadPublishedByID(ref.Meta.PublishID)
-		if err == nil && publishedRestorable(published) {
+		if err == nil && (publishedRestorable(published) || emptyPublishedBoundToWorkspace(published, ref.Hash)) {
 			return published, false, nil
 		}
 		ref.Meta.PublishID = ""
@@ -400,6 +400,18 @@ func (s *Server) ensureWorkspacePublishedRef(ref *workspaceRef) (publishedRef, b
 		return publishedRef{}, false, err
 	}
 	return published, true, nil
+}
+
+// A node deletion may intentionally remove current.yaml when the publication
+// becomes empty. Keep its existing bearer token bound to the same workspace so
+// a later generation updates that publication instead of creating a new link.
+func emptyPublishedBoundToWorkspace(published publishedRef, workspaceHash string) bool {
+	if published.Meta.Revoked || strings.TrimSpace(published.Meta.Token) == "" {
+		return false
+	}
+	bound := strings.TrimSpace(published.Meta.WorkspaceHash)
+	workspaceHash = strings.TrimSpace(workspaceHash)
+	return workspaceHash != "" && bound == workspaceHash
 }
 
 func (s *Server) migrateWorkspaceLegacyPublished(ref *workspaceRef, token string) (publishedRef, error) {

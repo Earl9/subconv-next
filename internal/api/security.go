@@ -258,7 +258,7 @@ func (s *Server) allowAnonymousAPIRequest(limiter *requestRateLimiter, r *http.R
 func isPublicConverterPath(path string) bool {
 	switch path {
 	case "/", "/style.css", "/app.js", "/favicon.svg", "/favicon.ico",
-		"/api/status", "/api/workspaces", "/api/published", "/api/config",
+		"/api/status", "/api/workspaces", "/api/published", "/api/config", "/api/custom-rules/validate",
 		"/api/site-logo", "/api/subscription-meta", "/api/audit",
 		"/api/preview-yaml", "/api/validate-output", "/api/nodes",
 		"/api/parse", "/api/generate", "/api/refresh", "/api/logs",

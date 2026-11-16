@@ -66,6 +66,15 @@ func (s *Server) startRefresh(reason string) (*refreshOutcome, error) {
 }
 
 func (s *Server) startRefreshForConfig(cfg model.Config, workspaceHash, reason string) (*refreshOutcome, error) {
+	finish, err := s.beginConfigRefresh(cfg, workspaceHash)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	return s.executeRefresh(cfg, workspaceHash, reason)
+}
+
+func (s *Server) beginConfigRefresh(cfg model.Config, workspaceHash string) (func(), error) {
 	keys := refreshRunKeys(cfg, workspaceHash)
 	s.refreshMu.Lock()
 	for _, key := range keys {
@@ -87,13 +96,7 @@ func (s *Server) startRefreshForConfig(cfg model.Config, workspaceHash, reason s
 	s.setRefreshing(true)
 	s.refreshMu.Unlock()
 
-	defer s.finishRefresh(keys, done)
-
-	outcome, err := s.executeRefresh(cfg, workspaceHash, reason)
-	if err != nil {
-		return nil, err
-	}
-	return outcome, nil
+	return func() { s.finishRefresh(keys, done) }, nil
 }
 
 func refreshRunKeys(cfg model.Config, workspaceHash string) []string {
@@ -157,7 +160,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 	now := time.Now().UTC()
 	if err != nil {
 		message := refreshErrorMessage(err, result)
-		s.setRefreshFailure(message, now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, message, now)
 		s.appendLog(reason + " failed: " + message)
 		s.appendWorkspaceLog(workspaceHash, reason+" failed: "+message)
 		if s.refreshAfterRun != nil {
@@ -167,7 +170,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 	}
 	s.setRefreshStage("writing")
 	if err := pipeline.SaveNodeState(cfg, result.State); err != nil {
-		s.setRefreshFailure(err.Error(), now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, err.Error(), now)
 		s.appendLog(reason + " state save failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" state save failed: "+err.Error())
 		if s.refreshAfterRun != nil {
@@ -180,7 +183,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 		_ = os.Remove(stagedPath)
 	}()
 	if err := pipeline.WriteRendered(stagedPath, result.YAML); err != nil {
-		s.setRefreshFailure(err.Error(), now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, err.Error(), now)
 		s.appendLog(reason + " write failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" write failed: "+err.Error())
 		if s.refreshAfterRun != nil {
@@ -193,7 +196,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 	}
 	written, err := os.ReadFile(stagedPath)
 	if err != nil {
-		s.setRefreshFailure(err.Error(), now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, err.Error(), now)
 		s.appendLog(reason + " post-write validation read failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" post-write validation read failed: "+err.Error())
 		if s.refreshAfterRun != nil {
@@ -202,7 +205,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 		return nil, err
 	}
 	if err := pipeline.ValidateFinalConfig(written, pipeline.FinalNodeSet{Nodes: result.Nodes}, result.Audit, renderer.OptionsFromConfig(cfg)); err != nil {
-		s.setRefreshFailure(err.Error(), now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, err.Error(), now)
 		s.appendLog(reason + " post-write validation failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" post-write validation failed: "+err.Error())
 		if s.refreshAfterRun != nil {
@@ -211,7 +214,7 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 		return nil, err
 	}
 	if err := pipeline.WriteRendered(result.OutputPath, written); err != nil {
-		s.setRefreshFailure(err.Error(), now)
+		s.setConfigRefreshFailure(cfg, workspaceHash, err.Error(), now)
 		s.appendLog(reason + " write failed: " + err.Error())
 		s.appendWorkspaceLog(workspaceHash, reason+" write failed: "+err.Error())
 		if s.refreshAfterRun != nil {
@@ -282,7 +285,12 @@ func (s *Server) refreshPublishedWorkspace(ref workspaceRef, reason string) (*re
 		return nil, published, err
 	}
 	cfg.Service.OutputPath = published.CurrentPath
-	outcome, err := s.startRefreshForConfig(cfg, ref.Hash, reason)
+	finish, err := s.beginConfigRefresh(cfg, ref.Hash)
+	if err != nil {
+		return nil, published, err
+	}
+	defer finish()
+	outcome, err := s.executeRefresh(cfg, ref.Hash, reason)
 	if err != nil {
 		return nil, published, err
 	}

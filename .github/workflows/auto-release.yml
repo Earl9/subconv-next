@@ -27,7 +27,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - uses: docker/setup-qemu-action@v3
 
@@ -54,7 +58,7 @@ jobs:
       - name: Test
         run: |
           test -z "$(gofmt -l $(find . -path './.git' -prune -o -path './.tmpinspect' -prune -o -path './vendor' -prune -o -name '*.go' -print))"
-          node --check internal/api/static/app.js
+          make test-ui
           go test ./...
           go vet ./...
 

@@ -224,8 +224,12 @@
                       <span>直写规则</span>
                     </div>
                     <div class="field full-span">
-                      <label for="additional-rules-input">Mihomo 规则</label>
-                      <textarea id="additional-rules-input" rows="12" class="code-textarea" placeholder="DOMAIN-KEYWORD,tracker,PROXY&#10;DOMAIN-KEYWORD,torrent,PROXY&#10;IP-CIDR,10.0.0.6/32,PROXY&#10;&#10;DOMAIN-SUFFIX,39.la,DIRECT&#10;DOMAIN-SUFFIX,pp.ua,DIRECT&#10;RULE-SET,Adobe,REJECT"></textarea>
+                      <div class="field-headline">
+                        <label for="additional-rules-input">Mihomo 规则</label>
+                        <button id="validate-additional-rules-btn" class="tiny-button" type="button">校验规则</button>
+                      </div>
+                      <textarea id="additional-rules-input" rows="12" class="code-textarea" aria-describedby="additional-rules-validation" placeholder="DOMAIN-KEYWORD,tracker,PROXY&#10;DOMAIN-KEYWORD,torrent,PROXY&#10;IP-CIDR,10.0.0.6/32,PROXY&#10;&#10;DOMAIN-SUFFIX,39.la,DIRECT&#10;DOMAIN-SUFFIX,pp.ua,DIRECT&#10;RULE-SET,Adobe,REJECT"></textarea>
+                      <p id="additional-rules-validation" class="custom-rule-field-error hidden" role="status" aria-live="polite"></p>
                       <p class="field-help">这些规则会插入到最终 MATCH 之前。支持直接粘贴带 “- ” 前缀和 “#” 注释的列表。</p>
                     </div>
                   </section>
@@ -246,6 +250,7 @@
                       </div>
                       <input id="custom-rule-edit-index" type="hidden" />
                       <div id="custom-rule-editor-summary" class="custom-rule-editor-summary"></div>
+                      <div id="custom-rule-validation" class="custom-rule-validation hidden" role="alert" tabindex="-1"></div>
                       <div class="field">
                         <label for="custom-rule-key">规则 Key</label>
                         <input id="custom-rule-key" type="text" placeholder="例如 my_rule" autocomplete="off" spellcheck="false" />

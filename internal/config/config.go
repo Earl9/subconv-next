@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"subconv-next/internal/model"
+	"subconv-next/internal/rulevalidation"
 )
 
 func Load(path string) (model.Config, error) {
@@ -181,16 +182,20 @@ func normalizeConfig(cfg model.Config) model.Config {
 				rule.SourceType = "inline"
 			}
 		}
+		rule.SourceType = strings.ToLower(strings.TrimSpace(rule.SourceType))
 		if strings.TrimSpace(rule.Behavior) == "" {
 			rule.Behavior = "domain"
 		}
+		rule.Behavior = strings.ToLower(strings.TrimSpace(rule.Behavior))
 		if strings.TrimSpace(rule.Format) == "" {
 			rule.Format = "text"
 		}
+		rule.Format = strings.ToLower(strings.TrimSpace(rule.Format))
 		if strings.EqualFold(strings.TrimSpace(rule.SourceType), "inline") {
 			rule.Payload = normalizeCustomRulePayload(rule.Payload)
+			rule.Behavior = rulevalidation.EffectiveBehavior(rule.Behavior, rule.Payload)
 		}
-		if rule.Interval <= 0 {
+		if rule.Interval == 0 {
 			rule.Interval = 86400
 		}
 		rule.InsertPosition = strings.ToLower(strings.TrimSpace(rule.InsertPosition))
@@ -417,6 +422,9 @@ func Validate(cfg model.Config) error {
 			return fmt.Errorf("render.custom_proxy_groups[%d].url is required for url-test and fallback groups", i)
 		}
 	}
+	if err := ValidateAdditionalRules(cfg.Render.AdditionalRules); err != nil {
+		return fmt.Errorf("render.%w", err)
+	}
 
 	return nil
 }
@@ -542,54 +550,13 @@ func validateSubscriptionInfoConfig(cfg *model.SubscriptionInfoConfig) error {
 func validateCustomRules(rules []model.CustomRule) error {
 	seen := make(map[string]struct{}, len(rules))
 	for i, rule := range rules {
-		if strings.TrimSpace(rule.Key) == "" {
-			return fmt.Errorf("render.custom_rules[%d].key is required", i)
-		}
-		if !isValidCustomRuleKey(rule.Key) {
-			return fmt.Errorf("render.custom_rules[%d].key must match [a-z0-9_-]+", i)
+		if err := ValidateCustomRule(rule); err != nil {
+			return fmt.Errorf("render.custom_rules[%d].%w", i, err)
 		}
 		if _, ok := seen[rule.Key]; ok {
 			return fmt.Errorf("render.custom_rules[%d].key must be unique", i)
 		}
 		seen[rule.Key] = struct{}{}
-		if strings.TrimSpace(rule.Label) == "" {
-			return fmt.Errorf("render.custom_rules[%d].label is required", i)
-		}
-		if !isAllowedCustomRuleTargetMode(rule.TargetMode) {
-			return fmt.Errorf("render.custom_rules[%d].target_mode must be one of new_group, existing_group, direct, reject", i)
-		}
-		if !isAllowedCustomRuleSourceType(rule.SourceType) {
-			return fmt.Errorf("render.custom_rules[%d].source_type must be one of inline, http, file, group_only", i)
-		}
-		if !isAllowedProviderBehavior(rule.Behavior) {
-			return fmt.Errorf("render.custom_rules[%d].behavior must be one of domain, ipcidr, classical", i)
-		}
-		if !isAllowedProviderFormat(rule.Format) {
-			return fmt.Errorf("render.custom_rules[%d].format must be one of yaml, text, mrs", i)
-		}
-		if strings.EqualFold(rule.Format, "mrs") && strings.EqualFold(rule.Behavior, "classical") {
-			return fmt.Errorf("render.custom_rules[%d]: format mrs cannot be used with classical behavior", i)
-		}
-		switch strings.ToLower(strings.TrimSpace(rule.SourceType)) {
-		case "http":
-			if err := validateSubscriptionURL(rule.URL); err != nil {
-				return fmt.Errorf("render.custom_rules[%d].url: %w", i, err)
-			}
-		case "file":
-			if strings.TrimSpace(rule.Path) == "" {
-				return fmt.Errorf("render.custom_rules[%d].path is required", i)
-			}
-		case "inline":
-			if len(rule.Payload) == 0 {
-				return fmt.Errorf("render.custom_rules[%d].payload is required", i)
-			}
-		}
-		if strings.EqualFold(rule.TargetMode, "existing_group") && strings.TrimSpace(rule.TargetGroup) == "" {
-			return fmt.Errorf("render.custom_rules[%d].target_group is required for existing_group", i)
-		}
-		if !isAllowedCustomRuleInsertPosition(rule.InsertPosition) {
-			return fmt.Errorf("render.custom_rules[%d].insert_position must be one of after_adblock, before_domestic, before_non_cn, before_match", i)
-		}
 	}
 	return nil
 }
@@ -656,16 +623,18 @@ func normalizeCustomRulePayload(payload []string) []string {
 	var normalized []string
 	seen := make(map[string]struct{})
 	for _, item := range payload {
-		for _, segment := range splitConcatenatedCustomRulePayloadLine(item) {
-			segment = prepareCustomRulePayloadLine(segment)
-			if segment == "" {
-				continue
+		for _, line := range strings.Split(strings.ReplaceAll(item, "\r\n", "\n"), "\n") {
+			for _, segment := range splitConcatenatedCustomRulePayloadLine(line) {
+				segment = prepareCustomRulePayloadLine(segment)
+				if segment == "" {
+					continue
+				}
+				if _, exists := seen[segment]; exists {
+					continue
+				}
+				seen[segment] = struct{}{}
+				normalized = append(normalized, segment)
 			}
-			if _, exists := seen[segment]; exists {
-				continue
-			}
-			seen[segment] = struct{}{}
-			normalized = append(normalized, segment)
 		}
 	}
 	return normalized
@@ -706,16 +675,7 @@ func splitConcatenatedCustomRulePayloadLine(value string) []string {
 }
 
 func prepareCustomRulePayloadLine(value string) string {
-	line := strings.TrimSpace(value)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return ""
-	}
-	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
-	line = strings.Trim(line, `"'`)
-	if index := strings.Index(line, " #"); index >= 0 {
-		line = strings.TrimSpace(line[:index])
-	}
-	return line
+	return rulevalidation.NormalizeLine(value)
 }
 
 func isCustomRulePayloadBoundaryByte(value byte) bool {

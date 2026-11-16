@@ -71,6 +71,187 @@ test("a rejected batch preserves selection and reports the backend error", async
   assert.equal(app.run("toasts[0].error"), true);
 });
 
+test("published deletion refreshes the result and preview without another generation", async () => {
+  const app = setup();
+  app.run(`
+    const outputRefreshes = [];
+    let oldPreviewAborted = false;
+    state.yamlPreview = "old published nodes";
+    state.resultNodeCount = 3;
+    state.yamlRequest = { controller: { abort() { oldPreviewAborted = true; } } };
+    renderYamlViewer = () => {};
+    renderResult = () => {};
+    loadStatus = async () => { outputRefreshes.push("status"); };
+    loadPublishedStatus = async () => { outputRefreshes.push("published"); };
+    loadAudit = async () => { outputRefreshes.push("audit"); };
+    loadYamlPreview = async () => {
+      outputRefreshes.push("preview");
+      state.yamlPreview = "remaining published node";
+    };
+  `);
+  const pending = app.run('performBulkDeleteNodes([{ id: "deleted" }])');
+  respond(app.requests[0], { ok: true, deleted_count: 1, deleted_ids: ["deleted"], published_updated: true, node_count: 2 });
+  assert.equal(await pending, true);
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.run("oldPreviewAborted"), true);
+  assert.equal(app.run("state.resultNodeCount"), 2);
+  assert.equal(app.run("state.yamlPreview"), "remaining published node");
+  assert.deepEqual(Array.from(app.run("outputRefreshes")), ["status", "published", "audit", "preview"]);
+  assert.equal(app.run("toasts[0].message"), "已删除 1 个节点。订阅已同步。");
+});
+
+test("deleting the last published node clears the preview and explains unavailable output", async () => {
+  const app = setup();
+  app.run(`
+    let previewRefreshes = 0;
+    state.yamlPreview = "last node";
+    state.resultNodeCount = 1;
+    renderYamlViewer = () => {};
+    renderResult = () => {};
+    loadStatus = async () => {};
+    loadPublishedStatus = async () => { state.publishNotice = ""; };
+    loadAudit = async () => {};
+    loadYamlPreview = async () => { previewRefreshes++; };
+  `);
+  const pending = app.run('performDeleteCustomNode("last")');
+  respond(app.requests[0], { ok: true, deleted_count: 1, deleted_ids: ["last"], published_updated: true, node_count: 0 });
+  assert.equal(await pending, true);
+  assert.equal(app.run("state.resultNodeCount"), 0);
+  assert.equal(app.run("state.yamlPreview"), "");
+  assert.equal(app.run("previewRefreshes"), 0);
+  assert.equal(app.run("state.publishNotice"), "当前没有可用节点，订阅暂不可下载。");
+  assert.equal(app.run("toasts[0].message"), "手动节点已删除。当前订阅已无可用节点。");
+});
+
+test("restoring nodes refreshes the original publication and preview without regeneration", async (t) => {
+  const cases = [
+    { name: "single deleted node", action: 'restoreDeletedNodes(["restored"])', ids: ["restored"] },
+    { name: "batch", action: 'restoreDeletedNodes(["restored", "second"])', ids: ["restored", "second"] },
+    { name: "all deleted nodes", action: "restoreAllDeletedNodesFromDialog()", ids: ["restored", "second"] },
+    { name: "disabled row", action: 'performRestoreNode("restored")', ids: ["restored"] },
+    { name: "enable control", action: 'toggleNodeEnabled("restored", true)', ids: ["restored"] },
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const app = setup();
+      app.elements.set("restore-all-deleted-nodes-btn", { dataset: { restoreDeletedAll: "restored,second" } });
+      app.run(`
+        const outputRefreshes = [];
+        state.resultNodeCount = 0;
+        state.publishNotice = "当前没有可用节点，订阅暂不可下载。";
+        renderYamlViewer = () => {};
+        renderResult = () => {};
+        closeDialog = () => {};
+        loadStatus = async () => { outputRefreshes.push("status"); };
+        loadPublishedStatus = async () => { outputRefreshes.push("published"); };
+        loadAudit = async () => { outputRefreshes.push("audit"); };
+        loadYamlPreview = async () => {
+          outputRefreshes.push("preview");
+          state.yamlPreview = "restored published node";
+        };
+      `);
+      const pending = app.run(entry.action);
+      assert.equal(app.requests.length, 1);
+      assert.match(app.requests[0].url, /^\/api\/nodes\/enable\?/);
+      assert.deepEqual(JSON.parse(app.requests[0].options.body).ids, entry.ids);
+      respond(app.requests[0], { ok: true, published_updated: true, node_count: entry.ids.length });
+      await pending;
+      assert.equal(app.requests.length, 1);
+      assert.equal(app.run("state.resultNodeCount"), entry.ids.length);
+      assert.equal(app.run("state.yamlPreview"), "restored published node");
+      assert.equal(app.run("state.publishNotice"), "");
+      assert.equal(app.run("refreshCount"), 1);
+      assert.deepEqual(Array.from(app.run("outputRefreshes")), ["status", "published", "audit", "preview"]);
+      if (entry.name !== "enable control") assert.match(app.run("toasts[0].message"), /订阅已同步。$/);
+    });
+  }
+});
+
+test("failed restoration preserves selection and reports the publication error", async () => {
+  const app = setup();
+  app.run('state.nodeById.set("deleted", { id: "deleted" }); setNodeSelected("deleted", true, false)');
+  const pending = app.run('restoreDeletedNodes(["deleted"])');
+  respond(app.requests[0], { ok: false, error: { message: "恢复失败，订阅未更新" } });
+  assert.equal(await pending, false);
+  assert.equal(app.run("state.selectedNodeIds.size"), 1);
+  assert.equal(app.run("state.selectedNodeCache.size"), 1);
+  assert.equal(app.run("refreshCount"), 0);
+  assert.equal(app.run("toasts[0].message"), "恢复失败，订阅未更新");
+  assert.equal(app.run("toasts[0].error"), true);
+});
+
+test("node changes from an old workspace cannot modify the current workspace", async (t) => {
+  const actions = [
+    'performDeleteNode("shared")',
+    'performDeleteCustomNode("shared")',
+    'performBulkDeleteNodes([{ id: "shared" }])',
+    'performRestoreNode("shared")',
+    'restoreDeletedNodes(["shared"])',
+    'toggleNodeEnabled("shared", true)',
+  ];
+  for (const action of actions) await t.test(action, async () => {
+    const app = setup();
+    app.run('state.nodeById.set("shared", { id: "shared", source: { kind: "subscription" } })');
+    const pending = app.run(action);
+    app.run(`
+      state.workspaceId = "new-workspace";
+      state.yamlPreview = "new workspace output";
+      state.resultNodeCount = 7;
+      setNodeSelected("shared", true, false);
+      renderYamlViewer = renderResult = () => {};
+      loadStatus = loadPublishedStatus = loadAudit = async () => {};
+    `);
+    respond(app.requests[0], { ok: true, deleted_count: 1, published_updated: true, node_count: 0 });
+    await pending;
+    assert.equal(app.run("state.yamlPreview"), "new workspace output");
+    assert.equal(app.run("state.resultNodeCount"), 7);
+    assert.equal(app.run('state.selectedNodeIds.has("shared")'), true);
+    assert.equal(app.run("refreshCount"), 0);
+    assert.equal(app.run("toasts.length"), 0);
+  });
+});
+
+test("a completed restore is not overwritten by an older empty-publication refresh", async () => {
+  const app = setup();
+  app.run(`
+    let finishOldAudit;
+    let auditLoads = 0;
+    renderYamlViewer = renderResult = () => {};
+    loadStatus = loadPublishedStatus = async () => {};
+    loadAudit = () => ++auditLoads === 1
+      ? new Promise((resolve) => { finishOldAudit = resolve; })
+      : Promise.resolve();
+    loadYamlPreview = async () => { state.yamlPreview = "restored output"; };
+  `);
+  const deleted = app.run("refreshAfterNodeChange({ published_updated: true, node_count: 0 })");
+  await new Promise(setImmediate);
+  await app.run("refreshAfterNodeChange({ published_updated: true, node_count: 1 })");
+  app.run("finishOldAudit()");
+  await deleted;
+  assert.equal(app.run("state.resultNodeCount"), 1);
+  assert.equal(app.run("state.yamlPreview"), "restored output");
+  assert.equal(app.run("state.publishNotice"), "");
+});
+
+test("a node-only update does not cancel the pending publication refresh", async () => {
+  const app = setup();
+  app.run(`
+    let finishFirstNodes;
+    let nodeLoads = 0;
+    refreshNodesAfterGenerate = () => ++nodeLoads === 1
+      ? new Promise((resolve) => { finishFirstNodes = resolve; })
+      : Promise.resolve();
+    renderYamlViewer = renderResult = () => {};
+    loadStatus = loadPublishedStatus = loadAudit = async () => {};
+    loadYamlPreview = async () => { state.yamlPreview = "updated publication"; };
+  `);
+  const publication = app.run("refreshAfterNodeChange({ published_updated: true, node_count: 1 })");
+  await app.run("refreshAfterNodeChange({ ok: true })");
+  app.run("finishFirstNodes()");
+  await publication;
+  assert.equal(app.run("state.yamlPreview"), "updated publication");
+});
+
 test("deleting a disabled node opens deletion confirmation and never restores it", async () => {
   const app = setup();
   app.run(`

@@ -553,7 +553,11 @@ func (s *Server) requireWorkspace(r *http.Request) (workspaceRef, error) {
 }
 
 func (s *Server) loadWorkspaceConfig(ref workspaceRef) (model.Config, error) {
-	cfg, err := config.Load(ref.ConfigPath)
+	data, err := os.ReadFile(ref.ConfigPath)
+	if err != nil {
+		return model.Config{}, fmt.Errorf("read workspace config: %w", err)
+	}
+	cfg, err := config.LoadJSONBytesForEditing(data)
 	if err != nil {
 		return model.Config{}, err
 	}
